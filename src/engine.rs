@@ -353,6 +353,17 @@ impl Engine {
             };
             me.active.lock().unwrap().remove(&final_run.id);
             me.publish(&final_run);
+            // A run that committed nothing has nothing worth keeping in its
+            // worktree: remove it and its branch (read-only reviews, checks).
+            if final_run.worktree && final_run.status != Status::Waiting {
+                if let (Some(cwd), Some(base), Some(branch)) = (&final_run.cwd, &final_run.base_commit, &final_run.branch) {
+                    if git(cwd, &["rev-parse", "HEAD"]).await.ok().as_deref() == Some(base.as_str()) {
+                        if me.cleanup(&final_run.id).await.is_ok() {
+                            let _ = git(&final_run.project, &["branch", "-D", branch]).await;
+                        }
+                    }
+                }
+            }
             crate::notify::run_finished(&app, &final_run).await;
             let (app2, fr) = (app.clone(), final_run.clone());
             tokio::spawn(async move {
