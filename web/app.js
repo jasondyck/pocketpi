@@ -846,7 +846,7 @@ function nearBottom() { return scroller.scrollHeight - scroller.scrollTop - scro
 function scrollBottom(force) { if (force || S.stick) { scroller.scrollTop = scroller.scrollHeight; $("jump").hidden = true; } }
 scroller.addEventListener("scroll", () => {
   S.stick = nearBottom();
-  $("jump").hidden = S.stick;
+  $("jump").hidden = S.stick || S.view !== "chat";
   $("topbar").classList.toggle("scrolled", scroller.scrollTop > 4);
 }, { passive: true });
 $("jump").onclick = () => { S.stick = true; scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }); };
@@ -1402,6 +1402,8 @@ function renderWorkflow() {
   });
   v.append(sens);
 
+  renderImprove(v, wf);
+
   // DAG
   v.append(el("div", "wf-section", `Stages · ${wf.stages.length}`));
   v.append(renderDag(wf, null));
@@ -1549,6 +1551,11 @@ function connectRuns() {
         renderWorkflow();
       }
       clearTimeout(S.wfReload); S.wfReload = setTimeout(loadWorkflows, 800);
+    } else if (ev.type === "improve_done") {
+      S.reflecting = null;
+      const r = ev.result || "";
+      toast(r.startsWith("applied") ? "Workflow improved" : r.startsWith("proposed") ? "Improvement suggested" : r.startsWith("failed") ? `Couldn't reflect: ${r.slice(8)}` : "No improvements found", r.startsWith("failed"));
+      if (S.view === "workflow" && S.wf?.workflow.id === ev.workflow_id) openWorkflow(ev.workflow_id);
     } else if (ev.type === "workflows_changed") {
       loadWorkflows();
       if (S.view === "workflow" && S.wf) openWorkflow(S.wf.workflow.id);
@@ -1563,6 +1570,91 @@ function connectRuns() {
 }
 // keep durations ticking on an active run
 setInterval(() => { if (S.view === "run" && S.run && ["running", "waiting", "pending"].includes(S.run.status) && !document.body.classList.contains("sheet-open")) renderRun(); }, 5000);
+
+
+// ---------------------------------------------------------------- self-improvement
+// Line diff (LCS) between two pretty-printed workflows, for proposals.
+function lineDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n"), n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push(" " + A[i]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) out.push("-" + A[i++]);
+    else out.push("+" + B[j++]);
+  }
+  while (i < n) out.push("-" + A[i++]);
+  while (j < m) out.push("+" + B[j++]);
+  // keep changed lines plus 2 lines of context
+  const keep = new Set();
+  out.forEach((l, k) => { if (l[0] !== " ") for (let d = -2; d <= 2; d++) keep.add(k + d); });
+  const res = []; let gap = false;
+  out.forEach((l, k) => { if (keep.has(k)) { res.push(l); gap = false; } else if (!gap) { res.push("@@"); gap = true; } });
+  return res.join("\n");
+}
+const pretty = (w) => JSON.stringify(w, null, 2);
+function renderImprove(v, wf) {
+  v.append(el("div", "wf-section", "Self-improvement"));
+  const card = el("div", "wf-card improve");
+  const seg = el("div", "seg");
+  const mode = wf.improve || "suggest";
+  for (const [m, label] of [["off", "Off"], ["suggest", "Suggest"], ["auto", "Auto"]]) {
+    const b = el("button", m === mode ? "on" : "", label);
+    b.onclick = async () => { try { await api(`/api/workflows/${wf.id}/improve`, { mode: m }); wf.improve = m; renderWorkflow(); } catch (e) { toast(e.message, true); } };
+    seg.append(b);
+  }
+  const help = { off: "Never changes itself.", suggest: "After notable runs (failures, retries, every 5th run) a reviewer suggests improvements for you to apply.", auto: "Safe improvements are applied straight away; changes to approvals, reviews, shell commands or cost caps still wait for you." }[mode];
+  const row = el("div", "improve-row");
+  const now = el("button", "btn secondary small", S.reflecting === wf.id ? "Reflecting…" : "Improve now");
+  now.disabled = S.reflecting === wf.id;
+  now.onclick = async () => {
+    try { await api(`/api/workflows/${wf.id}/reflect`, {}); S.reflecting = wf.id; toast("Reviewing the last run…"); renderWorkflow(); }
+    catch (e) { toast(e.message, true); }
+  };
+  row.append(el("div", "improve-help", esc(help)), now);
+  card.append(seg, row);
+  v.append(card);
+
+  const prop = S.wf.proposal;
+  if (prop) {
+    const pc = el("div", "proposal");
+    pc.innerHTML = `<div class="proposal-title">✦ Suggested improvement <span>${ago(prop.created)} · ${esc((prop.model || "").replace(/^.*\//, ""))}</span></div>`;
+    const ul = el("ul", "proposal-changes");
+    for (const c of prop.changes || []) ul.append(el("li", "", `<b>${esc(c.summary || "")}</b>${c.why ? `<span>${esc(c.why)}</span>` : ""}`));
+    pc.append(ul);
+    if (prop.violations?.length) pc.append(el("div", "proposal-why", `Needs your OK because it ${prop.violations.map(esc).join("; ")}.`));
+    const d = el("details", "proposal-diff");
+    d.innerHTML = "<summary>Show changes</summary>";
+    d.addEventListener("toggle", () => { if (d.open && !d.querySelector("pre")) d.append(diffBlock(lineDiff(pretty(wf), pretty(prop.workflow)))); });
+    pc.append(d);
+    const btns = el("div", "btn-row");
+    const no = el("button", "btn secondary", "Dismiss"); const yes = el("button", "btn", "Apply");
+    no.onclick = async () => { await api(`/api/workflows/${wf.id}/proposal/dismiss`, {}); openWorkflow(wf.id); };
+    yes.onclick = async () => { try { await api(`/api/workflows/${wf.id}/proposal/apply`, {}); toast("Applied"); openWorkflow(wf.id); } catch (e) { toast(e.message, true); } };
+    btns.append(no, yes); pc.append(btns);
+    v.append(pc);
+  }
+
+  const hist = S.wf.history || [];
+  if (hist.length) {
+    const h = el("details", "history");
+    h.innerHTML = `<summary>History · ${plural(hist.length, "change")}</summary>`;
+    for (const it of hist) {
+      const r = el("div", "hist-row");
+      r.innerHTML = `<div class="o-main"><div class="o-t">${esc(it.reason || "edited")}</div><div class="o-s">${ago(it.at)} · replaced the version shown by Revert</div></div>`;
+      const b = el("button", "copy", "Revert");
+      b.onclick = () => openSheet((sb) => {
+        sb.append(el("div", "sheet-title", "Revert this change?"), el("div", "sheet-msg", `Restores the workflow as it was before: “${esc(it.reason || "edited")}”. The current version is kept in history.`));
+        const row2 = el("div", "btn-row"); const ok = el("button", "btn", "Revert");
+        ok.onclick = async () => { closeSheet(); try { await api(`/api/workflows/${wf.id}/revert`, { version: it.version }); toast("Reverted"); openWorkflow(wf.id); } catch (e) { toast(e.message, true); } };
+        row2.append(ok); sb.append(row2);
+      });
+      r.append(b); h.append(r);
+    }
+    v.append(h);
+  }
+}
 
 // ---------------------------------------------------------------- suggested replies
 // When pi's last message asks the user something, a cheap model drafts 1-3

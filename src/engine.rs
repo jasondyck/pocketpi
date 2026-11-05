@@ -314,6 +314,13 @@ impl Engine {
             me.active.lock().unwrap().remove(&final_run.id);
             me.publish(&final_run);
             crate::notify::run_finished(&app, &final_run).await;
+            let (app2, fr) = (app.clone(), final_run.clone());
+            tokio::spawn(async move {
+                match crate::improve::after_run(app2, fr, false).await {
+                    Ok(m) => eprintln!("improve: {m}"),
+                    Err(e) => eprintln!("improve failed: {e}"),
+                }
+            });
         });
         Ok(id)
     }

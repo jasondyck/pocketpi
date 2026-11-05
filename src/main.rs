@@ -14,6 +14,7 @@ mod engine;
 mod notify;
 mod sensors;
 mod push;
+mod improve;
 
 use axum::{
     Json, Router,
@@ -188,6 +189,11 @@ async fn main() {
         .route("/api/workflows/{id}/enable", post(enable_workflow))
         .route("/api/workflows/{id}/delete", post(delete_workflow))
         .route("/api/workflows/{id}/webhook/rotate", post(rotate_webhook))
+        .route("/api/workflows/{id}/improve", post(set_improve))
+        .route("/api/workflows/{id}/reflect", post(reflect_now))
+        .route("/api/workflows/{id}/proposal/apply", post(apply_proposal))
+        .route("/api/workflows/{id}/proposal/dismiss", post(dismiss_proposal))
+        .route("/api/workflows/{id}/revert", post(revert_workflow))
         .route("/hook/{id}/{token}", post(webhook))
         .route("/api/push", get(push_info))
         .route("/api/push/subscribe", post(push_subscribe))
@@ -801,7 +807,13 @@ async fn get_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>) 
             _ => None,
         })
         .collect();
-    Ok(Json(json!({ "workflow": w, "errors": errors, "runs": runs, "webhook": webhook, "next": next })))
+    let proposal: Option<Value> = std::fs::read_to_string(workflows::proposal_path(&app.engine.workflows_dir, &id)).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let history: Vec<Value> = workflows::history(&app.engine.workflows_dir, &id)
+        .into_iter()
+        .take(20)
+        .map(|(v, at, reason)| json!({ "version": v, "at": at, "reason": reason }))
+        .collect();
+    Ok(Json(json!({ "workflow": w, "errors": errors, "runs": runs, "webhook": webhook, "next": next, "proposal": proposal, "history": history })))
 }
 
 /// Saves a workflow (create or replace). Invalid workflows are rejected with
@@ -821,7 +833,7 @@ async fn save_workflow(State(app): State<Arc<AppState>>, Json(body): Json<Value>
     if !errors.is_empty() {
         return Ok(Json(json!({ "ok": false, "errors": errors })));
     }
-    workflows::save(&app.engine.workflows_dir, &wf).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    workflows::save_versioned(&app.engine.workflows_dir, &wf, "edited").map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let _ = app.engine.tx.send(Arc::from(json!({"type": "workflows_changed"}).to_string().as_str()));
     Ok(Json(json!({ "ok": true, "workflow": wf })))
 }
@@ -1011,4 +1023,83 @@ async fn push_unsubscribe(State(app): State<Arc<AppState>>, Json(req): Json<Unsu
 async fn push_test(State(app): State<Arc<AppState>>) -> Json<Value> {
     let n = app.push.send("pocketpi", "Notifications are working.", "/", "test").await;
     Json(json!({ "delivered": n }))
+}
+
+// ---------------------------------------------------------------- self-improvement
+
+fn changed(app: &AppState) {
+    let _ = app.engine.tx.send(Arc::from(json!({"type": "workflows_changed"}).to_string().as_str()));
+}
+
+#[derive(Deserialize)]
+struct ImproveReq {
+    mode: workflows::Improve,
+}
+
+async fn set_improve(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<ImproveReq>) -> AppResult<Json<Value>> {
+    let mut w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
+    w.improve = req.mode;
+    workflows::save(&app.engine.workflows_dir, &w).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    changed(&app);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// "Improve now": reflect on the latest finished run regardless of mode.
+async fn reflect_now(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    let run = app
+        .engine
+        .list_runs(Some(&id))
+        .into_iter()
+        .find(|r| r.ended.is_some())
+        .ok_or_else(|| err(StatusCode::CONFLICT, "run it at least once first"))?;
+    let app2 = app.clone();
+    tokio::spawn(async move {
+        let r = improve::after_run(app2.clone(), run, true).await;
+        let msg = match &r {
+            Ok(m) => m.clone(),
+            Err(e) => format!("failed: {e}"),
+        };
+        eprintln!("improve (manual): {msg}");
+        let _ = app2.engine.tx.send(Arc::from(json!({"type": "improve_done", "workflow_id": id, "result": msg}).to_string().as_str()));
+    });
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn apply_proposal(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    let dir = &app.engine.workflows_dir;
+    let p = workflows::proposal_path(dir, &id);
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&p).map_err(|_| err(StatusCode::NOT_FOUND, "no proposal"))?).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let wf: workflows::Workflow = serde_json::from_value(v["workflow"].clone()).map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let errors = workflows::validate(&wf);
+    if !errors.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, errors.join("; ")));
+    }
+    let summary = v["changes"].as_array().map(|a| a.iter().filter_map(|c| c["summary"].as_str()).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+    workflows::save_versioned(dir, &wf, &format!("applied suggestion: {summary}")).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = std::fs::remove_file(p);
+    changed(&app);
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn dismiss_proposal(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Json<Value> {
+    let _ = std::fs::remove_file(workflows::proposal_path(&app.engine.workflows_dir, &id));
+    changed(&app);
+    Json(json!({ "ok": true }))
+}
+
+#[derive(Deserialize)]
+struct RevertReq {
+    version: String,
+}
+
+async fn revert_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<RevertReq>) -> AppResult<Json<Value>> {
+    let dir = &app.engine.workflows_dir;
+    let mut old = workflows::load_version(dir, &id, &req.version).ok_or_else(|| err(StatusCode::NOT_FOUND, "version not found"))?;
+    // Reverting restores the definition, not the on/off switch.
+    if let Some(cur) = workflows::load(dir, &id) {
+        old.enabled = cur.enabled;
+    }
+    workflows::save_versioned(dir, &old, &format!("reverted to the version from {}", req.version)).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    changed(&app);
+    Ok(Json(json!({ "ok": true })))
 }

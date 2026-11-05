@@ -38,7 +38,19 @@ pub struct Workflow {
     /// Stop the run if the summed agent cost (USD) goes over this.
     #[serde(default)]
     pub max_cost: Option<f64>,
+    /// Self-improvement after runs: off, suggest (needs the user's OK) or auto.
+    #[serde(default)]
+    pub improve: Improve,
     pub stages: Vec<Stage>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Improve {
+    Off,
+    #[default]
+    Suggest,
+    Auto,
 }
 
 fn yes() -> bool {
@@ -317,6 +329,53 @@ pub fn save(dir: &Path, wf: &Workflow) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
+/// Saves a workflow and keeps the version it replaces in .history/<id>/,
+/// with the reason for the change, so any edit can be reverted.
+pub fn save_versioned(dir: &Path, wf: &Workflow, reason: &str) -> std::io::Result<()> {
+    if let Some(prev) = load(dir, &wf.id) {
+        let hdir = dir.join(".history").join(&wf.id);
+        std::fs::create_dir_all(&hdir)?;
+        let entry = serde_json::json!({ "saved_at": now_ms(), "reason": reason, "workflow": prev });
+        std::fs::write(hdir.join(format!("{}.json", now_ms())), serde_json::to_vec_pretty(&entry)?)?;
+    }
+    save(dir, wf)
+}
+
+/// Previous versions, newest first: (version id, replaced at, reason for the change).
+pub fn history(dir: &Path, id: &str) -> Vec<(String, u64, String)> {
+    if !valid_id(id) {
+        return vec![];
+    }
+    let mut out: Vec<(String, u64, String)> = std::fs::read_dir(dir.join(".history").join(id))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.path().file_stem()?.to_str()?.to_string();
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+            Some((name, v["saved_at"].as_u64().unwrap_or(0), v["reason"].as_str().unwrap_or("").to_string()))
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out
+}
+
+pub fn load_version(dir: &Path, id: &str, version: &str) -> Option<Workflow> {
+    if !valid_id(id) || !version.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".history").join(id).join(format!("{version}.json"))).ok()?).ok()?;
+    serde_json::from_value(v["workflow"].clone()).ok()
+}
+
+pub fn proposal_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(".proposals").join(format!("{id}.json"))
+}
+
 pub fn delete(dir: &Path, id: &str) -> std::io::Result<()> {
     if !valid_id(id) {
         return Ok(());
@@ -366,6 +425,7 @@ pub fn schema_doc() -> Value {
             "triggers": "[{type:manual} | {type:schedule, cron:'m h dom mon dow'} | {type:git, on:'commits'|'pr'|'issue', branch?, poll_minutes?} | {type:webhook} | {type:agent, when:'plain-English situation in which pi should start this workflow on its own from a chat in the project'}]",
             "inputs": "[{name, description, required, default}] available as {{input.name}}",
             "max_cost": "optional USD cap for the whole run",
+            "improve": "'off' | 'suggest' (default: after notable runs a reviewer proposes improvements for the user to apply) | 'auto' (safe improvements are applied automatically)",
             "stages": "[{id, type:'agent'|'shell'|'review'|'approval', name?, needs?:[ids], prompt?, run?, model?, thinking?, tools?, on_fail?:{goto, max}, allow_fail?, timeout_minutes?}]"
         },
         "stage_types": {
