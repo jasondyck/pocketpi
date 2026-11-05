@@ -3,8 +3,9 @@
 // `pi -p` (extensions disabled in the child, so it can't recurse). Serious
 // problems block the push; the user can still choose "Push anyway".
 //
-// Settings (env): PI_PUSH_REVIEW=0 disables it, PI_PUSH_REVIEW_MODEL picks the
-// reviewer (default opencode-go/deepseek-v4-pro).
+// Settings (env): PI_PUSH_REVIEW=0 disables it, PI_PUSH_REVIEW_MODELS is the
+// comma-separated reviewer order, tried until one returns a verdict (default:
+// the ChatGPT subscription first, then OpenCode Go's deepseek-v4-pro).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
@@ -12,7 +13,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const MODEL = process.env.PI_PUSH_REVIEW_MODEL || "opencode-go/deepseek-v4-pro";
+const MODELS = (process.env.PI_PUSH_REVIEW_MODELS || process.env.PI_PUSH_REVIEW_MODEL || "openai-codex/gpt-6.1-sol,opencode-go/deepseek-v4-pro")
+  .split(",").map((m) => m.trim()).filter(Boolean);
 const MAX_DIFF = 300_000;
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -95,24 +97,29 @@ export default function (pi: ExtensionAPI) {
     const file = join(dir, "push.diff");
     writeFileSync(file, `Repository: ${remote || cwd}\nVisibility: ${visibility}\n\nCommits being pushed:\n${log.out}\n\nFiles:\n${stat.out}\n\nDiff${truncated ? " (truncated)" : ""}:\n${diff}\n`);
 
-    ctx.ui.notify(`Reviewing push with ${MODEL.split("/").pop()}…`, "info");
     let review: Review | null = null;
     let failure = "";
-    try {
-      const r = await pi.exec("pi", [
-        "--no-session", "-p", "--model", MODEL, "--thinking", "high",
-        "--no-tools", "--no-context-files", "--no-skills", "--no-extensions", "--no-prompt-templates",
-        "--system-prompt", PROMPT, `@${file}`, "Review this push.",
-      ], { cwd: dir, signal, timeout: 300_000 });
-      const text = r.stdout || "";
-      const a = text.indexOf("{"), b = text.lastIndexOf("}");
-      if (a >= 0 && b > a) review = JSON.parse(text.slice(a, b + 1));
-      else failure = (r.stderr || text || `exit ${r.code}`).slice(-400);
-    } catch (e) {
-      failure = String(e);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    let MODEL = MODELS[0];
+    for (const model of MODELS) {
+      MODEL = model;
+      ctx.ui.notify(`Reviewing push with ${model.split("/").pop()}…`, "info");
+      try {
+        const r = await pi.exec("pi", [
+          "--no-session", "-p", "--model", model, "--thinking", "high",
+          "--no-tools", "--no-context-files", "--no-skills", "--no-extensions", "--no-prompt-templates",
+          "--system-prompt", PROMPT, `@${file}`, "Review this push.",
+        ], { cwd: dir, signal, timeout: 300_000 });
+        const text = r.stdout || "";
+        const a = text.indexOf("{"), b = text.lastIndexOf("}");
+        if (a >= 0 && b > a) {
+          try { review = JSON.parse(text.slice(a, b + 1)); } catch { failure = `unparseable verdict from ${model}`; }
+        } else failure = `${model}: ${(r.stderr || text || `exit ${r.code}`).slice(-300)}`;
+      } catch (e) {
+        failure = `${model}: ${e}`;
+      }
+      if (review || signal?.aborted) break;
     }
+    rmSync(dir, { recursive: true, force: true });
 
     if (!review) {
       if (ctx.hasUI && await ctx.ui.confirm("Push review failed", `The reviewer could not run:\n${failure}\n\nPush without a review?`)) return;
