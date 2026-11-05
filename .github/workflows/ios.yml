@@ -6,7 +6,7 @@
 #   app  - on a macOS runner: generate the Xcode project from project.yml,
 #          build for the simulator, run the UI tests, upload their screenshots.
 #
-# Manual only (Actions -> iOS -> Run workflow): macOS minutes cost a multiple
+# Manual only (Actions -> iOS -> Run workflow, or `gh workflow run ios.yml --ref <branch>`): macOS minutes cost a multiple
 # of Linux ones, and the Kit's tests run locally for free.
 name: iOS
 
