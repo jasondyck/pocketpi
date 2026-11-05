@@ -21,6 +21,7 @@ final class LaunchTests: XCTestCase {
         keep(app, "chats")
     }
 
+    @MainActor
     private func keep(_ app: XCUIApplication, _ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())
         a.name = name
