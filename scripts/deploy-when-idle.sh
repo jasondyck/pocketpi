@@ -18,4 +18,6 @@ while [ $calm -lt 2 ]; do
 done
 install -m755 target/release/pocketpi ~/.local/bin/pocketpi
 systemctl --user restart pocketpi
+# wait until the new build answers, so follow-up API calls don't race the restart
+for _ in $(seq 1 30); do curl -sf http://127.0.0.1:3457/api/version > /dev/null && break; sleep 0.5; done
 echo "deployed $(git log --oneline -1) at $(date +%H:%M:%S)"
