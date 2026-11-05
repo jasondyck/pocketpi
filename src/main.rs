@@ -8,6 +8,10 @@
 
 mod sessions;
 mod projects;
+mod cron;
+mod workflows;
+mod engine;
+mod notify;
 
 use axum::{
     Json, Router,
@@ -70,44 +74,45 @@ static BUILD_ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
 const IDLE_REAP: Duration = Duration::from_secs(20 * 60);
 
 pub struct AppState {
-    pi_bin: String,
-    sessions_dir: PathBuf,
-    home: PathBuf,
-    allowed_users: Option<Vec<String>>,
-    suggest_model: String,
-    suggest_slots: tokio::sync::Semaphore,
-    live: StdMutex<HashMap<String, Arc<Live>>>,
-    next_key: AtomicU64,
-    meta_cache: sessions::Cache,
-    projects_path: PathBuf,
-    projects_lock: StdMutex<()>,
+    pub(crate) pi_bin: String,
+    pub(crate) sessions_dir: PathBuf,
+    pub(crate) home: PathBuf,
+    pub(crate) allowed_users: Option<Vec<String>>,
+    pub(crate) suggest_model: String,
+    pub(crate) suggest_slots: tokio::sync::Semaphore,
+    pub(crate) live: StdMutex<HashMap<String, Arc<Live>>>,
+    pub(crate) next_key: AtomicU64,
+    pub(crate) meta_cache: sessions::Cache,
+    pub(crate) projects_path: PathBuf,
+    pub(crate) projects_lock: StdMutex<()>,
+    pub(crate) engine: Arc<engine::Engine>,
 }
 
 pub struct Live {
-    key: String,
-    cwd: String,
-    stdin: Mutex<Option<ChildStdin>>,
-    tx: broadcast::Sender<Arc<str>>,
-    pending: StdMutex<HashMap<String, oneshot::Sender<Value>>>,
-    seq: AtomicU64,
-    streaming: AtomicBool,
-    last_active: StdMutex<Instant>,
-    session_file: StdMutex<Option<String>>,
-    stderr_tail: StdMutex<VecDeque<String>>,
+    pub(crate) key: String,
+    pub(crate) cwd: String,
+    pub(crate) stdin: Mutex<Option<ChildStdin>>,
+    pub(crate) tx: broadcast::Sender<Arc<str>>,
+    pub(crate) pending: StdMutex<HashMap<String, oneshot::Sender<Value>>>,
+    pub(crate) seq: AtomicU64,
+    pub(crate) streaming: AtomicBool,
+    pub(crate) last_active: StdMutex<Instant>,
+    pub(crate) session_file: StdMutex<Option<String>>,
+    pub(crate) stderr_tail: StdMutex<VecDeque<String>>,
 }
 
 impl Live {
     fn touch(&self) {
         *self.last_active.lock().unwrap() = Instant::now();
     }
-    fn session_file(&self) -> Option<String> {
+    pub(crate) fn session_file(&self) -> Option<String> {
         self.session_file.lock().unwrap().clone()
     }
 }
 
-type AppResult<T> = Result<T, (StatusCode, String)>;
+pub(crate) type AppResult<T> = Result<T, (StatusCode, String)>;
 
-fn err(code: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
+pub(crate) fn err(code: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
     (code, msg.into())
 }
 
@@ -137,6 +142,7 @@ async fn main() {
         sessions_dir,
         projects_path: projects::config_path(&home),
         projects_lock: StdMutex::new(()),
+        engine: Arc::new(engine::Engine::new(&home)),
         home,
         allowed_users,
         suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/minimax-m3.1-flash".into()),
@@ -166,6 +172,19 @@ async fn main() {
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
         .route("/api/suggest", post(suggest))
+        .route("/api/busy", get(busy))
+        .route("/api/workflows", get(list_workflows).post(save_workflow))
+        .route("/api/workflows/schema", get(|| async { Json(workflows::schema_doc()) }))
+        .route("/api/workflows/{id}", get(get_workflow))
+        .route("/api/workflows/{id}/run", post(run_workflow))
+        .route("/api/workflows/{id}/enable", post(enable_workflow))
+        .route("/api/workflows/{id}/delete", post(delete_workflow))
+        .route("/api/runs", get(list_runs))
+        .route("/api/runs/events", get(run_events))
+        .route("/api/runs/{id}", get(get_run))
+        .route("/api/runs/{id}/approve", post(approve_run))
+        .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route("/api/runs/{id}/cleanup", post(cleanup_run))
         .route("/api/open", post(open_session))
         .route("/api/s/{key}/cmd", post(send_command))
         .route("/api/s/{key}/events", get(events))
@@ -258,11 +277,16 @@ fn find_live_by_path(app: &AppState, path: &str) -> Option<Arc<Live>> {
 }
 
 async fn spawn_pi(app: &Arc<AppState>, cwd: &str, session: Option<&str>) -> AppResult<Arc<Live>> {
+    spawn_pi_with(app, cwd, session, &[]).await
+}
+
+pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>, extra: &[String]) -> AppResult<Arc<Live>> {
     let mut cmd = Command::new(&app.pi_bin);
     cmd.arg("--mode").arg("rpc");
     if let Some(s) = session {
         cmd.arg("--session").arg(s);
     }
+    cmd.args(extra);
     cmd.current_dir(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -373,11 +397,17 @@ fn handle_record(live: &Live, line: &str, v: Value) {
     let _ = live.tx.send(Arc::from(line));
 }
 
-async fn rpc(live: &Live, mut cmd: Value) -> AppResult<Value> {
+async fn rpc(live: &Live, cmd: Value) -> AppResult<Value> {
     let ty = cmd.get("type").and_then(Value::as_str).unwrap_or("").to_string();
     if !ALLOWED_COMMANDS.contains(&ty.as_str()) {
         return Err(err(StatusCode::BAD_REQUEST, format!("command not allowed: {ty}")));
     }
+    rpc_internal(live, cmd).await
+}
+
+/// Sends any pi RPC command (no allow-list); used by the workflow engine.
+pub async fn rpc_internal(live: &Live, mut cmd: Value) -> AppResult<Value> {
+    let ty = cmd.get("type").and_then(Value::as_str).unwrap_or("").to_string();
     live.touch();
     let wait = ty != "extension_ui_response";
     let mut rx = None;
@@ -491,6 +521,9 @@ async fn scan_with_live(app: &Arc<AppState>) -> Vec<sessions::SessionInfo> {
     let mut list = tokio::task::spawn_blocking(move || sessions::scan(&app2.sessions_dir, &app2.meta_cache))
         .await
         .unwrap_or_default();
+    // Workflow stages run in their own worktrees; keep those out of the chat list.
+    let wt = app.engine.worktrees_dir.to_string_lossy().to_string();
+    list.retain(|s| !s.cwd.starts_with(&wt));
     let live: Vec<Arc<Live>> = app.live.lock().unwrap().values().cloned().collect();
     for s in list.iter_mut() {
         if let Some(l) = live.iter().find(|l| l.session_file().as_deref() == Some(s.path.as_str())) {
@@ -678,4 +711,149 @@ async fn reaper(app: Arc<AppState>) {
             l.stdin.lock().await.take();
         }
     }
+}
+
+// ---------------------------------------------------------------- workflows API
+
+async fn busy(State(app): State<Arc<AppState>>) -> Json<Value> {
+    let chats = app.live.lock().unwrap().values().filter(|l| l.streaming.load(Ordering::Relaxed)).count();
+    let runs = app.engine.busy();
+    Json(json!({ "busy": chats > 0 || runs, "streaming": chats, "runs": runs }))
+}
+
+async fn list_workflows(State(app): State<Arc<AppState>>) -> Json<Value> {
+    let wfs = workflows::load_all(&app.engine.workflows_dir);
+    let runs = app.engine.list_runs(None);
+    let out: Vec<Value> = wfs
+        .iter()
+        .map(|w| {
+            let last = runs.iter().find(|r| r.workflow_id == w.id);
+            json!({
+                "workflow": w,
+                "errors": workflows::validate(w),
+                "last_run": last.map(|r| json!({"id": r.id, "status": r.status, "created": r.created, "ended": r.ended, "cost": r.cost})),
+                "runs": runs.iter().filter(|r| r.workflow_id == w.id).count(),
+            })
+        })
+        .collect();
+    Json(json!({ "workflows": out }))
+}
+
+async fn get_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    let w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
+    let errors = workflows::validate(&w);
+    let runs: Vec<engine::Run> = app.engine.list_runs(Some(&id)).into_iter().take(30).collect();
+    Ok(Json(json!({ "workflow": w, "errors": errors, "runs": runs })))
+}
+
+/// Saves a workflow (create or replace). Invalid workflows are rejected with
+/// the problems listed, so the chat tool can fix them and try again.
+async fn save_workflow(State(app): State<Arc<AppState>>, Json(body): Json<Value>) -> AppResult<Json<Value>> {
+    let mut wf: workflows::Workflow = match serde_json::from_value(body) {
+        Ok(w) => w,
+        Err(e) => return Ok(Json(json!({ "ok": false, "errors": [format!("invalid workflow JSON: {e}")] }))),
+    };
+    if let Some(rest) = wf.project.strip_prefix("~/") {
+        wf.project = app.home.join(rest).to_string_lossy().to_string();
+    }
+    if let Ok(p) = std::fs::canonicalize(&wf.project) {
+        wf.project = p.to_string_lossy().to_string();
+    }
+    let errors = workflows::validate(&wf);
+    if !errors.is_empty() {
+        return Ok(Json(json!({ "ok": false, "errors": errors })));
+    }
+    workflows::save(&app.engine.workflows_dir, &wf).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = app.engine.tx.send(Arc::from(json!({"type": "workflows_changed"}).to_string().as_str()));
+    Ok(Json(json!({ "ok": true, "workflow": wf })))
+}
+
+#[derive(Deserialize)]
+struct RunReq {
+    #[serde(default)]
+    inputs: HashMap<String, String>,
+    #[serde(default)]
+    trigger: Option<String>,
+}
+
+async fn run_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<RunReq>) -> AppResult<Json<Value>> {
+    let w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
+    let trigger = req.trigger.unwrap_or_else(|| "manual".into());
+    let run_id = app.engine.start(app.clone(), w, &trigger, req.inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "run_id": run_id })))
+}
+
+#[derive(Deserialize)]
+struct EnableReq {
+    enabled: bool,
+}
+
+async fn enable_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<EnableReq>) -> AppResult<Json<Value>> {
+    let mut w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
+    w.enabled = req.enabled;
+    workflows::save(&app.engine.workflows_dir, &w).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = app.engine.tx.send(Arc::from(json!({"type": "workflows_changed"}).to_string().as_str()));
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    workflows::delete(&app.engine.workflows_dir, &id).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = app.engine.tx.send(Arc::from(json!({"type": "workflows_changed"}).to_string().as_str()));
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct RunsQuery {
+    workflow: Option<String>,
+}
+
+async fn list_runs(State(app): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<RunsQuery>) -> Json<Value> {
+    let runs: Vec<engine::Run> = app.engine.list_runs(q.workflow.as_deref()).into_iter().take(50).collect();
+    Json(json!({ "runs": runs }))
+}
+
+async fn get_run(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    let r = app.engine.get_run(&id).ok_or_else(|| err(StatusCode::NOT_FOUND, "run not found"))?;
+    Ok(Json(json!({ "run": r })))
+}
+
+#[derive(Deserialize)]
+struct ApproveReq {
+    stage: String,
+    approve: bool,
+    #[serde(default)]
+    note: String,
+}
+
+async fn approve_run(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<ApproveReq>) -> AppResult<Json<Value>> {
+    if !app.engine.approve(&id, &req.stage, req.approve, req.note) {
+        return Err(err(StatusCode::CONFLICT, "that stage is not waiting for approval"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn cancel_run(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    if !app.engine.cancel(&id) {
+        return Err(err(StatusCode::CONFLICT, "run is not active"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn cleanup_run(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    app.engine.cleanup(&id).await.map_err(|e| err(StatusCode::CONFLICT, e))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn run_events(State(app): State<Arc<AppState>>) -> impl IntoResponse {
+    let rx = app.engine.tx.subscribe();
+    let first = tokio_stream::once(Ok::<_, Infallible>(Event::default().data(r#"{"type":"hello"}"#)));
+    let rest = BroadcastStream::new(rx).map(|r| {
+        Ok::<_, Infallible>(match r {
+            Ok(line) => Event::default().data(&*line),
+            Err(_) => Event::default().data(r#"{"type":"resync"}"#),
+        })
+    });
+    let mut res = Sse::new(first.chain(rest)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response();
+    res.headers_mut().insert("x-accel-buffering", HeaderValue::from_static("no"));
+    res
 }
