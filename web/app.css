@@ -232,19 +232,35 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
 /* tool timeline: consecutive tool calls read as one connected column */
 .tools { position: relative; display: flex; flex-direction: column; gap: 2px; }
 .tool { position: relative; }
-.tool + .tool::before { content: ""; position: absolute; left: 15px; top: -6px; height: 8px; width: 1.5px; background: var(--line-2); }
-.tool > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 2px; cursor: pointer; min-height: 38px; border-radius: 11px; }
+.tool + .tool::before { content: ""; position: absolute; left: 17px; top: -6px; height: 8px; width: 1.5px; background: var(--line-2); }
+.tool > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 5px 8px 5px 4px; cursor: pointer; min-height: 38px; border-radius: 11px; }
 .tool > summary::-webkit-details-marker { display: none; }
 .tool > summary:active { background: var(--surface); }
 .ticon { width: 28px; height: 28px; border-radius: 9px; background: var(--surface); display: grid; place-items: center; color: var(--text-2); flex: none; position: relative; }
 .ticon svg { width: 15px; height: 15px; }
-.tool.run .ticon::after { content: ""; position: absolute; inset: -3px; border-radius: 11px; border: 1.5px solid transparent; border-top-color: var(--signal-text); animation: spin .9s linear infinite; }
+/* running: a light that travels along the tile's own rounded border. A conic
+   gradient is masked down to a 1.5px ring concentric with the tile (radius
+   9px + 2.5px gap), and only the gradient's angle animates, so nothing rotates
+   and the trail always hugs the shape. */
+@property --trace { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.tool.run .ticon::after {
+  content: ""; position: absolute; inset: -2.5px; border-radius: 11.5px; padding: 1.5px;
+  background: conic-gradient(from var(--trace), transparent 0deg 190deg, color-mix(in srgb, var(--signal-text) 35%, transparent) 280deg, var(--signal-text) 345deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: trace 1.15s linear infinite;
+}
+.tool.run .ticon::before {
+  content: ""; position: absolute; inset: -2.5px; border-radius: 11.5px;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--signal-text) 14%, transparent);
+}
+@keyframes trace { to { --trace: 360deg; } }
 .tool.err .ticon { background: color-mix(in srgb, var(--danger) 13%, var(--bg)); color: var(--danger); }
 .tname { font-size: 13px; font-weight: 600; flex: none; }
 .targ { font: 12.5px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; letter-spacing: -0.02em; }
 .tmeta { font: 11.5px var(--mono); color: var(--muted); flex: none; }
 .tool[open] > summary .targ { white-space: normal; overflow-wrap: anywhere; }
-.tbody { margin: 2px 0 8px 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--code); overflow: hidden; }
+.tbody { margin: 2px 0 8px 42px; border: 1px solid var(--line); border-radius: 12px; background: var(--code); overflow: hidden; }
 .tsec { padding: 9px 12px; }
 .tsec + .tsec { border-top: 1px solid var(--line); }
 .tlabel { font: 600 10.5px var(--font); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 5px; }
