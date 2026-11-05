@@ -30,6 +30,7 @@ const ICON = {
   pin: '<svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6 4 4H6l4-4zM12 13v8"/></svg>',
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A9 9 0 0 1 12 6c5 0 8.5 4.5 9 6-.3.9-1.2 2.4-2.7 3.7M6.3 7.8C4.6 9 3.4 10.7 3 12c.6 1.7 4 6 9 6 1.6 0 3-.4 4.2-1"/></svg>',
   chip: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>',
+  spark: '<svg viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
 };
 const TOOL_ICON = { bash: ICON.term, read: ICON.file, write: ICON.pen, edit: ICON.pen, grep: ICON.search, find: ICON.search, ls: ICON.folder, web_search: ICON.globe, web_fetch: ICON.globe };
@@ -416,6 +417,7 @@ function onMessageStart(m) {
     S.cur = { msg, el: r.el, blocks: [] };
     $("messages").append(r.el);
   } else if (m.role === "user") {
+    clearSuggestions();
     S.msgs.push(m);
     const n = renderUser(m); n.classList.add("enter"); $("messages").append(n);
     if (!S.state?.sessionName) updateHeader();
@@ -489,7 +491,7 @@ function onEvent(ev) {
       if (tail) banner(`pi stopped.<pre>${esc(tail)}</pre>`, true);
       break;
     }
-    case "agent_start": setStreaming(true); break;
+    case "agent_start": clearSuggestions(); setStreaming(true); break;
     case "agent_settled": setStreaming(false); afterRun(); break;
     case "message_start": onMessageStart(ev.message); break;
     case "message_update": onMessageUpdate(ev); break;
@@ -514,6 +516,7 @@ function onEvent(ev) {
 
 async function afterRun() {
   refreshStats();
+  maybeSuggest();
   if (!S.path) {
     try { const st = await cmd({ type: "get_state" }); S.state = st; if (st.sessionFile) setPath(st.sessionFile); } catch {}
   }
@@ -581,6 +584,7 @@ async function loadSnapshot() {
     renderAll();
     updateHeader(); updateChips();
     refreshStats(); loadLevels();
+    maybeSuggest();
   } catch (e) { banner(esc(e.message), true); }
 }
 async function refreshStats() {
@@ -625,12 +629,14 @@ function updateSend() {
   btn.classList.toggle("stop", S.streaming && !has);
   btn.disabled = !has && !S.streaming;
   btn.setAttribute("aria-label", S.streaming && !has ? "Stop" : S.streaming ? "Steer" : "Send");
-  input.placeholder = S.streaming ? "Steer pi while it works…" : S.key || S.path ? "Reply to pi" : `Message pi in ${projectName(newChatCwd())}`;
+  $("use-ghost").hidden = !(S.ghost && !input.value && !S.streaming);
+  input.placeholder = S.ghost && !S.streaming ? S.ghost : S.streaming ? "Steer pi while it works…" : S.key || S.path ? "Reply to pi" : `Message pi in ${projectName(newChatCwd())}`;
 }
 input.addEventListener("input", () => { autosize(); updateSend(); updateSlash(); });
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && fine && !e.isComposing) { e.preventDefault(); send(); }
   if (e.key === "Escape" && S.streaming) stop();
+  if (e.key === "Tab" && !e.shiftKey && S.ghost && !input.value) { e.preventDefault(); acceptGhost(); }
 });
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
 
@@ -639,6 +645,7 @@ async function send() {
   const imgs = S.attachments;
   if (!text && !imgs.length) { if (S.streaming) stop(); return; }
   $("send").disabled = true;
+  clearSuggestions();
   try {
     if (!S.key && S.path) await reopen();
     if (!S.key) {
@@ -780,6 +787,14 @@ async function openChatSheet() {
     b.append(opt(ICON.chip, `<span class="mono">${esc(modelLabel(S.state?.model))}</span>`, esc(S.state?.model?.provider || ""), () => openModelSheet()));
     b.append(el("div", "sheet-section", "Chat"));
     b.append(opt(ICON.rename, "Rename", null, () => renameChat()));
+    const sugOn = suggestionsOn();
+    const sug = opt(ICON.spark, "Suggested replies", sugOn ? "On · quick answers when pi asks you something" : "Off", () => {
+      localStorage.setItem("pp.suggest", sugOn ? "0" : "1"); closeSheet();
+      if (sugOn) clearSuggestions(); else maybeSuggest();
+      toast(sugOn ? "Suggested replies off" : "Suggested replies on");
+    });
+    if (sugOn) sug.append(el("span", "check", ICON.check));
+    b.append(sug);
     b.append(opt(ICON.compact, "Compact context", "Summarize older messages to free up context", async () => {
       closeSheet(); setStreaming(true); setWorking("Compacting context");
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
@@ -976,7 +991,7 @@ async function openProjectPicker(adding = false) {
 
 // ---------------------------------------------------------------- navigation
 function resetChat() {
-  disconnect();
+  disconnect(); clearSuggestions();
   Object.assign(S, { key: null, path: null, cwd: null, state: null, stats: null, msgs: [], cur: null, commands: null, levels: [] });
   S.cards.clear(); setStreaming(false); renderQueue(); banner(null);
   $("messages").innerHTML = "";
@@ -1004,6 +1019,72 @@ document.addEventListener("visibilitychange", () => {
   if (S.path || S.key) { if (!S.es || S.es.readyState !== 1) reopen().catch(() => {}); else loadSnapshot(); }
   loadProjects();
 });
+
+// ---------------------------------------------------------------- suggested replies
+// When pi's last message asks the user something, a cheap model drafts 1-3
+// answers that appear as ghost reply bubbles; tapping one sends it.
+const suggestCache = new Map(JSON.parse(sessionStorage.getItem("pp.sugg") || "[]"));
+let suggestSeq = 0;
+const suggestionsOn = () => localStorage.getItem("pp.suggest") !== "0";
+function asksUser(text) {
+  const tail = text.slice(-500);
+  const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lastLines = lines.slice(-3).join(" ");
+  if (/\?[\s*_`)\]"']*$/.test(lastLines) || /\?[*_`)\]"']*\s*$/m.test(lines.slice(-2).join("\n"))) return true;
+  return /\b(want me to|should i|shall i|would you like|do you want|which (one|option|approach|do you)|let me know (if|which|whether)|your call|or would you|prefer)\b/i.test(tail);
+}
+// Ghost text: the most likely next message sits in the empty composer, the
+// way Claude Code pre-fills a reply. "Use" (or Tab on desktop) accepts it.
+function setGhost(text) {
+  S.ghost = text || null;
+  $("composer").classList.toggle("has-ghost", !!S.ghost);
+  updateSend();
+}
+function acceptGhost() {
+  if (!S.ghost) return;
+  input.value = S.ghost; setGhost(null);
+  autosize(); updateSend(); input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+$("use-ghost").addEventListener("click", acceptGhost);
+function clearSuggestions() {
+  if (S.ghost) setGhost(null);
+  suggestSeq++;
+  document.querySelectorAll(".suggestions").forEach((n) => n.remove());
+}
+async function maybeSuggest() {
+  clearSuggestions();
+  const seq = suggestSeq;
+  if (!suggestionsOn() || S.streaming) return;
+  const last = [...S.msgs].reverse().find((m) => m.role === "assistant" || m.role === "user");
+  if (!last || last.role !== "assistant" || last.stopReason !== "stop") return;
+  const text = textOf(last.content).trim();
+  if (!text) return;
+  const key = `${S.path || S.key}:${last.timestamp}`;
+  let replies = suggestCache.get(key);
+  if (!replies) {
+    const u = [...S.msgs].reverse().find((m) => m.role === "user");
+    try { replies = (await api("/api/suggest", { assistant: text, user: u ? textOf(u.content) : "" })).replies || []; }
+    catch { return; }
+    suggestCache.set(key, replies);
+    sessionStorage.setItem("pp.sugg", JSON.stringify([...suggestCache].slice(-60)));
+  }
+  if (seq !== suggestSeq || S.streaming || !replies.length) return;
+  const last2 = [...S.msgs].reverse().find((m) => m.role === "assistant" || m.role === "user");
+  if (last2 !== last) return;
+  setGhost(replies[0]);
+  if (!asksUser(text)) return;
+  const box = el("div", "suggestions");
+  box.append(el("div", "sugg-label", `${ICON.spark}<span>Suggested replies</span>`));
+  replies.forEach((r, i) => {
+    const b = el("button", "sugg" + (i === 0 ? " first" : ""));
+    b.type = "button"; b.textContent = r; b.style.animationDelay = `${60 + i * 70}ms`;
+    b.onclick = () => { input.value = r; autosize(); send(); };
+    box.append(b);
+  });
+  $("messages").append(box);
+  scrollBottom();
+}
 
 // ---------------------------------------------------------------- swipe drawer
 // Swipe right anywhere to pull the drawer open (it tracks the finger), swipe

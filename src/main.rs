@@ -74,6 +74,8 @@ pub struct AppState {
     sessions_dir: PathBuf,
     home: PathBuf,
     allowed_users: Option<Vec<String>>,
+    suggest_model: String,
+    suggest_slots: tokio::sync::Semaphore,
     live: StdMutex<HashMap<String, Arc<Live>>>,
     next_key: AtomicU64,
     meta_cache: sessions::Cache,
@@ -137,6 +139,8 @@ async fn main() {
         projects_lock: StdMutex::new(()),
         home,
         allowed_users,
+        suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/minimax-m3.1-flash".into()),
+        suggest_slots: tokio::sync::Semaphore::new(2),
         live: StdMutex::new(HashMap::new()),
         next_key: AtomicU64::new(1),
         meta_cache: sessions::Cache::default(),
@@ -161,6 +165,7 @@ async fn main() {
         .route("/api/sessions", get(list_sessions))
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
+        .route("/api/suggest", post(suggest))
         .route("/api/open", post(open_session))
         .route("/api/s/{key}/cmd", post(send_command))
         .route("/api/s/{key}/events", get(events))
@@ -554,6 +559,69 @@ async fn hide_project(State(app): State<Arc<AppState>>, Json(req): Json<ProjectR
     }
     projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
+}
+
+const SUGGEST_PROMPT: &str = "You predict what someone chatting with a coding agent on their phone will type next. \
+Read the agent's last message (and the user's previous message for context). \
+Return the 1-3 messages the user would most plausibly send next, written exactly as the user would type them: \
+short, casual, first person, each under 60 characters. Most likely first. \
+If the agent asked a question or offered options, give one answer per option it offered (its recommended option first), up to 3. \
+Otherwise they are natural follow-ups such as asking it to test, commit, continue, explain, or fix something it mentioned. \
+Never repeat the agent's words back, never add pleasantries. If nothing sensible fits, return an empty list. \
+Output ONLY JSON, no prose: {\"replies\":[\"...\"]}";
+
+#[derive(Deserialize)]
+struct SuggestReq {
+    assistant: String,
+    #[serde(default)]
+    user: String,
+}
+
+fn tail_chars(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    s.chars().skip(count.saturating_sub(n)).collect()
+}
+
+/// Suggested replies via a one-shot `pi -p` on a cheap model, so the API key
+/// never leaves pi. No tools, context files, skills or session are loaded.
+async fn suggest(State(app): State<Arc<AppState>>, Json(req): Json<SuggestReq>) -> AppResult<Json<Value>> {
+    let _slot = app.suggest_slots.acquire().await.map_err(|_| err(StatusCode::SERVICE_UNAVAILABLE, "busy"))?;
+    let user: String = req.user.chars().take(1200).collect();
+    let prompt = format!(
+        "USER'S LAST MESSAGE:\n{}\n\nAGENT'S LAST MESSAGE:\n{}",
+        user.trim(),
+        tail_chars(req.assistant.trim(), 4000)
+    );
+    let run = Command::new(&app.pi_bin)
+        .args(["--no-session", "-p", "--model", &app.suggest_model, "--thinking", "low"])
+        .args(["--no-tools", "--no-context-files", "--no-skills", "--no-extensions", "--no-prompt-templates"])
+        .arg("--system-prompt")
+        .arg(SUGGEST_PROMPT)
+        .arg(prompt)
+        .current_dir(std::env::temp_dir())
+        .env("PI_OFFLINE", "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(45), run)
+        .await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "suggestion timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("pi: {e}")))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let replies: Vec<String> = match (text.find('{'), text.rfind('}')) {
+        (Some(a), Some(b)) if b > a => serde_json::from_str::<Value>(&text[a..=b])
+            .ok()
+            .and_then(|v| v.get("replies").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|r| r.as_str().map(|s| s.trim().chars().take(120).collect::<String>()))
+            .filter(|s| !s.is_empty())
+            .take(3)
+            .collect(),
+        _ => Vec::new(),
+    };
+    Ok(Json(json!({ "replies": replies })))
 }
 
 async fn list_dirs(State(app): State<Arc<AppState>>) -> Json<Value> {
