@@ -5,12 +5,12 @@
 // New chats still start on the default subscription model.
 //
 // Settings (env):
-//   PI_SUB_FALLBACK            fallback model, default opencode-go/glm-5.2
+//   PI_SUB_FALLBACK            fallback model, default opencode-go/deepseek-v4.1-flash
 //   PI_SUB_FALLBACK_PROVIDERS  comma list, default xai,openai,openai-codex
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const FALLBACK = process.env.PI_SUB_FALLBACK || "opencode-go/glm-5.2";
+const FALLBACK = process.env.PI_SUB_FALLBACK || "opencode-go/deepseek-v4.1-flash";
 const PROVIDERS = (process.env.PI_SUB_FALLBACK_PROVIDERS || "xai,openai,openai-codex").split(",").map((s) => s.trim());
 const LIMIT = /(usage limit|rate.?limit|quota|limit (reached|exceeded)|too many requests|\b429\b|weekly|exceeded your|insufficient|out of credits|resource.?exhausted)/i;
 

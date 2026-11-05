@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
       return text(
         `WORKFLOW FORMAT\n${JSON.stringify(schema, null, 1)}\n\nPROJECTS (use these paths for "project")\n${(projects.projects || [])
           .map((p: any) => `- ${p.name}: ${p.path}`)
-          .join("\n")}\n\nEXISTING WORKFLOWS\n${existing.join("\n") || "(none)"}\n\nGuidance: keep stages few and purposeful; use cheap models for mechanical stages and reserve glm-5.3/kimi-k3.1-pro for planning or hard fixes; add a review stage and an approval gate before anything that pushes, merges or deploys; give shell checks on_fail loop-backs to the stage that can fix them; set max_cost.`,
+          .join("\n")}\n\nEXISTING WORKFLOWS\n${existing.join("\n") || "(none)"}\n\nGuidance: keep stages few and purposeful; use the subscription models first (grok-4.7 to plan and implement, gpt-6.1-sol to review) and deepseek-v4.1-flash for cheap mechanical stages; never Muse Spark (trains on data); add a review stage and an approval gate before anything that pushes, merges or deploys; give shell checks on_fail loop-backs to the stage that can fix them; set max_cost.`,
       );
     },
   });

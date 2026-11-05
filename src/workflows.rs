@@ -367,17 +367,17 @@ pub fn schema_doc() -> Value {
             "approval": "pauses until the user approves or rejects in pocketpi; prompt is the message. Reject (with a note) fails the stage."
         },
         "templates": "{{input.NAME}}, {{stages.ID.output}}, {{stages.ID.summary}}, {{feedback}} (why the last attempt failed, on loop-backs), {{run.id}}, {{run.branch}}, {{run.base}}",
-        "models": "pi model ids such as opencode-go/glm-5.2 (default work), opencode-go/minimax-m3.1-flash or opencode-go/deepseek-v4.1-flash (cheap/fast), opencode-go/glm-5.3 or opencode-go/kimi-k3.1-pro (hard problems), opencode-go/deepseek-v4-pro (reviews). Omit to use pi's default.",
+        "models": "pi model ids. Prefer the user's subscriptions: xai/grok-4.7 (default worker: planning, implementing) and openai-codex/gpt-6.1-sol (reviews, second opinions). On OpenCode Go use only opencode-go/deepseek-v4.1-flash (cheap/fast, mechanical stages) and opencode-go/deepseek-v4-pro (fallback reviewer). Never use Muse Spark/Iceman contributor models (they train on the data). Omit to use pi's default.",
         "example": {
             "id": "fix-and-pr", "name": "Fix and open PR", "project": "/home/user/projects/app", "enabled": false,
             "triggers": [{"type": "manual"}],
             "inputs": [{"name": "task", "description": "What to fix", "required": true}],
             "max_cost": 1.5,
             "stages": [
-                {"id": "plan", "type": "agent", "model": "opencode-go/glm-5.3", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "prompt": "Read the code and write a short plan for: {{input.task}}. Do not edit files."},
-                {"id": "build", "type": "agent", "needs": ["plan"], "model": "opencode-go/glm-5.2", "prompt": "Implement this plan:\n{{stages.plan.output}}\n{{feedback}}"},
+                {"id": "plan", "type": "agent", "model": "xai/grok-4.7", "thinking": "high", "tools": ["read", "grep", "find", "ls"], "prompt": "Read the code and write a short plan for: {{input.task}}. Do not edit files."},
+                {"id": "build", "type": "agent", "needs": ["plan"], "model": "xai/grok-4.7", "prompt": "Implement this plan:\n{{stages.plan.output}}\n{{feedback}}"},
                 {"id": "test", "type": "shell", "needs": ["build"], "run": "cargo test", "on_fail": {"goto": "build", "max": 2}},
-                {"id": "review", "type": "review", "needs": ["test"], "model": "opencode-go/deepseek-v4-pro", "on_fail": {"goto": "build", "max": 2}},
+                {"id": "review", "type": "review", "needs": ["test"], "model": "openai-codex/gpt-6.1-sol", "on_fail": {"goto": "build", "max": 2}},
                 {"id": "approve", "type": "approval", "needs": ["review"], "prompt": "Open a PR for {{run.branch}}?"},
                 {"id": "pr", "type": "shell", "needs": ["approve"], "run": "git push -u origin HEAD && gh pr create --fill"}
             ]

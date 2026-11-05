@@ -152,7 +152,7 @@ async fn main() {
         push: push::Push::new(&home),
         home,
         allowed_users,
-        suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/minimax-m3.1-flash".into()),
+        suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/deepseek-v4.1-flash".into()),
         suggest_slots: tokio::sync::Semaphore::new(2),
         live: StdMutex::new(HashMap::new()),
         next_key: AtomicU64::new(1),
