@@ -18,6 +18,10 @@ use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
 
 const OUTPUT_CAP: usize = 24_000;
+/// A shell stage exiting with this code means "nothing to do": the run stops
+/// quietly and isn't kept in history (for polling workflows).
+pub const NOOP_EXIT: i32 = 78;
+const NOOP_MARK: &str = "\u{0}noop";
 const DEFAULT_REVIEW_MODEL: &str = "opencode-go/deepseek-v4-pro";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -311,6 +315,20 @@ impl Engine {
         tokio::spawn(async move {
             let _slot = me.slots.acquire().await;
             let result = me.execute(&app, &wf, &h).await;
+            if let Err(e) = &result {
+                if e.starts_with(NOOP_MARK) {
+                    // Nothing to do: drop the run without history, notice or reflection.
+                    let id = h.run.lock().unwrap().id.clone();
+                    me.active.lock().unwrap().remove(&id);
+                    if wf.worktree {
+                        let _ = me.cleanup(&id).await;
+                    }
+                    let _ = std::fs::remove_file(me.runs_dir.join(format!("{id}.json")));
+                    let msg = json!({"type": "run_dropped", "run_id": id, "workflow_id": wf.id, "reason": e.trim_start_matches(NOOP_MARK)}).to_string();
+                    let _ = me.tx.send(Arc::from(msg.as_str()));
+                    return;
+                }
+            }
             let final_run = {
                 let mut r = h.run.lock().unwrap();
                 r.ended = Some(now());
@@ -438,6 +456,9 @@ impl Engine {
                         s.summary = summary;
                         s.output = cap(&output, OUTPUT_CAP);
                     });
+                }
+                Err(fail) if fail.starts_with(NOOP_MARK) => {
+                    return Err(fail);
                 }
                 Err(fail) if stage.allow_fail && stage.kind == StageKind::Shell => {
                     self.update(h, |r| {
@@ -679,6 +700,9 @@ impl Engine {
             _ = h.cancel_notify.notified() => return Err("cancelled".into()),
         };
         let text = String::from_utf8_lossy(&out.stdout).to_string();
+        if out.status.code() == Some(NOOP_EXIT) {
+            return Err(format!("{NOOP_MARK}{}", text.trim().lines().last().unwrap_or("nothing to do")));
+        }
         if out.status.success() {
             let summary = text.trim().lines().last().unwrap_or("ok").chars().take(200).collect();
             Ok((text, summary))

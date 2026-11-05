@@ -1563,6 +1563,9 @@ function connectRuns() {
         renderWorkflow();
       }
       clearTimeout(S.wfReload); S.wfReload = setTimeout(loadWorkflows, 800);
+    } else if (ev.type === "run_dropped") {
+      if (S.view === "run" && S.run?.id === ev.run_id) { toast(`Nothing to do: ${ev.reason}`); openWorkflow(ev.workflow_id); }
+      if (S.view === "workflow" && S.wf?.workflow.id === ev.workflow_id) { S.wf.runs = S.wf.runs.filter((r) => r.id !== ev.run_id); renderWorkflow(); }
     } else if (ev.type === "improve_done") {
       S.reflecting = null;
       const r = ev.result || "";

@@ -430,7 +430,7 @@ pub fn schema_doc() -> Value {
         },
         "stage_types": {
             "agent": "pi works in the worktree. prompt is required. Changes are committed automatically after the stage.",
-            "shell": "run is a shell command in the worktree; non-zero exit fails the stage (unless allow_fail)",
+            "shell": "run is a shell command in the worktree; non-zero exit fails the stage (unless allow_fail). Exit 78 means 'nothing to do': the run stops quietly and is not kept (use it for polling checks)",
             "review": "read-only reviewer; sees the run's diff and returns pass/block. prompt adds focus areas. Block = failure.",
             "approval": "pauses until the user approves or rejects in pocketpi; prompt is the message. Reject (with a note) fails the stage."
         },
