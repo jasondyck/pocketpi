@@ -11,6 +11,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - **push-review** (`extensions/push-review.ts`): pi's own `git push` is reviewed by `opencode-go/deepseek-v4-pro` first
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works, stop, image attachments, slash commands, extension dialogs
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
+- **iOS app** (`ios/`, early): native SwiftUI client for the same API; see `ios/README.md`
 
 ## Run
 

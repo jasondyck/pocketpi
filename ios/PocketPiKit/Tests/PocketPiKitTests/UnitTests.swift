@@ -1,0 +1,208 @@
+import Foundation
+import Testing
+@testable import PocketPiKit
+
+@Suite struct JSONValueTests {
+    @Test func roundTrips() throws {
+        let v = try JSONValue.parse(#"{"a":[1,2.5,"x",true,null],"b":{"c":"d"}}"#)
+        #expect(v["a"]?[0]?.int == 1)
+        #expect(v["a"]?[1]?.double == 2.5)
+        #expect(v["a"]?[2]?.string == "x")
+        #expect(v["a"]?[3]?.bool == true)
+        #expect(v["a"]?[4]?.isNull == true)
+        #expect(v["b"]?["c"]?.string == "d")
+        #expect(try JSONValue.parse(v.encoded()) == v)
+        #expect(JSONValue.number(3).compactText == "3")
+    }
+}
+
+@Suite struct SSEParserTests {
+    @Test func splitsEventsAcrossChunks() {
+        var p = SSEParser()
+        #expect(p.feed(Data("data: {\"a\"".utf8)).isEmpty)
+        #expect(p.feed(Data(":1}\n".utf8)).isEmpty)
+        #expect(p.feed(Data("\n: keep-alive\n\ndata:x\r\n\r\ndata: a\ndata: b\n\n".utf8)) == [#"{"a":1}"#, "x", "a\nb"])
+    }
+
+    @Test func keepsMultibyteCharactersSplitAcrossChunks() {
+        var p = SSEParser()
+        let bytes = Array("data: héllo\n\n".utf8)
+        let cut = 8 // inside é
+        #expect(p.feed(Data(bytes[..<cut])).isEmpty)
+        #expect(p.feed(Data(bytes[cut...])) == ["héllo"])
+    }
+}
+
+@Suite struct ServerAddressTests {
+    @Test func acceptsWhatPeopleType() throws {
+        #expect(try ServerAddress(parsing: "box.example.ts.net:9457").url.absoluteString == "https://box.example.ts.net:9457")
+        #expect(try ServerAddress(parsing: " https://host.ts.net/some/path?x=1 ").url.absoluteString == "https://host.ts.net")
+        #expect(try ServerAddress(parsing: "http://127.0.0.1:3457").url.absoluteString == "http://127.0.0.1:3457")
+        #expect(throws: PocketPiError.self) { try ServerAddress(parsing: "") }
+        #expect(throws: PocketPiError.self) { try ServerAddress(parsing: "ftp://x") }
+    }
+}
+
+@Suite struct FormatTests {
+    @Test func formats() {
+        #expect(Format.tokens(950) == "950")
+        #expect(Format.tokens(1500) == "1.5k")
+        #expect(Format.tokens(25_000) == "25k")
+        #expect(Format.tokens(1_200_000) == "1.2M")
+        #expect(Format.cost(0.004) == "<$0.01")
+        #expect(Format.cost(0.123) == "$0.123")
+        #expect(Format.cost(2) == "$2.00")
+        #expect(Format.tilde("/home/j/x", home: "/home/j") == "~/x")
+        #expect(Format.tilde("/home/jx", home: "/home/j") == "/home/jx")
+        #expect(Format.baseName("/a/b/") == "b")
+        #expect(ToolSummary.summary(name: "bash", arguments: ["command": "ls"], home: nil) == "ls")
+        #expect(ToolSummary.summary(name: "read", arguments: ["path": "/home/j/f.rs"], home: "/home/j") == "~/f.rs")
+        #expect(ToolSummary.summary(name: "x", arguments: [:], home: nil) == "")
+    }
+}
+
+@Suite struct TranscriptTests {
+    func ev(_ s: String) -> JSONValue { try! JSONValue.parse(s) }
+
+    @Test func loadsHistory() {
+        var t = Transcript()
+        t.load(messages: [
+            ["role": "user", "content": "hi there\nsecond line"],
+            ["role": "assistant", "content": [["type": "text", "text": "hello"],
+                                               ["type": "toolCall", "id": "c1", "name": "bash", "arguments": ["command": "ls"]]],
+             "stopReason": "toolUse"],
+            ["role": "toolResult", "toolCallId": "c1", "content": [["type": "text", "text": "a\nb"]], "isError": false],
+            ["role": "compactionSummary", "summary": "earlier", "tokensBefore": 5000],
+            ["role": "custom", "content": "hidden"],
+            ["role": "custom", "content": "shown", "display": true],
+            ["role": "bashExecution", "command": "pwd", "output": "/x", "exitCode": 0],
+        ], isStreaming: false)
+        #expect(t.items.count == 5)
+        #expect(t.firstPrompt == "hi there")
+        #expect(t.toolResults["c1"]?.text == "a\nb")
+        #expect(t.items[2].kind == .compaction(summary: "earlier", tokensBefore: 5000))
+        #expect(t.items[3].kind == .custom("shown"))
+        #expect(t.items[4].kind == .bash(command: "pwd", output: "/x", exitCode: 0))
+    }
+
+    @Test func streamsATurn() {
+        var t = Transcript()
+        let t0 = Date(timeIntervalSince1970: 1000)
+        t.apply(ev(#"{"type":"agent_start"}"#))
+        #expect(t.isStreaming)
+        t.apply(ev(#"{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"q"}]}}"#))
+        t.apply(ev(#"{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"q"}]}}"#))
+        t.apply(ev(#"{"type":"message_start","message":{"role":"assistant","content":[]}}"#))
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}"#), now: t0)
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"hm"}}"#), now: t0)
+        #expect(t.activity == "Thinking")
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0}}"#), now: t0 + 3)
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Hel"}}"#))
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"lo"}}"#))
+        #expect(t.activity == "Writing")
+        guard case .assistant(let live, true) = t.items.last?.kind else { Issue.record("no live message"); return }
+        #expect(live.content == [.thinking("hm", seconds: 3), .text("Hello")])
+
+        t.apply(ev(#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Hello"}],"stopReason":"stop"}}"#))
+        guard case .assistant(let final, false) = t.items.last?.kind else { Issue.record("not final"); return }
+        #expect(final.content == [.thinking("hm", seconds: 3), .text("Hello")]) // measured time kept
+        #expect(final.stopReason == "stop")
+        #expect(t.items.count == 2)
+        #expect(t.apply(ev(#"{"type":"agent_settled"}"#)) == [.turnFinished])
+        #expect(!t.isStreaming)
+    }
+
+    @Test func toolLifecycle() {
+        var t = Transcript()
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"id":"c","toolName":"bash"}}"#))
+        t.apply(ev(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"c","name":"bash","arguments":{"command":"ls"}}}}"#))
+        t.apply(ev(#"{"type":"tool_execution_start","toolCallId":"c","toolName":"bash"}"#))
+        #expect(t.runningTools == ["c"])
+        #expect(t.activity == "Running bash")
+        t.apply(ev(#"{"type":"tool_execution_update","toolCallId":"c","partialResult":{"content":[{"type":"text","text":"par"}]}}"#))
+        #expect(t.partialResults["c"]?.text == "par")
+        t.apply(ev(#"{"type":"tool_execution_end","toolCallId":"c","result":{"content":[{"type":"text","text":"done"}],"details":{"diff":"-a\n+b"}},"isError":true,"durationMs":12}"#))
+        #expect(t.runningTools.isEmpty)
+        #expect(t.partialResults["c"] == nil)
+        #expect(t.toolResults["c"]?.isError == true)
+        #expect(t.toolResults["c"]?.durationMs == 12)
+        #expect(t.toolResults["c"]?.diff == "-a\n+b")
+    }
+
+    @Test func effects() {
+        var t = Transcript()
+        #expect(t.apply(ev(#"{"type":"pocketpi_hello","streaming":false}"#)) == [.reloadSnapshot])
+        #expect(t.apply(ev(#"{"type":"pocketpi_exit","stderr":["boom"]}"#)) == [.exited(stderr: ["boom"])])
+        #expect(t.apply(ev(#"{"type":"extension_ui_request","id":"u","method":"select","title":"Pick","options":["a","b"]}"#))
+            == [.extensionRequest(ExtensionRequest(id: "u", method: .select, title: "Pick", message: nil, options: ["a", "b"], prefill: nil, placeholder: nil))])
+        #expect(t.apply(ev(#"{"type":"extension_ui_request","id":"n","method":"notify","message":"hey"}"#)) == [.toast("hey", isError: false)])
+        #expect(t.apply(ev(#"{"type":"extension_ui_request","id":"e","method":"set_editor_text","text":"draft"}"#)) == [.setComposer("draft")])
+        #expect(t.apply(ev(#"{"type":"extension_ui_request","id":"x","method":"unknown"}"#)).isEmpty)
+        #expect(t.apply(ev(#"{"type":"session_info_changed","name":"N"}"#)) == [.sessionNameChanged("N")])
+        t.apply(ev(#"{"type":"queue_update","steering":["s"],"followUp":["f"]}"#))
+        #expect(t.steering == ["s"] && t.followUp == ["f"])
+        #expect(t.apply(ev(#"{"type":"compaction_end","result":{"tokensBefore":20000,"estimatedTokensAfter":3000}}"#)) == [.statsStale])
+        #expect(t.items.last?.kind == .note("Context compacted · 20k → 3.0k"))
+        t.apply(ev(#"{"type":"auto_retry_end","success":false,"finalError":"overloaded"}"#))
+        #expect(t.items.last?.kind == .error("overloaded"))
+        #expect(t.apply(ev(#"{"type":"something_new"}"#)).isEmpty)
+    }
+}
+
+@Suite struct ModelTests {
+    @Test func decodesServerShapes() throws {
+        let s = try JSONDecoder().decode(SessionsResponse.self, from: Data(#"""
+        {"sessions":[{"path":"/s/a.jsonl","id":"a","cwd":"/p","name":null,"title":"first","modified":1730000000000,"messages":2,"live":false,"streaming":false}]}
+        """#.utf8))
+        #expect(s.sessions[0].displayTitle == "first")
+        let p = try JSONDecoder().decode(ProjectsResponse.self, from: Data(#"""
+        {"projects":[{"path":"/p","name":"p","pinned":true,"chats":3,"live":1,"streaming":false,"modified":1,"exists":true}],"home":"/home/j"}
+        """#.utf8))
+        #expect(p.projects[0].pinned && p.home == "/home/j")
+        let st = ChatState(["model": ["id": "opencode-go/kimi-k3"], "isStreaming": true, "messageCount": 4])
+        #expect(st.modelLabel == "kimi-k3" && st.isStreaming && st.messageCount == 4)
+        let stats = SessionStats(["cost": 0.5, "tokens": ["total": 10], "contextUsage": ["percent": 50, "contextWindow": 1000]])
+        #expect(stats.contextFraction == 0.5 && stats.totalTokens == 10)
+    }
+}
+
+@Suite struct MarkdownBlockTests {
+    @Test func splitsBlocks() {
+        let src = """
+        # Title
+        Some **bold** text
+        that wraps.
+
+        ```swift
+        let x = 1
+
+        print(x)
+        ```
+        - one
+          continued
+        - [x] done
+        2. two
+        > quoted
+        > more
+        ---
+        tail
+        """
+        #expect(MarkdownBlock.parse(src) == [
+            .heading(level: 1, text: "Title"),
+            .paragraph("Some **bold** text\nthat wraps."),
+            .code(language: "swift", text: "let x = 1\n\nprint(x)"),
+            .listItem(marker: "•", indent: 0, text: "one\ncontinued"),
+            .listItem(marker: "☑", indent: 0, text: "done"),
+            .listItem(marker: "2.", indent: 0, text: "two"),
+            .quote("quoted\nmore"),
+            .rule,
+            .paragraph("tail"),
+        ])
+    }
+
+    @Test func unclosedFenceRunsToTheEnd() {
+        // While a reply streams, its code block isn't closed yet.
+        #expect(MarkdownBlock.parse("x\n```\ncode") == [.paragraph("x"), .code(language: nil, text: "code")])
+        #expect(MarkdownBlock.parse("#nospace") == [.paragraph("#nospace")])
+    }
+}

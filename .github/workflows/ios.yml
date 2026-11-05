@@ -1,0 +1,72 @@
+# The iOS app, built and looked at without anybody's Mac.
+#
+#   kit  - PocketPiKit's unit and integration tests on Linux, against a scratch
+#          pocketpi built from this commit with ios/fake-pi.py as pi (the same
+#          thing ios/test-linux.sh does locally).
+#   app  - on a macOS runner: generate the Xcode project from project.yml,
+#          build for the simulator, run the UI tests, upload their screenshots.
+#
+# Manual only (Actions -> iOS -> Run workflow): macOS minutes cost a multiple
+# of Linux ones, and the Kit's tests run locally for free.
+name: iOS
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: PocketPiKit tests
+        run: ios/test-linux.sh
+
+  app:
+    runs-on: macos-26
+    timeout-minutes: 45
+    needs: kit
+    steps:
+      - uses: actions/checkout@v4
+      - name: XcodeGen
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+      - name: Generate the project
+        working-directory: ios/PocketPi
+        run: xcodegen generate
+      - name: Pick a simulator
+        id: sim
+        run: |
+          id=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          phones = [x for rt, xs in sorted(d.items(), reverse=True) if "iOS" in rt
+                    for x in xs if x["name"].startswith("iPhone")]
+          print(phones[0]["udid"])')
+          echo "udid=$id" >> "$GITHUB_OUTPUT"
+      - name: Build and run the UI tests
+        working-directory: ios/PocketPi
+        run: |
+          set -o pipefail
+          xcodebuild test -project PocketPi.xcodeproj -scheme PocketPi \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO | tail -200
+      - name: Screenshots out of the result bundle
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" \
+            --output-path "$RUNNER_TEMP/shots" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: warn
