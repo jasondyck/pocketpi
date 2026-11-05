@@ -176,6 +176,11 @@ impl Engine {
         serde_json::from_str(&std::fs::read_to_string(self.runs_dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
+    /// Workflow ids that have a run in progress.
+    pub fn list_active(&self) -> Vec<String> {
+        self.active.lock().unwrap().values().map(|h| h.run.lock().unwrap().workflow_id.clone()).collect()
+    }
+
     pub fn busy(&self) -> bool {
         !self.active.lock().unwrap().is_empty()
     }

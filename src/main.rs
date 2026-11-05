@@ -12,6 +12,7 @@ mod cron;
 mod workflows;
 mod engine;
 mod notify;
+mod sensors;
 
 use axum::{
     Json, Router,
@@ -86,6 +87,7 @@ pub struct AppState {
     pub(crate) projects_path: PathBuf,
     pub(crate) projects_lock: StdMutex<()>,
     pub(crate) engine: Arc<engine::Engine>,
+    pub(crate) sensors: sensors::Sensors,
 }
 
 pub struct Live {
@@ -143,6 +145,7 @@ async fn main() {
         projects_path: projects::config_path(&home),
         projects_lock: StdMutex::new(()),
         engine: Arc::new(engine::Engine::new(&home)),
+        sensors: sensors::Sensors::new(&home),
         home,
         allowed_users,
         suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/minimax-m3.1-flash".into()),
@@ -153,6 +156,7 @@ async fn main() {
     });
 
     tokio::spawn(reaper(app.clone()));
+    tokio::spawn(sensors::run(app.clone()));
 
     let router = Router::new()
         .route("/", get(|| async { static_file("index.html") }))
@@ -179,6 +183,8 @@ async fn main() {
         .route("/api/workflows/{id}/run", post(run_workflow))
         .route("/api/workflows/{id}/enable", post(enable_workflow))
         .route("/api/workflows/{id}/delete", post(delete_workflow))
+        .route("/api/workflows/{id}/webhook/rotate", post(rotate_webhook))
+        .route("/hook/{id}/{token}", post(webhook))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/events", get(run_events))
         .route("/api/runs/{id}", get(get_run))
@@ -217,6 +223,11 @@ async fn guard(
     let h = req.headers();
     if !peer.ip().is_loopback() || h.contains_key("tailscale-funnel-request") {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    // Webhooks come from tailnet services (Home Assistant, CI...) that have no
+    // user identity; they authenticate with the per-workflow token instead.
+    if req.uri().path().starts_with("/hook/") && req.method() == Method::POST {
+        return next.run(req).await;
     }
     let login = h.get("tailscale-user-login").and_then(|v| v.to_str().ok());
     let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -743,7 +754,20 @@ async fn get_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>) 
     let w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
     let errors = workflows::validate(&w);
     let runs: Vec<engine::Run> = app.engine.list_runs(Some(&id)).into_iter().take(30).collect();
-    Ok(Json(json!({ "workflow": w, "errors": errors, "runs": runs })))
+    let webhook = w
+        .triggers
+        .iter()
+        .any(|t| matches!(t, workflows::Trigger::Webhook))
+        .then(|| format!("/hook/{}/{}", w.id, app.sensors.token(&w.id)));
+    let next: Vec<Option<String>> = w
+        .triggers
+        .iter()
+        .map(|t| match t {
+            workflows::Trigger::Schedule { cron } => sensors::next_fire(cron),
+            _ => None,
+        })
+        .collect();
+    Ok(Json(json!({ "workflow": w, "errors": errors, "runs": runs, "webhook": webhook, "next": next })))
 }
 
 /// Saves a workflow (create or replace). Invalid workflows are rejected with
@@ -856,4 +880,37 @@ async fn run_events(State(app): State<Arc<AppState>>) -> impl IntoResponse {
     let mut res = Sse::new(first.chain(rest)).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response();
     res.headers_mut().insert("x-accel-buffering", HeaderValue::from_static("no"));
     res
+}
+
+async fn rotate_webhook(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Json<Value> {
+    Json(json!({ "webhook": format!("/hook/{}/{}", id, app.sensors.rotate(&id)) }))
+}
+
+/// POST /hook/{workflow}/{token}: starts a run. A JSON object body becomes the
+/// run's inputs (strings kept, other values JSON-encoded); the raw body is
+/// also passed as the `payload` input.
+async fn webhook(State(app): State<Arc<AppState>>, Path((id, token)): Path<(String, String)>, body: axum::body::Bytes) -> AppResult<Json<Value>> {
+    if !app.sensors.check_token(&id, &token) {
+        return Err(err(StatusCode::NOT_FOUND, "not found"));
+    }
+    let w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "not found"))?;
+    if !w.enabled {
+        return Err(err(StatusCode::CONFLICT, "workflow is a draft; enable its sensors first"));
+    }
+    if !w.triggers.iter().any(|t| matches!(t, workflows::Trigger::Webhook)) {
+        return Err(err(StatusCode::NOT_FOUND, "not found"));
+    }
+    if app.engine.list_active().contains(&id) {
+        return Err(err(StatusCode::CONFLICT, "a run is already in progress"));
+    }
+    let mut inputs = HashMap::new();
+    let text = String::from_utf8_lossy(&body).to_string();
+    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) {
+        for (k, v) in map {
+            inputs.insert(k, v.as_str().map(String::from).unwrap_or_else(|| v.to_string()));
+        }
+    }
+    inputs.insert("payload".into(), text.chars().take(20_000).collect());
+    let run_id = app.engine.start(app.clone(), w, "webhook", inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "run_id": run_id })))
 }

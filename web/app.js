@@ -1224,6 +1224,27 @@ function renderWorkflow() {
     catch (e) { toast(e.message, true); }
   };
   sens.append(sw);
+  (wf.triggers || []).forEach((t, i) => {
+    if (t.type === "manual") return;
+    const row = el("div", "sensor-row");
+    const icon = { schedule: "⏱", git: "⎇", webhook: "⇢" }[t.type] || "•";
+    let detail = "";
+    if (t.type === "schedule") detail = S.wf.next?.[i] ? `next ${esc(S.wf.next[i])}` : `<span class="mono">${esc(t.cron)}</span>`;
+    if (t.type === "git") detail = `checks every ${t.poll_minutes || 10} min${t.on === "commits" ? "" : " with gh"}`;
+    row.innerHTML = `<span class="sensor-icon">${icon}</span><div class="o-main"><div class="o-t">${esc(triggerLabel(t))}</div><div class="o-s">${detail}</div></div>`;
+    if (t.type === "webhook" && S.wf.webhook) {
+      const url = location.origin + S.wf.webhook;
+      const box = el("div", "hook");
+      box.innerHTML = `<code>${esc(url)}</code>`;
+      const copy = el("button", "copy", "Copy"); copy.onclick = () => copyText(url, copy);
+      const curl = el("button", "copy", "curl"); curl.onclick = () => copyText(`curl -X POST -H 'content-type: application/json' -d '{"note":"hello"}' ${url}`, curl);
+      const rot = el("button", "copy", "New secret"); rot.onclick = async () => { await api(`/api/workflows/${wf.id}/webhook/rotate`, {}); openWorkflow(wf.id); toast("Old URL no longer works"); };
+      const btns = el("div", "hook-btns"); btns.append(copy, curl, rot);
+      box.append(btns);
+      row.querySelector(".o-main").append(box);
+    }
+    sens.append(row);
+  });
   v.append(sens);
 
   // DAG
