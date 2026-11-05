@@ -20,7 +20,43 @@ async function call(path: string, body?: unknown): Promise<any> {
 
 const text = (s: string, details: Record<string, unknown> = {}) => ({ content: [{ type: "text" as const, text: s }], details });
 
+// Workflows pi may start on its own: enabled, with an agent trigger, for the
+// project this chat is in. Cached briefly; workflow stages (which run inside
+// pocketpi worktrees) never see the list, so runs can't start more runs.
+let cache: { at: number; list: any[] } = { at: 0, list: [] };
+async function autoWorkflows(cwd: string): Promise<any[]> {
+  if (cwd.includes("/pocketpi/worktrees/")) return [];
+  if (Date.now() - cache.at > 30_000) {
+    try {
+      cache = { at: Date.now(), list: ((await call("/api/workflows")).workflows || []).map((w: any) => w.workflow) };
+    } catch {
+      cache = { at: Date.now(), list: [] };
+    }
+  }
+  return cache.list.filter(
+    (w) => w.enabled && (cwd === w.project || cwd.startsWith(w.project + "/")) && (w.triggers || []).some((t: any) => t.type === "agent"),
+  );
+}
+
 export default function (pi: ExtensionAPI) {
+  pi.on("before_agent_start", async (event: any, ctx) => {
+    const list = await autoWorkflows(ctx.cwd);
+    if (!list.length || !event.systemPromptOptions) return;
+    const lines = list.map((w) => {
+      const when = w.triggers.filter((t: any) => t.type === "agent").map((t: any) => t.when).join(" / ");
+      const inputs = (w.inputs || []).map((i: any) => `${i.name}${i.required ? "" : "?"}${i.description ? ` (${i.description})` : ""}`).join(", ");
+      return `- ${w.id} — ${w.name}: start it when ${when}.${inputs ? ` Inputs: ${inputs}.` : ""}`;
+    });
+    event.systemPromptOptions.sections = {
+      ...(event.systemPromptOptions.sections || {}),
+      workflows:
+        "Automated workflows exist for this project. Start one yourself with the workflow_run tool (trigger is set for you) when its condition clearly applies, instead of doing that work by hand; " +
+        "it runs in the background on its own branch with its own checks, reviews and approval gates. After starting one, tell the user what you started and why, and don't also do the same work yourself. " +
+        "Never start one just to test it, and don't start the same workflow again while it is running.\n" +
+        lines.join("\n"),
+    };
+  });
+
   pi.registerTool({
     name: "workflow_guide",
     label: "Workflow guide",
@@ -80,13 +116,16 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "workflow_run",
     label: "Run workflow",
-    description: "Start a run of a pocketpi workflow by id, with optional inputs. Only do this when the user asks for a run.",
+    description:
+      "Start a run of a pocketpi workflow by id, with optional inputs. Use it when the user asks for a run, or on your own when one of the workflows listed in your instructions under 'workflows' clearly applies.",
     parameters: Type.Object({
       id: Type.String(),
       inputs: Type.Optional(Type.Record(Type.String(), Type.String())),
     }),
-    async execute(_id, params) {
-      const r = await call(`/api/workflows/${encodeURIComponent(params.id)}/run`, { inputs: params.inputs || {}, trigger: "chat" });
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      // Runs of workflows offered to pi count as agent-started; others as asked-for in chat.
+      const offered = (await autoWorkflows(ctx?.cwd || "")).some((w) => w.id === params.id);
+      const r = await call(`/api/workflows/${encodeURIComponent(params.id)}/run`, { inputs: params.inputs || {}, trigger: offered ? "agent" : "chat" });
       return text(`Started run ${r.run_id}. The user can follow it live in pocketpi.`, { run_id: r.run_id, workflow_id: params.id });
     },
   });

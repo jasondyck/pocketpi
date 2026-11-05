@@ -837,6 +837,15 @@ struct RunReq {
 async fn run_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<RunReq>) -> AppResult<Json<Value>> {
     let w = workflows::load(&app.engine.workflows_dir, &id).ok_or_else(|| err(StatusCode::NOT_FOUND, "workflow not found"))?;
     let trigger = req.trigger.unwrap_or_else(|| "manual".into());
+    // pi starting a workflow on its own needs an enabled workflow that opted in.
+    if trigger == "agent" {
+        if !w.enabled || !w.triggers.iter().any(|t| matches!(t, workflows::Trigger::Agent { .. })) {
+            return Err(err(StatusCode::FORBIDDEN, "this workflow can't be started by pi on its own (it needs to be enabled with an agent trigger); ask the user to start it"));
+        }
+        if app.engine.list_active().contains(&id) {
+            return Err(err(StatusCode::CONFLICT, "this workflow is already running; don't start another"));
+        }
+    }
     let run_id = app.engine.start(app.clone(), w, &trigger, req.inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "run_id": run_id })))
 }

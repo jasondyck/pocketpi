@@ -60,6 +60,9 @@ pub enum Trigger {
         poll_minutes: u32,
     },
     Webhook,
+    /// pi may start this workflow itself, from a chat in the project, when
+    /// the situation described in `when` applies.
+    Agent { when: String },
 }
 
 fn commits() -> String {
@@ -225,6 +228,11 @@ pub fn validate(wf: &Workflow) -> Vec<String> {
                     errs.push("git trigger poll_minutes must be at least 2".into());
                 }
             }
+            Trigger::Agent { when } => {
+                if when.trim().len() < 10 {
+                    errs.push("agent trigger needs a 'when' sentence describing when pi should start it".into());
+                }
+            }
             _ => {}
         }
     }
@@ -355,7 +363,7 @@ pub fn schema_doc() -> Value {
             "worktree": "default true: each run gets its own git worktree and branch pocketpi/<id>/<run>",
             "base": "branch to start from (default: project's current branch)",
             "enabled": "sensors only fire when true; drafts can still be run by hand",
-            "triggers": "[{type:manual} | {type:schedule, cron:'m h dom mon dow'} | {type:git, on:'commits'|'pr'|'issue', branch?, poll_minutes?} | {type:webhook}]",
+            "triggers": "[{type:manual} | {type:schedule, cron:'m h dom mon dow'} | {type:git, on:'commits'|'pr'|'issue', branch?, poll_minutes?} | {type:webhook} | {type:agent, when:'plain-English situation in which pi should start this workflow on its own from a chat in the project'}]",
             "inputs": "[{name, description, required, default}] available as {{input.name}}",
             "max_cost": "optional USD cap for the whole run",
             "stages": "[{id, type:'agent'|'shell'|'review'|'approval', name?, needs?:[ids], prompt?, run?, model?, thinking?, tools?, on_fail?:{goto, max}, allow_fail?, timeout_minutes?}]"

@@ -1240,6 +1240,7 @@ function fmtDur(ms) {
 function triggerLabel(t) {
   if (t.type === "manual") return null;
   if (t.type === "webhook") return "Webhook";
+  if (t.type === "agent") return "pi starts it when needed";
   if (t.type === "git") return t.on === "pr" ? "New PRs" : t.on === "issue" ? "New issues" : `Commits${t.branch ? ` on ${t.branch}` : ""}`;
   if (t.type === "schedule") {
     const f = (t.cron || "").split(/\s+/);
@@ -1251,6 +1252,8 @@ function triggerLabel(t) {
   }
   return t.type;
 }
+const TRIGGER_LABEL = { manual: "manual", chat: "asked in chat", agent: "started by pi", schedule: "schedule", git: "new commits", pr: "PR activity", issue: "new issue", webhook: "webhook" };
+const triggerText = (t) => TRIGGER_LABEL[t] || t;
 function statusPill(status) {
   return `<span class="pill st-${status}">${STATUS_LABEL[status] || status}</span>`;
 }
@@ -1378,10 +1381,11 @@ function renderWorkflow() {
   (wf.triggers || []).forEach((t, i) => {
     if (t.type === "manual") return;
     const row = el("div", "sensor-row");
-    const icon = { schedule: "⏱", git: "⎇", webhook: "⇢" }[t.type] || "•";
+    const icon = { schedule: "⏱", git: "⎇", webhook: "⇢", agent: "✦" }[t.type] || "•";
     let detail = "";
     if (t.type === "schedule") detail = S.wf.next?.[i] ? `next ${esc(S.wf.next[i])}` : `<span class="mono">${esc(t.cron)}</span>`;
     if (t.type === "git") detail = `checks every ${t.poll_minutes || 10} min${t.on === "commits" ? "" : " with gh"}`;
+    if (t.type === "agent") detail = `When ${esc(t.when)}${wf.enabled ? "" : " · only once sensors are on"}`;
     row.innerHTML = `<span class="sensor-icon">${icon}</span><div class="o-main"><div class="o-t">${esc(triggerLabel(t))}</div><div class="o-s">${detail}</div></div>`;
     if (t.type === "webhook" && S.wf.webhook) {
       const url = location.origin + S.wf.webhook;
@@ -1409,7 +1413,7 @@ function renderWorkflow() {
   for (const r of runs) {
     const b = el("button", "run-row");
     const dur = r.ended ? fmtDur(r.ended - r.created) : fmtDur(Date.now() - r.created);
-    b.innerHTML = `${statusPill(r.status)}<span class="rr-main">${ago(r.created)} · ${esc(r.trigger)}</span><span class="rr-meta">${dur}${r.cost ? " · " + fmtCost(r.cost) : ""}</span>`;
+    b.innerHTML = `${statusPill(r.status)}<span class="rr-main">${ago(r.created)} · ${esc(triggerText(r.trigger))}</span><span class="rr-meta">${dur}${r.cost ? " · " + fmtCost(r.cost) : ""}</span>`;
     b.onclick = () => openRun(r.id);
     rl.append(b);
   }
@@ -1479,7 +1483,7 @@ async function openRun(id) {
 function renderRun() {
   const r = S.run; if (!r) return;
   const wf = S.wf?.workflow || { stages: r.stages.map((s) => ({ id: s.id, type: s.kind, name: s.name })), name: r.workflow_name, project: r.project };
-  header(r.workflow_name, `Run · ${ago(r.created)} · ${r.trigger}`, r.project);
+  header(r.workflow_name, `Run · ${ago(r.created)} · ${triggerText(r.trigger)}`, r.project);
   const v = $("wfview"); v.innerHTML = "";
   const back = el("button", "wf-back", `<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>${esc(r.workflow_name)}`);
   back.onclick = () => openWorkflow(r.workflow_id);
