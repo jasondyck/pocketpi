@@ -403,6 +403,7 @@ function renderAll() {
     else if (m.role === "toolResult") applyToolResult(m);
     else { const n = renderOther(m); if (n) box.append(n); }
   }
+  collapseTurns();
   updateEmpty();
   scrollBottom(true);
 }
@@ -425,8 +426,81 @@ function updateEmpty() {
   }
 }
 
+
+// ---------------------------------------------------------------- activity groups
+// Within each turn (everything after a user message), the tool calls,
+// thinking and in-between narration that come before pi's latest text are
+// folded into one "Ran 3 commands, read 2 files" row. Nodes are hidden with a
+// class rather than moved, so live tool cards keep updating in place. Steps
+// after the latest text (still running) stay visible.
+S.openTurns = new Set();
+const VERB = {
+  bash: ["ran", "command"], read: ["read", "file"], edit: ["edited", "file"], write: ["wrote", "file"],
+  grep: ["searched", "time"], find: ["searched", "time"], ls: ["listed", "folder"],
+  web_search: ["searched the web", "time"], web_fetch: ["fetched", "page"],
+};
+function activityLabel(nodes) {
+  const counts = new Map(); let thoughts = 0, failed = 0, other = 0;
+  for (const n of nodes) {
+    if (n.classList.contains("think")) thoughts++;
+    const cards = n.classList.contains("tool") ? [n] : [...n.querySelectorAll(".tool")];
+    for (const c of cards) {
+      const name = c.querySelector(".tname")?.textContent || "tool";
+      if (c.classList.contains("err")) failed++;
+      const [verb, noun] = VERB[name] || ["used", "tool"];
+      const k = `${verb}|${noun}`; counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    if (n.classList.contains("md")) other++;
+  }
+  const parts = [...counts].map(([k, n]) => { const [verb, noun] = k.split("|"); return `${verb} ${n} ${noun}${n === 1 ? "" : "s"}`; });
+  if (!parts.length && thoughts) parts.push(`thought ${thoughts === 1 ? "once" : thoughts + " times"}`);
+  let label = parts.join(", ");
+  label = label.charAt(0).toUpperCase() + label.slice(1);
+  return { label, failed, tools: [...counts.values()].reduce((a, b) => a + b, 0) };
+}
+function collapseTurns() {
+  const box = $("messages");
+  const turns = [[]];
+  for (const child of box.children) {
+    if (child.classList.contains("user")) { turns.push([]); continue; }
+    if (child.classList.contains("msg")) turns[turns.length - 1].push(child);
+  }
+  turns.forEach((wrappers, ti) => {
+    const key = String(ti);
+    const items = [];
+    for (const w of wrappers) for (const n of w.children) {
+      if (n.classList.contains("activity") || n.classList.contains("actions") || n.classList.contains("errbox")) continue;
+      items.push(n);
+    }
+    let last = -1;
+    items.forEach((n, i) => { if (n.classList.contains("md") && n.textContent.trim()) last = i; });
+    const row0 = box.querySelector(`.activity[data-turn="${key}"]`);
+    if (last <= 0) { if (row0) row0.remove(); items.forEach((n) => n.classList.remove("act-hidden")); return; }
+    const pre = items.slice(0, last);
+    const { label, failed, tools } = activityLabel(pre);
+    if (!tools) { if (row0) row0.remove(); pre.forEach((n) => n.classList.remove("act-hidden")); return; }
+    const open = S.openTurns.has(key);
+    let row = row0;
+    if (!row) {
+      row = el("button", "activity");
+      row.type = "button"; row.dataset.turn = key;
+      row.onclick = () => {
+        S.openTurns.has(key) ? S.openTurns.delete(key) : S.openTurns.add(key);
+        collapseTurns();
+      };
+    }
+    row.classList.toggle("open", open);
+    row.innerHTML = `<span class="act-icon">${ICON.tool}</span><span class="act-label">${esc(label)}</span>${failed ? `<span class="act-failed">${failed} failed</span>` : ""}<svg class="act-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>`;
+    if (pre[0].previousElementSibling !== row) pre[0].parentElement.insertBefore(row, pre[0]);
+    pre.forEach((n) => n.classList.toggle("act-hidden", !open));
+    items.slice(last).forEach((n) => n.classList.remove("act-hidden"));
+    for (const w of wrappers) w.classList.toggle("hollow", ![...w.children].some((c) => !c.classList.contains("act-hidden")));
+  });
+}
+
 // ---------------------------------------------------------------- live events
 let rafPending = false;
+let collapseNeeded = false;
 function scheduleCurRender() {
   if (rafPending) return; rafPending = true;
   requestAnimationFrame(() => {
@@ -434,9 +508,14 @@ function scheduleCurRender() {
     const c = S.cur; if (!c) return;
     c.msg.content.forEach((b, i) => {
       if (!b) return;
-      if (!c.blocks[i]) { const n = makeBlock(b, true); c.blocks[i] = n; if (n) placeBlock(c.el, n); }
+      if (!c.blocks[i]) {
+        const n = makeBlock(b, true); c.blocks[i] = n;
+        if (n) { placeBlock(c.el, n); if (b.type === "text") collapseNeeded = true; }
+      }
       else if (b.type !== "toolCall") fillBlock(c.blocks[i], b, b._live);
     });
+    // a new text block means the steps before it are done: fold them away
+    if (collapseNeeded && c.blocks.some((n, i) => n && c.msg.content[i]?.type === "text" && (c.msg.content[i].text || "").trim())) { collapseNeeded = false; collapseTurns(); }
     scrollBottom();
   });
 }
@@ -489,6 +568,7 @@ function onMessageEnd(m) {
       fresh.el.classList.add("enter");
     } else $("messages").append(renderAssistant(m).el);
     S.cur = null;
+    collapseTurns();
     scrollBottom();
   } else if (m.role === "toolResult") {
     S.msgs.push(m); applyToolResult(m);
