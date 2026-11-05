@@ -271,6 +271,15 @@ function makeCard(call) {
     setResult(r, isError, ms) {
       api.result = r; api.isError = !!isError; if (ms != null) api.duration = ms;
       api.setState(isError ? "err" : "ok");
+      const det = r && r.details;
+      if (!isError && det && (api.name === "workflow_save" || api.name === "workflow_run") && !d.querySelector(".tool-link")) {
+        const wid = det.workflow?.id || det.workflow_id, rid = det.run_id;
+        if (wid || rid) {
+          const link = el("button", "tool-link", rid ? "Open run →" : "Open workflow →");
+          link.onclick = (e) => { e.preventDefault(); e.stopPropagation(); rid ? openRun(rid) : openWorkflow(wid); };
+          d.append(link);
+        }
+      }
       q(".tmeta").textContent = api.duration != null ? (api.duration >= 1000 ? (api.duration / 1000).toFixed(1) + "s" : "") : "";
       if (d.open) api.renderBody();
     },
@@ -549,6 +558,7 @@ async function afterRun() {
 function setPath(p) {
   S.path = p;
   const url = new URL(location.href);
+  url.searchParams.delete("w"); url.searchParams.delete("r");
   if (p) url.searchParams.set("s", p); else url.searchParams.delete("s");
   history.replaceState(null, "", url);
   if (p) localStorage.setItem("pp.last", p);
@@ -917,11 +927,17 @@ function renderDrawer() {
     rail.append(t);
   }
   const sp = projectFor(S.project);
-  $("panel-title").textContent = S.project ? (sp?.name || base(S.project)) : "All chats";
-  $("panel-path").textContent = S.project ? tilde(S.project) : `${plural(S.sessions.length, "chat")} · ${plural(S.projects.length, "project")}`;
+  const wfs = S.tab === "workflows";
+  $("panel-title").textContent = S.project ? (sp?.name || base(S.project)) : wfs ? "All workflows" : "All chats";
+  $("panel-path").textContent = S.project ? tilde(S.project) : wfs ? `${plural((S.workflows || []).length, "workflow")} · ${plural(S.projects.length, "project")}` : `${plural(S.sessions.length, "chat")} · ${plural(S.projects.length, "project")}`;
   $("project-menu").hidden = !S.project;
-  $("new-chat").querySelector("span").textContent = S.project ? `New chat in ${sp?.name || base(S.project)}` : "New chat";
-  renderSessionList();
+  const wfTab = S.tab === "workflows";
+  $("new-chat").querySelector("span").textContent = wfTab
+    ? (S.project ? `New workflow in ${sp?.name || base(S.project)}` : "New workflow")
+    : (S.project ? `New chat in ${sp?.name || base(S.project)}` : "New chat");
+  document.querySelectorAll("#panel-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.tab));
+  $("search").placeholder = wfTab ? "Search workflows" : "Search";
+  if (wfTab) renderWorkflowList(); else renderSessionList();
 }
 function renderSessionList() {
   const box = $("session-list"); box.innerHTML = "";
@@ -940,7 +956,7 @@ function renderSessionList() {
     box.append(b);
   }
 }
-$("search").addEventListener("input", renderSessionList);
+$("search").addEventListener("input", () => (S.tab === "workflows" ? renderWorkflowList() : renderSessionList()));
 function selectProject(path) {
   S.project = path; localStorage.setItem("pp.project", path);
   if (path) localStorage.setItem("pp.lastCwd", path);
@@ -948,10 +964,14 @@ function selectProject(path) {
   if (!S.key && !S.path) { updateEmpty(); updateHeader(); updateSend(); }
 }
 document.querySelector(".rail-all").onclick = () => selectProject("");
-function openDrawer() { document.body.classList.add("drawer-open"); loadProjects(); }
+function openDrawer() { document.body.classList.add("drawer-open"); loadProjects(); loadWorkflows(); }
 function closeDrawer() { document.body.classList.remove("drawer-open"); }
 $("menu").onclick = openDrawer; $("title-btn").onclick = openDrawer; $("scrim").onclick = closeDrawer;
-$("new-chat").onclick = () => { newChat(); closeDrawer(); };
+$("new-chat").onclick = () => {
+  closeDrawer();
+  if (S.tab === "workflows") return newWorkflowChat();
+  newChat();
+};
 $("project-chip").onclick = () => openProjectPicker();
 $("add-project").onclick = () => openProjectPicker(true);
 $("project-menu").onclick = () => {
@@ -1019,20 +1039,26 @@ function resetChat() {
   $("messages").innerHTML = "";
 }
 function newChat() {
+  showView("chat");
   resetChat(); setPath(null);
   updateEmpty(); updateHeader(); updateChips(); updateSend();
   $("model-name").textContent = "default";
   renderDrawer();
 }
-async function openSession(path) {
+async function openSession(path, returnTo = null) {
   closeDrawer();
-  if (path === S.path && S.key) return;
+  S.returnTo = returnTo;
+  const wasChat = S.view === "chat";
+  showView("chat");
+  if (path === S.path && S.key && wasChat) return;
   resetChat(); setPath(path);
   const s = S.sessions.find((x) => x.path === path);
   if (s) { S.cwd = s.cwd; }
   updateHeader(); $("empty").hidden = true;
   banner("Opening…");
   try { await reopen(); } catch {}
+  if (S.returnTo) banner(`Stage chat from a workflow run. <button class="copy" id="back-to-run">Back to run</button>`);
+  const back = $("back-to-run"); if (back) back.onclick = () => openRun(S.returnTo);
   renderDrawer();
 }
 
@@ -1041,6 +1067,326 @@ document.addEventListener("visibilitychange", () => {
   if (S.path || S.key) { if (!S.es || S.es.readyState !== 1) reopen().catch(() => {}); else loadSnapshot(); }
   loadProjects();
 });
+
+
+// ---------------------------------------------------------------- workflows
+// Views: "chat" (default), "workflow" (one workflow), "run" (one run). The
+// workflow views render into #wfview and hide the composer.
+S.tab = localStorage.getItem("pp.tab") || "chats";
+S.view = "chat";
+S.workflows = [];
+S.wf = null;       // { workflow, errors, runs } for the open workflow
+S.run = null;      // open run
+S.runsEs = null;
+const ICON_STAGE = {
+  agent: '<svg viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/></svg>',
+  shell: '<svg viewBox="0 0 24 24"><path d="M5 7l5 5-5 5M12 17h7"/></svg>',
+  review: '<svg viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>',
+  approval: '<svg viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.2-7.5 9.5-4.3-1.3-7.5-5-7.5-9.5V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>',
+};
+const STATUS_LABEL = { pending: "Pending", running: "Running", waiting: "Needs you", succeeded: "Done", failed: "Failed", skipped: "Skipped", cancelled: "Cancelled" };
+function fmtDur(ms) {
+  if (ms == null || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+function triggerLabel(t) {
+  if (t.type === "manual") return null;
+  if (t.type === "webhook") return "Webhook";
+  if (t.type === "git") return t.on === "pr" ? "New PRs" : t.on === "issue" ? "New issues" : `Commits${t.branch ? ` on ${t.branch}` : ""}`;
+  if (t.type === "schedule") {
+    const f = (t.cron || "").split(/\s+/);
+    if (f.length === 5 && /^\d+$/.test(f[0]) && /^\d+$/.test(f[1]) && f[2] === "*" && f[3] === "*") {
+      const time = `${f[1]}:${f[0].padStart(2, "0")}`;
+      return f[4] === "*" ? `Daily ${time}` : f[4] === "1-5" ? `Weekdays ${time}` : `${time} (${f[4]})`;
+    }
+    return t.cron;
+  }
+  return t.type;
+}
+function statusPill(status) {
+  return `<span class="pill st-${status}">${STATUS_LABEL[status] || status}</span>`;
+}
+
+function showView(v) {
+  S.view = v;
+  const chat = v === "chat";
+  document.body.classList.toggle("wf-mode", !chat);
+  $("wfview").hidden = chat;
+  $("messages").hidden = !chat;
+  $("composer-wrap").hidden = !chat;
+  if (!chat) { $("empty").hidden = true; $("working").hidden = true; $("jump").hidden = true; banner(null); }
+  else { $("messages").hidden = false; updateEmpty(); }
+  $("model-chip").hidden = !chat;
+}
+
+async function loadWorkflows() {
+  try { S.workflows = (await api("/api/workflows")).workflows || []; } catch { S.workflows = []; }
+  if (S.tab === "workflows") renderDrawer();
+}
+function renderWorkflowList() {
+  const box = $("session-list"); box.innerHTML = "";
+  const term = $("search").value.trim().toLowerCase();
+  const list = S.workflows.filter((w) => (!S.project || w.workflow.project === S.project) && (!term || `${w.workflow.name} ${w.workflow.description} ${w.workflow.id}`.toLowerCase().includes(term)));
+  if (!list.length) {
+    box.append(el("div", "list-empty", term ? "No workflows match." : "No workflows yet. Tap “New workflow” and describe what you want: stages, checks, reviews, approvals and when it should run."));
+    return;
+  }
+  for (const w of list) {
+    const wf = w.workflow;
+    const trig = (wf.triggers || []).map(triggerLabel).filter(Boolean);
+    const lr = w.last_run;
+    const b = el("button", "sess wf-item" + (S.view === "workflow" && S.wf?.workflow.id === wf.id ? " active" : ""));
+    b.innerHTML = `${S.project ? "" : badge(wf.project, "badge sm")}<div class="sess-main">
+      <div class="t"><span>${esc(wf.name)}</span>${wf.enabled ? "" : '<i class="draft">draft</i>'}</div>
+      <div class="m">${lr ? `${statusPill(lr.status)} ${ago(lr.created)}` : "never run"}${trig.length ? " · " + esc(trig.join(", ")) : ""} · ${plural(wf.stages.length, "stage")}</div></div>`;
+    b.onclick = () => { closeDrawer(); openWorkflow(wf.id); };
+    box.append(b);
+  }
+}
+document.querySelectorAll("#panel-tabs button").forEach((b) => b.addEventListener("click", () => {
+  S.tab = b.dataset.tab; localStorage.setItem("pp.tab", S.tab); renderDrawer();
+  if (S.tab === "workflows") loadWorkflows();
+}));
+
+function newWorkflowChat(text) {
+  newChat();
+  input.value = text || `Create a workflow for this project that `;
+  autosize(); updateSend();
+  setTimeout(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }, 50);
+}
+
+function setUrl(key, val) {
+  const url = new URL(location.href);
+  ["s", "w", "r"].forEach((k) => url.searchParams.delete(k));
+  if (val) url.searchParams.set(key, val);
+  history.replaceState(null, "", url);
+}
+
+function header(title, sub, project) {
+  $("title").textContent = title;
+  $("subtitle").textContent = sub || "";
+  if (project) $("project-badge").outerHTML = `<span id="project-badge" class="badge" style="--h:${hue(project)}">${esc(initials(projectName(project)))}</span>`;
+  document.title = `${title} · pocketpi`;
+}
+
+async function openWorkflow(id) {
+  if (S.view === "chat") resetChat();
+  showView("workflow"); setUrl("w", id);
+  $("wfview").innerHTML = '<div class="wf-loading">Loading…</div>';
+  try { S.wf = await api(`/api/workflows/${encodeURIComponent(id)}`); }
+  catch (e) { $("wfview").innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  renderWorkflow();
+  if (S.tab === "workflows") renderWorkflowList();
+}
+function renderWorkflow() {
+  const { workflow: wf, errors, runs } = S.wf;
+  header(wf.name, `${projectName(wf.project)} · workflow`, wf.project);
+  const v = $("wfview"); v.innerHTML = "";
+  const head = el("div", "wf-head");
+  const trig = (wf.triggers || []).map(triggerLabel).filter(Boolean);
+  head.innerHTML = `
+    ${wf.description ? `<p class="wf-desc">${esc(wf.description)}</p>` : ""}
+    <div class="wf-meta">
+      <span class="chip">${ICON.folder}${esc(tilde(wf.project))}</span>
+      ${wf.worktree ? `<span class="chip">branch per run${wf.base ? ` from ${esc(wf.base)}` : ""}</span>` : '<span class="chip warn">runs in place</span>'}
+      ${wf.max_cost ? `<span class="chip">cap ${fmtCost(wf.max_cost)}</span>` : ""}
+    </div>`;
+  v.append(head);
+  if (errors?.length) v.append(el("div", "errbox", `This workflow has problems:<br>${errors.map(esc).join("<br>")}`));
+
+  // actions
+  const act = el("div", "wf-actions");
+  const runBtn = el("button", "btn", "Run now"); runBtn.onclick = () => startRun(wf);
+  const editBtn = el("button", "btn secondary", "Edit in chat"); editBtn.onclick = () => {
+    S.project = wf.project; localStorage.setItem("pp.project", wf.project);
+    newWorkflowChat(`Update the workflow "${wf.id}": `);
+  };
+  const more = el("button", "icon-btn", '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>');
+  more.onclick = () => openSheet((b) => {
+    b.append(el("div", "sheet-title", esc(wf.name)), el("div", "sheet-sub", esc(wf.id)));
+    b.append(opt(ICON.copy, "Copy JSON", "The full workflow definition", () => { copyText(JSON.stringify(wf, null, 2)); closeSheet(); toast("Copied"); }));
+    b.append(opt(ICON.hide, "Delete workflow", "Runs and their branches are kept", async () => {
+      closeSheet(); await api(`/api/workflows/${wf.id}/delete`, {}); toast("Deleted"); loadWorkflows(); newChat();
+    }, " danger"));
+  });
+  act.append(runBtn, editBtn, more);
+  v.append(act);
+
+  // sensors
+  v.append(el("div", "wf-section", "Sensors"));
+  const sens = el("div", "wf-card");
+  const sw = el("button", "opt switch-row", `<div class="o-main"><div class="o-t">${wf.enabled ? "Sensors on" : "Draft: sensors off"}</div><div class="o-s">${trig.length ? esc(trig.join(" · ")) : "Manual runs only"}</div></div><span class="switch${wf.enabled ? " on" : ""}"><i></i></span>`);
+  sw.onclick = async () => {
+    try { await api(`/api/workflows/${wf.id}/enable`, { enabled: !wf.enabled }); wf.enabled = !wf.enabled; renderWorkflow(); loadWorkflows(); toast(wf.enabled ? "Sensors on" : "Sensors off"); }
+    catch (e) { toast(e.message, true); }
+  };
+  sens.append(sw);
+  v.append(sens);
+
+  // DAG
+  v.append(el("div", "wf-section", `Stages · ${wf.stages.length}`));
+  v.append(renderDag(wf, null));
+
+  // runs
+  v.append(el("div", "wf-section", "Runs"));
+  const rl = el("div", "wf-card runs");
+  if (!runs.length) rl.append(el("div", "list-empty", "No runs yet."));
+  for (const r of runs) {
+    const b = el("button", "run-row");
+    const dur = r.ended ? fmtDur(r.ended - r.created) : fmtDur(Date.now() - r.created);
+    b.innerHTML = `${statusPill(r.status)}<span class="rr-main">${ago(r.created)} · ${esc(r.trigger)}</span><span class="rr-meta">${dur}${r.cost ? " · " + fmtCost(r.cost) : ""}</span>`;
+    b.onclick = () => openRun(r.id);
+    rl.append(b);
+  }
+  v.append(rl);
+}
+
+// Vertical DAG: stages in order with their dependencies, models and loop-backs.
+// With a run, each node shows that stage's live status.
+function renderDag(wf, run) {
+  const box = el("div", "dag");
+  const order = run ? run.stages.map((s) => s.id) : wf.stages.map((s) => s.id);
+  const byId = Object.fromEntries(wf.stages.map((s) => [s.id, s]));
+  order.forEach((id, i) => {
+    const s = byId[id] || {};
+    const rs = run?.stages.find((x) => x.id === id);
+    const st = rs?.status || "idle";
+    const node = el("div", `dag-node st-${st}`);
+    const needs = (s.needs || []).filter((n) => n !== order[i - 1]);
+    const model = s.model ? s.model.replace(/^.*\//, "") : s.type === "review" ? "deepseek-v4-pro" : "";
+    node.innerHTML = `
+      <div class="dag-rail"><span class="dag-dot">${ICON_STAGE[s.type] || ""}</span>${i < order.length - 1 ? '<span class="dag-line"></span>' : ""}</div>
+      <div class="dag-body">
+        <div class="dag-top"><span class="dag-name">${esc(s.name || id)}</span><span class="dag-type">${esc(s.type || "")}</span>${rs ? statusPill(st) : ""}</div>
+        <div class="dag-sub">${[model && `<span class="mono">${esc(model)}</span>`, s.thinking && esc(s.thinking), s.type === "shell" && s.run && `<span class="mono">${esc(s.run.length > 60 ? s.run.slice(0, 60) + "…" : s.run)}</span>`, needs.length && `after ${needs.map(esc).join(", ")}`, s.on_fail && `↺ on fail → ${esc(s.on_fail.goto)} ×${s.on_fail.max || 2}`].filter(Boolean).join(" · ")}</div>
+        ${rs ? `<div class="dag-run">${rs.attempts > 1 ? `<span class="attempts">attempt ${rs.attempts}</span>` : ""}${rs.started ? `<span>${fmtDur((rs.ended || Date.now()) - rs.started)}</span>` : ""}${rs.cost ? `<span>${fmtCost(rs.cost)}</span>` : ""}</div>${rs.summary ? `<div class="dag-summary">${esc(rs.summary)}</div>` : ""}` : ""}
+      </div>`;
+    if (rs) {
+      node.classList.add("tappable");
+      node.onclick = () => openStageSheet(wf, run, rs);
+    }
+    box.append(node);
+  });
+  return box;
+}
+
+function startRun(wf) {
+  const inputs = wf.inputs || [];
+  if (!inputs.length) return doRun(wf, {});
+  openSheet((b) => {
+    b.append(el("div", "sheet-title", `Run ${esc(wf.name)}`));
+    const fields = {};
+    for (const i of inputs) {
+      b.append(el("div", "sheet-section", esc(i.name) + (i.required ? "" : " · optional")));
+      if (i.description) b.append(el("div", "sheet-msg small", esc(i.description)));
+      const f = el("div", "field"); const t = el("textarea"); t.rows = 3; t.value = i.default || ""; t.className = "input-area";
+      f.append(t); b.append(f); fields[i.name] = t;
+    }
+    const row = el("div", "btn-row"); const go = el("button", "btn", "Start run"); row.append(go); b.append(row);
+    go.onclick = () => { const vals = {}; for (const [k, t] of Object.entries(fields)) vals[k] = t.value; closeSheet(); doRun(wf, vals); };
+  });
+}
+async function doRun(wf, inputs) {
+  try { const r = await api(`/api/workflows/${wf.id}/run`, { inputs }); toast("Run started"); openRun(r.run_id); loadWorkflows(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function openRun(id) {
+  if (S.view === "chat") resetChat();
+  showView("run"); setUrl("r", id);
+  try { S.run = (await api(`/api/runs/${encodeURIComponent(id)}`)).run; }
+  catch (e) { $("wfview").innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  if (!S.wf || S.wf.workflow.id !== S.run.workflow_id) {
+    try { S.wf = await api(`/api/workflows/${encodeURIComponent(S.run.workflow_id)}`); } catch { S.wf = null; }
+  }
+  renderRun();
+}
+function renderRun() {
+  const r = S.run; if (!r) return;
+  const wf = S.wf?.workflow || { stages: r.stages.map((s) => ({ id: s.id, type: s.kind, name: s.name })), name: r.workflow_name, project: r.project };
+  header(r.workflow_name, `Run · ${ago(r.created)} · ${r.trigger}`, r.project);
+  const v = $("wfview"); v.innerHTML = "";
+  const back = el("button", "wf-back", `<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>${esc(r.workflow_name)}`);
+  back.onclick = () => openWorkflow(r.workflow_id);
+  v.append(back);
+  const active = ["pending", "running", "waiting"].includes(r.status);
+  const head = el("div", "run-head");
+  head.innerHTML = `${statusPill(r.status)}
+    <div class="run-stats"><span>${fmtDur((r.ended || Date.now()) - r.created)}</span><span>${fmtCost(r.cost)}</span>${r.branch ? `<span class="mono">${esc(r.branch)}</span>` : ""}</div>`;
+  v.append(head);
+  if (r.error && r.status === "failed") v.append(el("div", "errbox", esc(r.error)));
+  if (Object.keys(r.inputs || {}).length) {
+    v.append(el("div", "wf-section", "Inputs"));
+    v.append(el("div", "wf-card inputs", Object.entries(r.inputs).map(([k, val]) => `<div><b>${esc(k)}</b> ${esc(val)}</div>`).join("")));
+  }
+  // approval gate front and centre
+  const waiting = r.stages.find((s) => s.status === "waiting");
+  if (waiting) {
+    const g = el("div", "gate");
+    g.innerHTML = `<div class="gate-title">${ICON_STAGE.approval}<span>${esc(waiting.name)}</span></div><div class="gate-msg">${esc(waiting.prompt || "Approve to continue.")}</div>`;
+    const note = el("input"); note.placeholder = "Note (optional, sent back on reject)"; note.className = "gate-note";
+    const row = el("div", "btn-row");
+    const no = el("button", "btn secondary", "Reject"); const yes = el("button", "btn", "Approve");
+    const answer = async (ok) => { try { await api(`/api/runs/${r.id}/approve`, { stage: waiting.id, approve: ok, note: note.value }); } catch (e) { toast(e.message, true); } };
+    no.onclick = () => answer(false); yes.onclick = () => answer(true);
+    row.append(no, yes); g.append(note, row); v.append(g);
+  }
+  v.append(el("div", "wf-section", "Stages"));
+  v.append(renderDag(wf, r));
+  const act = el("div", "wf-actions");
+  if (active) { const c = el("button", "btn danger", "Cancel run"); c.onclick = async () => { try { await api(`/api/runs/${r.id}/cancel`, {}); } catch (e) { toast(e.message, true); } }; act.append(c); }
+  else if (r.worktree && r.cwd) { const c = el("button", "btn secondary", "Remove worktree"); c.onclick = async () => { try { await api(`/api/runs/${r.id}/cleanup`, {}); toast("Worktree removed (branch kept)"); } catch (e) { toast(e.message, true); } }; act.append(c); }
+  const again = el("button", "btn secondary", "Run again"); again.onclick = () => S.wf && startRun(S.wf.workflow); act.append(again);
+  v.append(act);
+}
+function openStageSheet(wf, run, rs) {
+  openSheet((b) => {
+    b.append(el("div", "sheet-title", esc(rs.name)), el("div", "sheet-sub", `${esc(rs.kind)} · ${STATUS_LABEL[rs.status] || rs.status}${rs.attempts > 1 ? ` · attempt ${rs.attempts}` : ""}${rs.cost ? ` · ${fmtCost(rs.cost)}` : ""}`));
+    if (rs.session_file || rs.live_key) {
+      const o = opt(ICON.chip, rs.status === "running" ? "Watch live" : "Open chat", "The full pi conversation for this stage", () => {
+        closeSheet(); if (rs.session_file) openSession(rs.session_file, run.id); else toast("Chat not available yet");
+      });
+      b.append(o);
+    }
+    if (rs.prompt) { b.append(el("div", "sheet-section", rs.kind === "shell" ? "Command" : rs.kind === "approval" ? "Message" : "Prompt")); b.append(truncBlock(rs.prompt, 4000)); }
+    if (rs.output) { b.append(el("div", "sheet-section", rs.status === "failed" ? "Failure" : "Output")); b.append(truncBlock(rs.output, 8000, rs.kind === "shell")); }
+    b.querySelectorAll("pre").forEach((p) => p.classList.add("sheet-pre"));
+  });
+}
+
+// live updates for runs and workflow lists
+function connectRuns() {
+  if (S.runsEs) S.runsEs.close();
+  const es = new EventSource("/api/runs/events");
+  S.runsEs = es;
+  es.onmessage = (e) => {
+    let ev; try { ev = JSON.parse(e.data); } catch { return; }
+    if (ev.type === "run") {
+      const r = ev.run;
+      if (S.view === "run" && S.run?.id === r.id) { S.run = r; renderRun(); }
+      if (S.view === "workflow" && S.wf?.workflow.id === r.workflow_id) {
+        const i = S.wf.runs.findIndex((x) => x.id === r.id);
+        if (i >= 0) S.wf.runs[i] = r; else S.wf.runs.unshift(r);
+        renderWorkflow();
+      }
+      clearTimeout(S.wfReload); S.wfReload = setTimeout(loadWorkflows, 800);
+    } else if (ev.type === "workflows_changed") {
+      loadWorkflows();
+      if (S.view === "workflow" && S.wf) openWorkflow(S.wf.workflow.id);
+    } else if (ev.type === "notice") {
+      if (!(S.view === "run" && S.run?.id === ev.run_id)) {
+        toast(`${ev.title}${ev.level === "approval" ? " · needs approval" : ""}`, ev.level === "error");
+        const t = $("toast"); t.style.cursor = "pointer"; t.onclick = () => { t.hidden = true; openRun(ev.run_id); };
+      }
+    }
+  };
+  es.onerror = () => { es.close(); setTimeout(connectRuns, 3000); };
+}
+// keep durations ticking on an active run
+setInterval(() => { if (S.view === "run" && S.run && ["running", "waiting", "pending"].includes(S.run.status) && !document.body.classList.contains("sheet-open")) renderRun(); }, 5000);
 
 // ---------------------------------------------------------------- suggested replies
 // When pi's last message asks the user something, a cheap model drafts 1-3
@@ -1254,8 +1600,11 @@ setInterval(() => document.visibilityState === "visible" && checkBuild(), 4000);
 (async function boot() {
   checkBuild();
   await loadProjects();
-  const p = new URL(location.href).searchParams.get("s");
-  if (p) await openSession(p);
+  connectRuns(); loadWorkflows();
+  const q = new URL(location.href).searchParams;
+  if (q.get("r")) openRun(q.get("r"));
+  else if (q.get("w")) openWorkflow(q.get("w"));
+  else if (q.get("s")) await openSession(q.get("s"));
   else newChat();
   autosize(); updateSend();
 })();
