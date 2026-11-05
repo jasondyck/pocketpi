@@ -1067,6 +1067,50 @@ document.addEventListener("visibilitychange", () => {
   document.addEventListener("touchcancel", end);
 })();
 
+// ---------------------------------------------------------------- swipe sheet down
+// Drag a bottom sheet down to dismiss it. Starts from the grabber/title area,
+// or from the content when it is already scrolled to the top.
+(function swipeSheet() {
+  const sheet = $("sheet"), body = $("sheet-body"), scrim = $("sheet-scrim");
+  let g = null;
+  sheet.addEventListener("touchstart", (e) => {
+    g = null;
+    if (e.touches.length !== 1 || matchMedia("(min-width: 960px)").matches) return;
+    const t = e.touches[0];
+    const inBody = body.contains(e.target);
+    if (inBody && body.scrollTop > 0) return;
+    if (e.target.closest("input, textarea, .seg")) return;
+    g = { y0: t.clientY, x0: t.clientX, locked: false, dy: 0, lastY: t.clientY, lastT: performance.now(), vy: 0, h: sheet.offsetHeight };
+  }, { passive: true });
+  sheet.addEventListener("touchmove", (e) => {
+    if (!g) return;
+    const t = e.touches[0], dy = t.clientY - g.y0, dx = t.clientX - g.x0;
+    if (!g.locked) {
+      if (Math.hypot(dx, dy) < 8) return;
+      if (dy <= 0 || Math.abs(dx) > dy) { g = null; return; }
+      g.locked = true;
+      sheet.style.transition = scrim.style.transition = "none";
+    }
+    e.preventDefault();
+    const now = performance.now();
+    g.vy = (t.clientY - g.lastY) / Math.max(1, now - g.lastT);
+    g.lastY = t.clientY; g.lastT = now;
+    g.dy = Math.max(0, dy);
+    sheet.style.transform = `translateY(${g.dy}px)`;
+    scrim.style.opacity = String(Math.max(0, 1 - g.dy / g.h));
+  }, { passive: false });
+  const end = () => {
+    if (!g || !g.locked) { g = null; return; }
+    const close = g.vy > 0.5 || g.dy > g.h * 0.3;
+    sheet.style.transition = scrim.style.transition = "";
+    if (close) closeSheet();
+    requestAnimationFrame(() => { sheet.style.transform = ""; scrim.style.opacity = ""; });
+    g = null;
+  };
+  sheet.addEventListener("touchend", end);
+  sheet.addEventListener("touchcancel", end);
+})();
+
 // ---------------------------------------------------------------- live updates
 // The server's build id changes on every deploy; reload into the new version
 // as soon as that won't throw away a draft or interrupt a stream.
