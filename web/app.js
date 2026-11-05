@@ -48,9 +48,9 @@ const S = {
   cards: new Map(),   // toolCallId -> card api
   attachments: [],
   sessions: [],
-  spaces: [],
+  projects: [],
   home: "",
-  space: localStorage.getItem("pp.space") || "",   // "" = all chats
+  project: localStorage.getItem("pp.project") || "",   // "" = all chats
   models: null,
   levels: [],
   commands: null,
@@ -96,9 +96,9 @@ function initials(name) {
   const s = w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "?").slice(0, 2);
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
-function spaceFor(path) { return S.spaces.find((s) => s.path === path); }
-function spaceName(path) { const sp = spaceFor(path); return sp ? sp.name : path === S.home ? "Home" : base(path); }
-function badge(path, cls = "badge") { const n = spaceName(path); return `<span class="${cls}" style="--h:${hue(path)}">${esc(initials(n))}</span>`; }
+function projectFor(path) { return S.projects.find((s) => s.path === path); }
+function projectName(path) { const sp = projectFor(path); return sp ? sp.name : path === S.home ? "Home" : base(path); }
+function badge(path, cls = "badge") { const n = projectName(path); return `<span class="${cls}" style="--h:${hue(path)}">${esc(initials(n))}</span>`; }
 function plural(n, w) { return `${n} ${w}${n === 1 ? "" : "s"}`; }
 function fmtTokens(n) { if (n == null) return "–"; if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k"; return String(n); }
 function fmtCost(c) { if (!c) return "$0"; return c < 0.01 ? "<$0.01" : "$" + c.toFixed(c < 1 ? 3 : 2); }
@@ -385,10 +385,10 @@ function updateEmpty() {
     $("empty-mark").innerHTML = badge(cwd);
     $("empty-title").textContent = greeting();
     $("empty-sub").textContent = tilde(cwd);
-    $("space-chip-badge").outerHTML = `<span id="space-chip-badge" class="badge sm" style="--h:${hue(cwd)}">${esc(initials(spaceName(cwd)))}</span>`;
-    $("space-chip-name").textContent = spaceName(cwd);
-    $("space-chip").disabled = !!S.key;
-    $("space-chip").style.opacity = S.key ? ".6" : "";
+    $("project-chip-badge").outerHTML = `<span id="project-chip-badge" class="badge sm" style="--h:${hue(cwd)}">${esc(initials(projectName(cwd)))}</span>`;
+    $("project-chip-name").textContent = projectName(cwd);
+    $("project-chip").disabled = !!S.key;
+    $("project-chip").style.opacity = S.key ? ".6" : "";
   }
 }
 
@@ -517,7 +517,7 @@ async function afterRun() {
   if (!S.path) {
     try { const st = await cmd({ type: "get_state" }); S.state = st; if (st.sessionFile) setPath(st.sessionFile); } catch {}
   }
-  loadSpaces();
+  loadProjects();
 }
 
 // ---------------------------------------------------------------- connection
@@ -601,8 +601,8 @@ function chatTitle() {
 function updateHeader() {
   const cwd = S.cwd || newChatCwd();
   $("title").textContent = chatTitle();
-  $("subtitle").textContent = spaceName(cwd);
-  $("space-badge").outerHTML = `<span id="space-badge" class="badge" style="--h:${hue(cwd)}">${esc(initials(spaceName(cwd)))}</span>`;
+  $("subtitle").textContent = projectName(cwd);
+  $("project-badge").outerHTML = `<span id="project-badge" class="badge" style="--h:${hue(cwd)}">${esc(initials(projectName(cwd)))}</span>`;
   document.title = `${chatTitle()} · pocketpi`;
 }
 function modelLabel(m) { return m ? (m.id || m.name || "").replace(/^.*\//, "") : "no model"; }
@@ -625,7 +625,7 @@ function updateSend() {
   btn.classList.toggle("stop", S.streaming && !has);
   btn.disabled = !has && !S.streaming;
   btn.setAttribute("aria-label", S.streaming && !has ? "Stop" : S.streaming ? "Steer" : "Send");
-  input.placeholder = S.streaming ? "Steer pi while it works…" : S.key || S.path ? "Reply to pi" : `Message pi in ${spaceName(newChatCwd())}`;
+  input.placeholder = S.streaming ? "Steer pi while it works…" : S.key || S.path ? "Reply to pi" : `Message pi in ${projectName(newChatCwd())}`;
 }
 input.addEventListener("input", () => { autosize(); updateSend(); updateSlash(); });
 input.addEventListener("keydown", (e) => {
@@ -818,7 +818,7 @@ async function openModelSheet() {
 function openNewChatSettings() {
   openSheet((b) => {
     b.append(el("div", "sheet-title", "New chat"), el("div", "sheet-sub", "Model and thinking can be changed after the chat starts. pi's defaults from settings.json apply."));
-    b.append(opt(ICON.folder, "Space", esc(spaceName(newChatCwd())), () => openSpacePicker()));
+    b.append(opt(ICON.folder, "Project", esc(projectName(newChatCwd())), () => openProjectPicker()));
   });
 }
 function renameChat() {
@@ -859,38 +859,38 @@ function extensionUI(ev) {
   });
 }
 
-// ---------------------------------------------------------------- spaces + drawer
-function newChatCwd() { return S.space || localStorage.getItem("pp.lastCwd") || S.home || "~"; }
-async function loadSpaces() {
+// ---------------------------------------------------------------- projects + drawer
+function newChatCwd() { return S.project || localStorage.getItem("pp.lastCwd") || S.home || "~"; }
+async function loadProjects() {
   try {
-    const [sp, ss] = await Promise.all([api("/api/spaces"), api("/api/sessions")]);
-    S.spaces = sp.spaces; S.home = sp.home; S.sessions = ss.sessions;
+    const [sp, ss] = await Promise.all([api("/api/projects"), api("/api/sessions")]);
+    S.projects = sp.projects; S.home = sp.home; S.sessions = ss.sessions;
     renderDrawer(); updateHeader(); updateEmpty(); updateSend();
   } catch (e) { console.warn(e); }
 }
-const loadSessions = loadSpaces;
+const loadSessions = loadProjects;
 function renderDrawer() {
-  const rail = $("rail-spaces"); rail.innerHTML = "";
-  document.querySelector(".rail-all").classList.toggle("active", !S.space);
-  for (const sp of S.spaces) {
-    const t = el("button", "rail-tile" + (sp.path === S.space ? " active" : "") + (sp.live ? " has-live" : "") + (sp.streaming ? " busy" : ""));
+  const rail = $("rail-projects"); rail.innerHTML = "";
+  document.querySelector(".rail-all").classList.toggle("active", !S.project);
+  for (const sp of S.projects) {
+    const t = el("button", "rail-tile" + (sp.path === S.project ? " active" : "") + (sp.live ? " has-live" : "") + (sp.streaming ? " busy" : ""));
     t.title = `${sp.name} — ${tilde(sp.path)}`;
     t.innerHTML = `<span class="badge" style="--h:${hue(sp.path)}">${esc(initials(sp.name))}</span>`;
-    t.onclick = () => selectSpace(sp.path);
+    t.onclick = () => selectProject(sp.path);
     rail.append(t);
   }
-  const sp = spaceFor(S.space);
-  $("panel-title").textContent = S.space ? (sp?.name || base(S.space)) : "All chats";
-  $("panel-path").textContent = S.space ? tilde(S.space) : `${plural(S.sessions.length, "chat")} · ${plural(S.spaces.length, "space")}`;
-  $("space-menu").hidden = !S.space;
-  $("new-chat").querySelector("span").textContent = S.space ? `New chat in ${sp?.name || base(S.space)}` : "New chat";
+  const sp = projectFor(S.project);
+  $("panel-title").textContent = S.project ? (sp?.name || base(S.project)) : "All chats";
+  $("panel-path").textContent = S.project ? tilde(S.project) : `${plural(S.sessions.length, "chat")} · ${plural(S.projects.length, "project")}`;
+  $("project-menu").hidden = !S.project;
+  $("new-chat").querySelector("span").textContent = S.project ? `New chat in ${sp?.name || base(S.project)}` : "New chat";
   renderSessionList();
 }
 function renderSessionList() {
   const box = $("session-list"); box.innerHTML = "";
   const term = $("search").value.trim().toLowerCase();
-  const list = S.sessions.filter((s) => (!S.space || s.cwd === S.space) && (!term || `${s.name || ""} ${s.title} ${s.cwd}`.toLowerCase().includes(term)));
-  if (!list.length) { box.append(el("div", "list-empty", term ? "No chats match." : "No chats here yet.")); return; }
+  const list = S.sessions.filter((s) => (!S.project || s.cwd === S.project) && (!term || `${s.name || ""} ${s.title} ${s.cwd}`.toLowerCase().includes(term)));
+  if (!list.length) { box.append(el("div", "list-empty", term ? "No chats match." : S.projects.length ? "No chats here yet." : "No chats yet. Tap + on the left to add a project folder, or just start a new chat.")); return; }
   const day = 86400000; const today = new Date(); today.setHours(0, 0, 0, 0); const t0 = today.getTime();
   const bucket = (ms) => ms >= t0 ? "Today" : ms >= t0 - day ? "Yesterday" : ms >= t0 - 6 * day ? "This week" : ms >= t0 - 29 * day ? "This month" : "Older";
   let last = null;
@@ -898,68 +898,68 @@ function renderSessionList() {
     const g = bucket(s.modified);
     if (g !== last) { box.append(el("div", "group-label", g)); last = g; }
     const b = el("button", "sess" + (s.path === S.path ? " active" : ""));
-    b.innerHTML = `${S.space ? "" : badge(s.cwd, "badge sm")}<div class="sess-main"><div class="t">${s.live ? `<i class="live-dot${s.streaming ? " busy" : ""}"></i>` : ""}<span>${esc(s.name || s.title || "Untitled")}</span></div><div class="m">${S.space ? "" : esc(spaceName(s.cwd)) + " · "}${ago(s.modified)} · ${s.messages} msgs</div></div>`;
+    b.innerHTML = `${S.project ? "" : badge(s.cwd, "badge sm")}<div class="sess-main"><div class="t">${s.live ? `<i class="live-dot${s.streaming ? " busy" : ""}"></i>` : ""}<span>${esc(s.name || s.title || "Untitled")}</span></div><div class="m">${S.project ? "" : esc(projectName(s.cwd)) + " · "}${ago(s.modified)} · ${s.messages} msgs</div></div>`;
     b.onclick = () => openSession(s.path);
     box.append(b);
   }
 }
 $("search").addEventListener("input", renderSessionList);
-function selectSpace(path) {
-  S.space = path; localStorage.setItem("pp.space", path);
+function selectProject(path) {
+  S.project = path; localStorage.setItem("pp.project", path);
   if (path) localStorage.setItem("pp.lastCwd", path);
   renderDrawer();
   if (!S.key && !S.path) { updateEmpty(); updateHeader(); updateSend(); }
 }
-document.querySelector(".rail-all").onclick = () => selectSpace("");
-function openDrawer() { document.body.classList.add("drawer-open"); loadSpaces(); }
+document.querySelector(".rail-all").onclick = () => selectProject("");
+function openDrawer() { document.body.classList.add("drawer-open"); loadProjects(); }
 function closeDrawer() { document.body.classList.remove("drawer-open"); }
 $("menu").onclick = openDrawer; $("title-btn").onclick = openDrawer; $("scrim").onclick = closeDrawer;
 $("new-chat").onclick = () => { newChat(); closeDrawer(); };
-$("space-chip").onclick = () => openSpacePicker();
-$("add-space").onclick = () => openSpacePicker(true);
-$("space-menu").onclick = () => {
-  const sp = spaceFor(S.space); if (!sp) return;
+$("project-chip").onclick = () => openProjectPicker();
+$("add-project").onclick = () => openProjectPicker(true);
+$("project-menu").onclick = () => {
+  const sp = projectFor(S.project); if (!sp) return;
   openSheet((b) => {
     b.append(el("div", "sheet-title", esc(sp.name)), el("div", "sheet-sub", esc(tilde(sp.path))));
-    b.append(opt(ICON.rename, sp.pinned ? "Rename space" : "Pin and rename", null, () => renameSpace(sp)));
-    if (!sp.pinned) b.append(opt(ICON.pin, "Pin to rail", "Keeps it in place even with no recent chats", async () => { await api("/api/spaces/save", { path: sp.path }); closeSheet(); loadSpaces(); }));
-    b.append(opt(ICON.hide, sp.pinned ? "Unpin and hide" : "Hide space", "Chats stay on disk; adding the folder again brings it back", async () => {
-      await api("/api/spaces/hide", { path: sp.path }); closeSheet(); selectSpace(""); loadSpaces();
+    b.append(opt(ICON.rename, sp.pinned ? "Rename project" : "Pin and rename", null, () => renameProject(sp)));
+    if (!sp.pinned) b.append(opt(ICON.pin, "Pin to rail", "Keeps it in place even with no recent chats", async () => { await api("/api/projects/save", { path: sp.path }); closeSheet(); loadProjects(); }));
+    b.append(opt(ICON.hide, sp.pinned ? "Unpin and hide" : "Hide project", "Chats stay on disk; adding the folder again brings it back", async () => {
+      await api("/api/projects/hide", { path: sp.path }); closeSheet(); selectProject(""); loadProjects();
     }, " danger"));
   });
 };
-function renameSpace(sp) {
+function renameProject(sp) {
   openSheet((b) => {
-    b.append(el("div", "sheet-title", "Space name"), el("div", "sheet-sub", esc(tilde(sp.path))));
+    b.append(el("div", "sheet-title", "Project name"), el("div", "sheet-sub", esc(tilde(sp.path))));
     const f = el("div", "field"); const i = el("input"); i.value = sp.name; f.append(i); b.append(f);
     const row = el("div", "btn-row"); const ok = el("button", "btn", "Save"); row.append(ok); b.append(row);
-    const save = async () => { try { await api("/api/spaces/save", { path: sp.path, name: i.value }); closeSheet(); loadSpaces(); } catch (e) { toast(e.message, true); } };
+    const save = async () => { try { await api("/api/projects/save", { path: sp.path, name: i.value }); closeSheet(); loadProjects(); } catch (e) { toast(e.message, true); } };
     ok.onclick = save; i.onkeydown = (e) => { if (e.key === "Enter") save(); };
   });
 }
-async function openSpacePicker(adding = false) {
+async function openProjectPicker(adding = false) {
   let dirs = [];
   try { dirs = (await api("/api/dirs")).dirs; } catch {}
   openSheet((b) => {
-    b.append(el("div", "sheet-title", adding ? "Add a space" : "Choose a space"), el("div", "sheet-sub", "A space is a project folder. pi runs its chats there."));
+    b.append(el("div", "sheet-title", adding ? "Add a project" : "Choose a project"), el("div", "sheet-sub", "Pick a folder. pi runs this project's chats there."));
     const f = el("div", "field"); const i = el("input"); i.placeholder = "~/projects/something"; i.autocapitalize = "off"; i.spellcheck = false; f.append(i);
     const go = el("button", "btn", "Use"); f.append(go); b.append(f);
     const pick = async (path, pin) => {
       try {
         let p = path;
-        if (pin) p = (await api("/api/spaces/save", { path })).path;
-        else if (!S.spaces.some((s) => s.path === path)) p = (await api("/api/spaces/save", { path })).path;
-        closeSheet(); await loadSpaces(); selectSpace(p);
+        if (pin) p = (await api("/api/projects/save", { path })).path;
+        else if (!S.projects.some((s) => s.path === path)) p = (await api("/api/projects/save", { path })).path;
+        closeSheet(); await loadProjects(); selectProject(p);
         if (!S.key && !S.path) { updateEmpty(); updateHeader(); } else if (!adding) { newChat(); }
       } catch (e) { toast(e.message, true); }
     };
     go.onclick = () => i.value.trim() && pick(i.value.trim(), true);
     i.onkeydown = (e) => { if (e.key === "Enter" && i.value.trim()) pick(i.value.trim(), true); };
-    if (S.spaces.length && !adding) {
-      b.append(el("div", "sheet-section", "Spaces"));
-      for (const sp of S.spaces) b.append(opt(badge(sp.path), esc(sp.name), esc(tilde(sp.path)), () => pick(sp.path, false)));
+    if (S.projects.length && !adding) {
+      b.append(el("div", "sheet-section", "Projects"));
+      for (const sp of S.projects) b.append(opt(badge(sp.path), esc(sp.name), esc(tilde(sp.path)), () => pick(sp.path, false)));
     }
-    const others = dirs.filter((d) => !S.spaces.some((s) => s.path === d));
+    const others = dirs.filter((d) => !S.projects.some((s) => s.path === d));
     if (others.length) {
       b.append(el("div", "sheet-section", "Folders"));
       const draw = () => {
@@ -1002,12 +1002,30 @@ async function openSession(path) {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (S.path || S.key) { if (!S.es || S.es.readyState !== 1) reopen().catch(() => {}); else loadSnapshot(); }
-  loadSpaces();
+  loadProjects();
 });
+
+// ---------------------------------------------------------------- live updates
+// The server's build id changes on every deploy; reload into the new version
+// as soon as that won't throw away a draft or interrupt a stream.
+let buildId = null;
+async function checkBuild() {
+  try {
+    const { build } = await api("/api/version");
+    if (buildId === null) { buildId = build; return; }
+    if (build === buildId) return;
+    const safe = !input.value.trim() && !S.attachments.length && !S.streaming && !document.body.classList.contains("sheet-open");
+    if (safe) { location.reload(); return; }
+    banner('pocketpi was updated. <button class="copy" id="reload-now">Reload</button>');
+    $("reload-now").onclick = () => location.reload();
+  } catch {}
+}
+setInterval(() => document.visibilityState === "visible" && checkBuild(), 4000);
 
 // ---------------------------------------------------------------- boot
 (async function boot() {
-  await loadSpaces();
+  checkBuild();
+  await loadProjects();
   const p = new URL(location.href).searchParams.get("s");
   if (p) await openSession(p);
   else newChat();

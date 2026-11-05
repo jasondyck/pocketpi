@@ -1,6 +1,6 @@
-//! Spaces: project folders that group chats, like herdr's spaces.
+//! Projects: project folders that group chats, like herdr's spaces.
 //!
-//! A space is a working directory. Every folder that has pi sessions shows up
+//! A project is a working directory. Every folder that has pi sessions shows up
 //! automatically; pinning gives it a custom name and a fixed position, and
 //! hiding removes an auto-discovered one from the rail.
 
@@ -25,7 +25,7 @@ pub struct Pinned {
 }
 
 #[derive(Serialize)]
-pub struct Space {
+pub struct Project {
     pub path: String,
     pub name: String,
     pub pinned: bool,
@@ -40,7 +40,7 @@ pub fn config_path(home: &Path) -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| home.join(".config"))
-        .join("pocketpi/spaces.json")
+        .join("pocketpi/projects.json")
 }
 
 pub fn load(path: &Path) -> Config {
@@ -63,11 +63,11 @@ fn basename(p: &str) -> String {
     p.trim_end_matches('/').rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("/").to_string()
 }
 
-pub fn build(cfg: &Config, sessions: &[SessionInfo], home: &str) -> Vec<Space> {
-    let mut out: Vec<Space> = cfg
+pub fn build(cfg: &Config, sessions: &[SessionInfo], home: &str) -> Vec<Project> {
+    let mut out: Vec<Project> = cfg
         .pinned
         .iter()
-        .map(|p| Space {
+        .map(|p| Project {
             path: p.path.clone(),
             name: p.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| basename(&p.path)),
             pinned: true,
@@ -78,7 +78,7 @@ pub fn build(cfg: &Config, sessions: &[SessionInfo], home: &str) -> Vec<Space> {
             exists: Path::new(&p.path).is_dir(),
         })
         .collect();
-    // Sessions arrive newest first, so auto spaces are ordered by recent use.
+    // Sessions arrive newest first, so auto projects are ordered by recent use.
     for s in sessions {
         if cfg.hidden.iter().any(|h| h == &s.cwd) && !cfg.pinned.iter().any(|p| p.path == s.cwd) {
             continue;
@@ -86,7 +86,7 @@ pub fn build(cfg: &Config, sessions: &[SessionInfo], home: &str) -> Vec<Space> {
         let idx = match out.iter().position(|sp| sp.path == s.cwd) {
             Some(i) => i,
             None => {
-                out.push(Space {
+                out.push(Project {
                     path: s.cwd.clone(),
                     name: if s.cwd == home { "Home".into() } else { basename(&s.cwd) },
                     pinned: false,

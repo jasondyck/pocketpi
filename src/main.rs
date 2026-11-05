@@ -7,7 +7,7 @@
 //! here and vice versa.
 
 mod sessions;
-mod spaces;
+mod projects;
 
 use axum::{
     Json, Router,
@@ -61,6 +61,11 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "extension_ui_response",
 ];
 
+/// Changes on every restart (deploy); the page polls it to live-reload.
+static BUILD_ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+});
+
 /// How long an unwatched, idle pi process is kept before it is shut down.
 const IDLE_REAP: Duration = Duration::from_secs(20 * 60);
 
@@ -72,8 +77,8 @@ pub struct AppState {
     live: StdMutex<HashMap<String, Arc<Live>>>,
     next_key: AtomicU64,
     meta_cache: sessions::Cache,
-    spaces_path: PathBuf,
-    spaces_lock: StdMutex<()>,
+    projects_path: PathBuf,
+    projects_lock: StdMutex<()>,
 }
 
 pub struct Live {
@@ -124,11 +129,12 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3457);
 
+    std::sync::LazyLock::force(&BUILD_ID);
     let app = Arc::new(AppState {
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
         sessions_dir,
-        spaces_path: spaces::config_path(&home),
-        spaces_lock: StdMutex::new(()),
+        projects_path: projects::config_path(&home),
+        projects_lock: StdMutex::new(()),
         home,
         allowed_users,
         live: StdMutex::new(HashMap::new()),
@@ -148,9 +154,10 @@ async fn main() {
         .route("/manifest.webmanifest", get(|| async { static_file("manifest.webmanifest") }))
         .route("/fonts/geist.woff2", get(|| async { static_file("geist.woff2") }))
         .route("/fonts/geist-mono.woff2", get(|| async { static_file("geist-mono.woff2") }))
-        .route("/api/spaces", get(list_spaces))
-        .route("/api/spaces/save", post(save_space))
-        .route("/api/spaces/hide", post(hide_space))
+        .route("/api/version", get(|| async { Json(json!({ "build": *BUILD_ID })) }))
+        .route("/api/projects", get(list_projects))
+        .route("/api/projects/save", post(save_project))
+        .route("/api/projects/hide", post(hide_project))
         .route("/api/sessions", get(list_sessions))
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
@@ -493,15 +500,15 @@ async fn list_sessions(State(app): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({ "sessions": scan_with_live(&app).await }))
 }
 
-async fn list_spaces(State(app): State<Arc<AppState>>) -> Json<Value> {
+async fn list_projects(State(app): State<Arc<AppState>>) -> Json<Value> {
     let list = scan_with_live(&app).await;
-    let cfg = spaces::load(&app.spaces_path);
+    let cfg = projects::load(&app.projects_path);
     let home = app.home.to_string_lossy().to_string();
-    Json(json!({ "spaces": spaces::build(&cfg, &list, &home), "home": home }))
+    Json(json!({ "projects": projects::build(&cfg, &list, &home), "home": home }))
 }
 
 #[derive(Deserialize)]
-struct SpaceReq {
+struct ProjectReq {
     path: String,
     #[serde(default)]
     name: Option<String>,
@@ -524,28 +531,28 @@ fn resolve_dir(app: &AppState, raw: &str) -> AppResult<String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
-async fn save_space(State(app): State<Arc<AppState>>, Json(req): Json<SpaceReq>) -> AppResult<Json<Value>> {
+async fn save_project(State(app): State<Arc<AppState>>, Json(req): Json<ProjectReq>) -> AppResult<Json<Value>> {
     let path = resolve_dir(&app, &req.path)?;
-    let _g = app.spaces_lock.lock().unwrap();
-    let mut cfg = spaces::load(&app.spaces_path);
+    let _g = app.projects_lock.lock().unwrap();
+    let mut cfg = projects::load(&app.projects_path);
     cfg.hidden.retain(|h| h != &path);
     let name = req.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     match cfg.pinned.iter_mut().find(|p| p.path == path) {
         Some(p) => p.name = name,
-        None => cfg.pinned.push(spaces::Pinned { path: path.clone(), name }),
+        None => cfg.pinned.push(projects::Pinned { path: path.clone(), name }),
     }
-    spaces::save(&app.spaces_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "path": path })))
 }
 
-async fn hide_space(State(app): State<Arc<AppState>>, Json(req): Json<SpaceReq>) -> AppResult<Json<Value>> {
-    let _g = app.spaces_lock.lock().unwrap();
-    let mut cfg = spaces::load(&app.spaces_path);
+async fn hide_project(State(app): State<Arc<AppState>>, Json(req): Json<ProjectReq>) -> AppResult<Json<Value>> {
+    let _g = app.projects_lock.lock().unwrap();
+    let mut cfg = projects::load(&app.projects_path);
     cfg.pinned.retain(|p| p.path != req.path);
     if !cfg.hidden.contains(&req.path) {
         cfg.hidden.push(req.path.clone());
     }
-    spaces::save(&app.spaces_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
 }
 

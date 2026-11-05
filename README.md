@@ -5,7 +5,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Rust (axum) server, one `pi --mode rpc` child process per open chat
 - Streams pi's events to the browser over SSE; the page sends pi RPC commands back
 - Chats are pi's own session files, so terminal and web chats are the same list
-- **Spaces**: chats grouped by project folder (auto-discovered from session folders, pin/rename/hide in `~/.config/pocketpi/spaces.json`)
+- **Projects**: chats grouped by project folder (auto-discovered from session folders, pin/rename/hide in `~/.config/pocketpi/projects.json`)
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works, stop, image attachments, slash commands, extension dialogs
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
 

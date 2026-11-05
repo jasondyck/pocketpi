@@ -1,6 +1,6 @@
 /* pocketpi — graphite surfaces, Geist type, one lime "signal" accent that
    only appears when something is live: the send button, streaming bar,
-   live dots and the active space. */
+   live dots and the active project. */
 
 @font-face { font-family: "Geist"; src: url("/fonts/geist.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("/fonts/geist-mono.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
@@ -67,7 +67,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: var(--text-2); flex: none; }
 .icon-btn:active { background: var(--surface); }
 
-/* ---------- space badges (deterministic hue per folder) ---------- */
+/* ---------- project badges (deterministic hue per folder) ---------- */
 .badge {
   --h: 200; width: 28px; height: 28px; border-radius: 9px; flex: none;
   display: grid; place-items: center; font-weight: 650; font-size: 12.5px; letter-spacing: 0;
@@ -134,7 +134,7 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
   width: 64px; flex: none; background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 8px;
   padding: calc(var(--safe-t) + 12px) 0 calc(var(--safe-b) + 12px); overflow-y: auto; scrollbar-width: none;
 }
-#rail-spaces { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#rail-projects { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .rail-tile { position: relative; width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; flex: none; color: var(--text-2); transition: border-radius .2s var(--ease), transform .15s; }
 .rail-tile:active { transform: scale(.94); }
 .rail-tile .badge { width: 42px; height: 42px; border-radius: inherit; font-size: 15px; }
@@ -185,9 +185,9 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
 .empty h1 { font-size: 24px; max-width: 15ch; line-height: 1.2; text-wrap: balance; font-weight: 650; margin: 0; letter-spacing: -0.035em; animation: rise .6s .05s var(--ease) both; }
 .empty p { margin: 6px 0 0; color: var(--muted); font: 12.5px var(--mono); animation: rise .6s .1s var(--ease) both; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty p:empty { display: none; }
-.space-chip { margin-top: 20px; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 9px; border-radius: 999px; border: 1px solid var(--line-2); font-size: 14px; color: var(--text-2); max-width: 90vw; animation: rise .6s .15s var(--ease) both; }
-.space-chip svg { width: 15px; height: 15px; }
-.space-chip span:not(.badge) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-chip { margin-top: 20px; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 9px; border-radius: 999px; border: 1px solid var(--line-2); font-size: 14px; color: var(--text-2); max-width: 90vw; animation: rise .6s .15s var(--ease) both; }
+.project-chip svg { width: 15px; height: 15px; }
+.project-chip span:not(.badge) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .msg { margin: 20px 0; }
 .msg.enter { animation: rise .35s var(--ease) both; }
