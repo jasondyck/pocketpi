@@ -27,6 +27,11 @@ targets:
     sources: [Sources]
     dependencies:
       - package: PocketPiKit
+    # Push. Archiving for TestFlight turns development into production.
+    entitlements:
+      path: Sources/PocketPi.entitlements
+      properties:
+        aps-environment: development
     info:
       path: Sources/Info.plist
       properties:

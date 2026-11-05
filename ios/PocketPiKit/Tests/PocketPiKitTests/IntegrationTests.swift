@@ -39,6 +39,20 @@ struct IntegrationTests {
         _ = try await client.sessions()
     }
 
+    @Test func registersForPush() async throws {
+        let token = String(repeating: "a1", count: 32)
+        try await client.registerPush(token: token, environment: .sandbox, label: "test phone")
+        try await client.registerPush(token: token, environment: .sandbox, label: "test phone")
+        let info: JSONValue = try await client.get("/api/push")
+        #expect(info["apns"]?["devices"]?.int == 1)
+        await #expect(throws: PocketPiError.self) {
+            try await client.registerPush(token: "not-hex", environment: .production, label: "")
+        }
+        try await client.unregisterPush(token: token)
+        let after: JSONValue = try await client.get("/api/push")
+        #expect(after["apns"]?["devices"]?.int == 0)
+    }
+
     @Test func refusesPostsWithoutTheHeader() async throws {
         var r = URLRequest(url: client.server.url.appending(path: "/api/new"))
         r.httpMethod = "POST"

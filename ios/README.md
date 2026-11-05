@@ -7,7 +7,21 @@ like the web page does.
 
 Why native: things a Home Screen web app can't do. The keyboard follows the
 finger when you swipe down (`.scrollDismissesKeyboard(.interactively)`), and
-native push (APNs) comes later.
+notifications come through APNs.
+
+## Notifications
+
+The server sends every notification it already sends by web push (approvals,
+finished/failed runs, long replies nobody watched) to registered iOS devices
+too (`src/apns.rs`). It needs the APNs key from developer.apple.com in
+`~/.config/pocketpi/apns/AuthKey_<KEYID>.p8` (0600); without it APNs is off and
+`/api/apns/register` answers 503. The app asks for permission when it first
+reaches the chat list and registers its token on every launch (sandbox for
+debug builds, production for TestFlight; the server retries the other service
+on BadDeviceToken). Tapping a chat notification opens that chat.
+
+Check the key against Apple without a phone:
+`cargo test apns_credentials -- --ignored --nocapture` (expects BadDeviceToken).
 
 ## Layout
 
@@ -42,6 +56,6 @@ simulator, run a local pocketpi and connect to `http://127.0.0.1:3457`
 ## Not done yet
 
 - Workflows and runs (list, DAG, approve, cancel)
-- Native push: needs an APNs sender in pocketpi (`src/push.rs` is web push only)
+- Tapping a run notification opens the app but not the run (no runs screen yet)
 - Model picker, slash-command completion, suggested replies
 - Folding finished tool steps into a summary line, like the web's `collapseTurns`

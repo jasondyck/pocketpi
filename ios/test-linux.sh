@@ -25,7 +25,11 @@ trap cleanup EXIT
 ENVS=()
 if [ "${1:-}" != "--unit" ]; then
   cargo build --release --quiet
-  mkdir -p "$SCRATCH/home/project" "$SCRATCH/sessions"
+  mkdir -p "$SCRATCH/home/project" "$SCRATCH/sessions" "$SCRATCH/home/.config/pocketpi/apns"
+  # A throwaway APNs key, so device registration can be tested. Nothing in the
+  # tests makes the server send a notification to Apple.
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+    -out "$SCRATCH/home/.config/pocketpi/apns/AuthKey_TEST000000.p8" 2>/dev/null
   HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
     PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
     POCKETPI_PORT="$PORT" "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &

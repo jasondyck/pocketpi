@@ -69,6 +69,19 @@ struct ChatListView: View {
             }
         }
         .task { await model.refresh() }
+        // A tapped notification, also on a cold launch (set before this appeared).
+        .task(id: model.pendingLink) {
+            guard let link = model.pendingLink else { return }
+            model.pendingLink = nil
+            switch link {
+            case .chat(let path):
+                // The server answers with the real folder when the chat opens.
+                let cwd = model.sessions.first { $0.path == path }?.cwd ?? model.home ?? "~"
+                route = [.chat(path: path, cwd: cwd)]
+            case .run:
+                break // workflow runs have no screen in the app yet
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refresh() } }
         }

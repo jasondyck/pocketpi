@@ -118,6 +118,24 @@ public final class PocketPiClient: Sendable {
         _ = try await post("/api/s/\(key)/close", [:], as: JSONValue.self)
     }
 
+    // MARK: - notifications
+
+    /// Which APNs service the device token is for: debug builds get sandbox
+    /// tokens, TestFlight and App Store builds production ones.
+    public enum PushEnvironment: String, Sendable { case sandbox, production }
+
+    /// Register this phone for the server's notifications (approvals, finished
+    /// runs, long replies). Throws 503 when the server has no APNs key.
+    public func registerPush(token: String, environment: PushEnvironment, label: String) async throws {
+        _ = try await post("/api/apns/register", [
+            "token": .string(token), "environment": .string(environment.rawValue), "label": .string(label),
+        ], as: JSONValue.self)
+    }
+
+    public func unregisterPush(token: String) async throws {
+        _ = try await post("/api/apns/unregister", ["token": .string(token)], as: JSONValue.self)
+    }
+
     /// Send a pi RPC command and return its `data`. Throws `.command` when pi
     /// says it failed and `.http` (404/410: `isSessionGone`) when the process
     /// is gone.

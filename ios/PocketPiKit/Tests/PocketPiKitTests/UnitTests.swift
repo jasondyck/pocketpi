@@ -206,3 +206,14 @@ import Testing
         #expect(MarkdownBlock.parse("#nospace") == [.paragraph("#nospace")])
     }
 }
+
+@Suite struct NotificationLinkTests {
+    @Test func parsesServerURLs() {
+        #expect(NotificationLink(url: "/?s=%2Fhome%2Fj%2Fs%2Fa%20b.jsonl") == .chat(path: "/home/j/s/a b.jsonl"))
+        #expect(NotificationLink(url: "/?s=/home/j/s/x_1.jsonl") == .chat(path: "/home/j/s/x_1.jsonl")) // as urlencode() in main.rs writes it
+        #expect(NotificationLink(url: "/?r=20261105-abc") == .run(id: "20261105-abc"))
+        #expect(NotificationLink(url: "/") == nil)
+        #expect(NotificationLink(url: "/?s=") == nil)
+        #expect(NotificationLink.hexToken(Data([0x0f, 0xa0, 0xff])) == "0fa0ff")
+    }
+}

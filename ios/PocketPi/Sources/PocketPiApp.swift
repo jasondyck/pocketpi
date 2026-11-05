@@ -1,14 +1,16 @@
 import PocketPiKit
 import SwiftUI
+import UIKit
+import UserNotifications
 
 @main
 struct PocketPiApp: App {
-    @State private var model = AppModel()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(model)
+                .environment(delegate.model)
                 .tint(Theme.signalText)
         }
     }
@@ -22,7 +24,42 @@ struct RootView: View {
             ConnectView()
         } else {
             ChatListView()
+                .task { await model.enablePush() }
         }
+    }
+}
+
+/// The UIKit side of notifications: the device token from APNs, and what to
+/// do with a notification that arrives or is tapped.
+@MainActor
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    let model = AppModel()
+
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        model.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("push registration failed: \(error.localizedDescription)")
+    }
+
+    /// In the foreground too: the server only notifies for things worth it.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        let url = response.notification.request.content.userInfo["url"] as? String
+        guard let url, let link = NotificationLink(url: url) else { return }
+        await MainActor.run { self.model.pendingLink = link }
     }
 }
 
@@ -31,6 +68,7 @@ struct RootView: View {
 @Observable
 final class AppModel {
     private static let serverKey = "server"
+    private static let pushTokenKey = "pushToken"
 
     private(set) var client: PocketPiClient?
     private(set) var projects: [Project] = []
@@ -38,6 +76,8 @@ final class AppModel {
     private(set) var home: String?
     private(set) var loadError: String?
     private(set) var loading = false
+    /// A tapped notification, for the chat list to open.
+    var pendingLink: NotificationLink?
 
     init() {
         // UI tests start with a clean slate and an address to type.
@@ -61,11 +101,44 @@ final class AppModel {
     }
 
     func disconnect() {
+        if let client, let token = UserDefaults.standard.string(forKey: Self.pushTokenKey) {
+            Task { try? await client.unregisterPush(token: token) }
+        }
         UserDefaults.standard.removeObject(forKey: Self.serverKey)
         client = nil
         projects = []
         sessions = []
     }
+
+    // MARK: - notifications
+
+    /// Ask once (iOS remembers the answer), then get a device token. APNs
+    /// hands one over on every launch; it is sent to the server each time.
+    func enablePush() async {
+        let center = UNUserNotificationCenter.current()
+        let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        if granted { UIApplication.shared.registerForRemoteNotifications() }
+    }
+
+    func didRegister(deviceToken: Data) {
+        let token = NotificationLink.hexToken(deviceToken)
+        UserDefaults.standard.set(token, forKey: Self.pushTokenKey)
+        guard let client else { return }
+        #if DEBUG
+        let env = PocketPiClient.PushEnvironment.sandbox
+        #else
+        let env = PocketPiClient.PushEnvironment.production
+        #endif
+        let label = UIDevice.current.name
+        Task {
+            do { try await client.registerPush(token: token, environment: env, label: label) } catch {
+                // 503: the server has no APNs key; the app works without push.
+                print("push register: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - lists
 
     func refresh() async {
         guard let client else { return }
