@@ -844,6 +844,9 @@ struct RunReq {
     inputs: HashMap<String, String>,
     #[serde(default)]
     trigger: Option<String>,
+    /// Run even if an identical run already exists (manual "run again").
+    #[serde(default)]
+    force: bool,
 }
 
 async fn run_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<RunReq>) -> AppResult<Json<Value>> {
@@ -858,7 +861,36 @@ async fn run_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String>, 
             return Err(err(StatusCode::CONFLICT, "this workflow is already running; don't start another"));
         }
     }
-    let run_id = app.engine.start(app.clone(), w, &trigger, req.inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let mut inputs = req.inputs;
+    // A PR run is about a specific commit: record the PR's current head so
+    // duplicates can be recognised whichever way the run was started.
+    if let Some(pr) = inputs.get("pr").filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty()).cloned() {
+        if !inputs.contains_key("commit") {
+            let out = Command::new("gh")
+                .args(["pr", "view", &pr, "--json", "headRefOid", "-q", ".headRefOid"])
+                .current_dir(&w.project)
+                .stdin(std::process::Stdio::null())
+                .output();
+            if let Ok(Ok(o)) = tokio::time::timeout(Duration::from_secs(15), out).await {
+                let sha = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if o.status.success() && sha.len() >= 7 {
+                    inputs.insert("commit".into(), sha);
+                }
+            }
+        }
+    }
+    if !req.force {
+        if let Some(dup) = app.engine.duplicate(&id, &inputs) {
+            let what = if inputs.contains_key("pr") { format!("PR #{} at this commit", inputs["pr"]) } else { "these inputs".into() };
+            return Err(err(
+                StatusCode::CONFLICT,
+                json!({ "duplicate": true, "run_id": dup.id, "status": dup.status, "created": dup.created,
+                        "message": format!("{} already ran for {what} (run {}, {:?}); not starting a duplicate", w.name, dup.id, dup.status) })
+                .to_string(),
+            ));
+        }
+    }
+    let run_id = app.engine.start(app.clone(), w, &trigger, inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "run_id": run_id })))
 }
 
@@ -966,6 +998,9 @@ async fn webhook(State(app): State<Arc<AppState>>, Path((id, token)): Path<(Stri
         }
     }
     inputs.insert("payload".into(), text.chars().take(20_000).collect());
+    if let Some(dup) = app.engine.duplicate(&id, &inputs) {
+        return Err(err(StatusCode::CONFLICT, format!("already ran for these inputs (run {})", dup.id)));
+    }
     let run_id = app.engine.start(app.clone(), w, "webhook", inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "run_id": run_id })))
 }

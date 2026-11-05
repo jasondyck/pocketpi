@@ -104,6 +104,10 @@ fn fire(app: &Arc<AppState>, wf: &Workflow, trigger: &str, inputs: HashMap<Strin
         eprintln!("sensor {trigger}: {} already running, skipped", wf.id);
         return;
     }
+    if let Some(dup) = app.engine.duplicate(&wf.id, &inputs) {
+        eprintln!("sensor {trigger}: {} already ran for these inputs (run {}), skipped", wf.id, dup.id);
+        return;
+    }
     match app.engine.start(app.clone(), wf.clone(), trigger, inputs) {
         Ok(id) => eprintln!("sensor {trigger}: started {} run {id}", wf.id),
         Err(e) => eprintln!("sensor {trigger}: could not start {}: {e}", wf.id),
@@ -195,7 +199,7 @@ async fn poll_commits(app: &Arc<AppState>, wf: &Workflow, key: &str, branch: Opt
 
 async fn poll_gh(app: &Arc<AppState>, wf: &Workflow, key: &str, on: &str) -> Result<(), String> {
     let args: &[&str] = if on == "pr" {
-        &["pr", "list", "--state", "open", "--limit", "30", "--json", "number,title,headRefName,updatedAt,url"]
+        &["pr", "list", "--state", "open", "--limit", "30", "--json", "number,title,headRefName,headRefOid,url"]
     } else {
         &["issue", "list", "--state", "open", "--limit", "30", "--json", "number,title,createdAt,url"]
     };
@@ -217,11 +221,11 @@ async fn poll_gh(app: &Arc<AppState>, wf: &Workflow, key: &str, on: &str) -> Res
         let seen = st.seen.entry(key.to_string()).or_default();
         for it in &items {
             let num = it["number"].to_string();
-            let stamp = it["updatedAt"].as_str().or(it["createdAt"].as_str()).unwrap_or("").to_string();
-            let changed = match seen.get(&num) {
-                None => true,
-                Some(old) => on == "pr" && old != &stamp,
-            };
+            // PRs fire on new commits (head SHA), not on updatedAt: comments,
+            // labels and reviews (including our own comments) change updatedAt
+            // and would re-trigger the workflow in a loop.
+            let stamp = if on == "pr" { it["headRefOid"].as_str() } else { it["createdAt"].as_str() }.unwrap_or("").to_string();
+            let changed = item_changed(on, seen.get(&num).map(String::as_str), &stamp);
             seen.insert(num, stamp);
             if changed && !first_look {
                 fresh.push(it.clone());
@@ -239,6 +243,9 @@ async fn poll_gh(app: &Arc<AppState>, wf: &Workflow, key: &str, on: &str) -> Res
         if let Some(b) = it["headRefName"].as_str() {
             inputs.insert("branch".into(), b.to_string());
         }
+        if let Some(c) = it["headRefOid"].as_str() {
+            inputs.insert("commit".into(), c.to_string());
+        }
         fire(app, wf, on, inputs);
         let mut st = app.sensors.state.lock().unwrap();
         if let Some(seen) = st.seen.get_mut(key) {
@@ -250,7 +257,33 @@ async fn poll_gh(app: &Arc<AppState>, wf: &Workflow, key: &str, on: &str) -> Res
     Ok(())
 }
 
+/// Whether a PR/issue should start a run. PRs fire on a new head commit;
+/// issues only when first seen. A timestamp as the old value is state saved
+/// before PRs were tracked by SHA, so it is adopted without firing.
+fn item_changed(on: &str, old: Option<&str>, stamp: &str) -> bool {
+    match old {
+        None => true,
+        Some(o) if on == "pr" && o.contains('T') && o.ends_with('Z') => false,
+        Some(o) => on == "pr" && o != stamp,
+    }
+}
+
 /// Next time a schedule fires, for display.
 pub fn next_fire(cron: &str) -> Option<String> {
     Cron::parse(cron).ok()?.next_after(chrono::Local::now()).map(|t| t.format("%a %b %-d, %-H:%M").to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_changed;
+
+    #[test]
+    fn pr_fires_only_on_new_commits() {
+        assert!(item_changed("pr", None, "abc")); // new PR
+        assert!(!item_changed("pr", Some("abc"), "abc")); // comment/label: same head
+        assert!(item_changed("pr", Some("abc"), "def")); // new commit pushed
+        assert!(!item_changed("pr", Some("2026-11-05T14:08:16Z"), "def")); // old updatedAt state: adopt
+        assert!(item_changed("issue", None, "2026-11-05T00:00:00Z"));
+        assert!(!item_changed("issue", Some("2026-11-05T00:00:00Z"), "2026-11-05T00:00:00Z"));
+    }
 }

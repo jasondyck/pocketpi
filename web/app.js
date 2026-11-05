@@ -1467,9 +1467,21 @@ function startRun(wf) {
     go.onclick = () => { const vals = {}; for (const [k, t] of Object.entries(fields)) vals[k] = t.value; closeSheet(); doRun(wf, vals); };
   });
 }
-async function doRun(wf, inputs) {
-  try { const r = await api(`/api/workflows/${wf.id}/run`, { inputs }); toast("Run started"); openRun(r.run_id); loadWorkflows(); }
-  catch (e) { toast(e.message, true); }
+async function doRun(wf, inputs, force = false) {
+  try { const r = await api(`/api/workflows/${wf.id}/run`, { inputs, force }); toast("Run started"); openRun(r.run_id); loadWorkflows(); }
+  catch (e) {
+    let d = null; try { d = JSON.parse(e.message); } catch {}
+    if (e.status === 409 && d?.duplicate) {
+      return openSheet((b) => {
+        b.append(el("div", "sheet-title", "Already ran"), el("div", "sheet-msg", `${esc(wf.name)} already ran for this ${inputs.pr ? `PR (#${esc(inputs.pr)}) at its current commit` : "input"} ${ago(d.created)} ago, and that run is ${esc(STATUS_LABEL[d.status] || d.status)}.`));
+        const row = el("div", "btn-row");
+        const see = el("button", "btn secondary", "Open that run"); see.onclick = () => { closeSheet(); openRun(d.run_id); };
+        const again = el("button", "btn", "Run again"); again.onclick = () => { closeSheet(); doRun(wf, inputs, true); };
+        row.append(see, again); b.append(row);
+      });
+    }
+    toast(d?.message || e.message, true);
+  }
 }
 
 async function openRun(id) {

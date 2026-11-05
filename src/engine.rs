@@ -176,6 +176,28 @@ impl Engine {
         serde_json::from_str(&std::fs::read_to_string(self.runs_dir.join(format!("{id}.json"))).ok()?).ok()
     }
 
+    /// An earlier run of the same workflow on the same thing (PR + commit,
+    /// issue, or commit) that is still going or succeeded. Failed and
+    /// cancelled runs don't count, so they can be retried.
+    pub fn duplicate(&self, workflow: &str, inputs: &HashMap<String, String>) -> Option<Run> {
+        let keys: &[&str] = if inputs.contains_key("pr") && inputs.contains_key("commit") {
+            &["pr", "commit"]
+        } else if inputs.contains_key("issue") {
+            &["issue"]
+        } else if inputs.contains_key("commit") {
+            &["commit"]
+        } else {
+            return None;
+        };
+        let same = |r: &Run| keys.iter().all(|k| r.inputs.get(*k).is_some_and(|v| Some(v) == inputs.get(*k)));
+        let active: Vec<Run> = self.active.lock().unwrap().values().map(|h| h.run.lock().unwrap().clone()).collect();
+        active
+            .into_iter()
+            .chain(self.list_runs(Some(workflow)).into_iter().take(100))
+            .filter(|r| r.workflow_id == workflow)
+            .find(|r| !matches!(r.status, Status::Failed | Status::Cancelled) && same(r))
+    }
+
     /// Workflow ids that have a run in progress.
     pub fn list_active(&self) -> Vec<String> {
         self.active.lock().unwrap().values().map(|h| h.run.lock().unwrap().workflow_id.clone()).collect()
