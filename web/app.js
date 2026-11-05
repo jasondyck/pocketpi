@@ -31,6 +31,7 @@ const ICON = {
   hide: '<svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 6.1A9 9 0 0 1 12 6c5 0 8.5 4.5 9 6-.3.9-1.2 2.4-2.7 3.7M6.3 7.8C4.6 9 3.4 10.7 3 12c.6 1.7 4 6 9 6 1.6 0 3-.4 4.2-1"/></svg>',
   chip: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>',
   spark: '<svg viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
 };
 const TOOL_ICON = { bash: ICON.term, read: ICON.file, write: ICON.pen, edit: ICON.pen, grep: ICON.search, find: ICON.search, ls: ICON.folder, web_search: ICON.globe, web_fetch: ICON.globe };
@@ -827,6 +828,7 @@ async function openChatSheet() {
     });
     if (sugOn) sug.append(el("span", "check", ICON.check));
     b.append(sug);
+    notificationOption(b);
     b.append(opt(ICON.compact, "Compact context", "Summarize older messages to free up context", async () => {
       closeSheet(); setStreaming(true); setWorking("Compacting context");
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
@@ -866,6 +868,7 @@ function openNewChatSettings() {
   openSheet((b) => {
     b.append(el("div", "sheet-title", "New chat"), el("div", "sheet-sub", "Model and thinking can be changed after the chat starts. pi's defaults from settings.json apply."));
     b.append(opt(ICON.folder, "Project", esc(projectName(newChatCwd())), () => openProjectPicker()));
+    notificationOption(b);
   });
 }
 function renameChat() {
@@ -1069,6 +1072,68 @@ document.addEventListener("visibilitychange", () => {
 });
 
 
+
+// ---------------------------------------------------------------- notifications (web push)
+// iOS only allows web push for apps added to the Home Screen (16.4+), and
+// permission must be requested from a tap.
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+async function pushState() {
+  if (isIOS && !standalone) return "needs-homescreen";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "unsupported";
+  if (Notification.permission === "denied") return "denied";
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return "off";
+    const info = await api(`/api/push?endpoint=${encodeURIComponent(sub.endpoint)}`);
+    return info.subscribed ? "on" : "off";
+  } catch { return "off"; }
+}
+function b64ToBytes(b64) {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+async function enablePush() {
+  const st = await pushState();
+  if (st === "needs-homescreen") return toast("Add pocketpi to your Home Screen first (Share → Add to Home Screen), then turn notifications on there.");
+  if (st === "unsupported") return toast("This browser can't do push notifications.", true);
+  if (st === "denied") return toast("Notifications are blocked for pocketpi in Settings.", true);
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") return toast("Notifications not allowed", true);
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const { key } = await api("/api/push");
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    const label = isIOS ? "iPhone" : /Android/.test(navigator.userAgent) ? "Android" : "Browser";
+    await api("/api/push/subscribe", { subscription: sub.toJSON(), label });
+    const t = await api("/api/push/test", {});
+    toast(t.delivered ? "Notifications on. Sent a test." : "Subscribed, but the test didn't go through.", !t.delivered);
+  } catch (e) { toast(`Couldn't turn on notifications: ${e.message}`, true); }
+}
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { await api("/api/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+    toast("Notifications off");
+  } catch (e) { toast(e.message, true); }
+}
+async function notificationOption(b) {
+  const st = await pushState();
+  const sub = { on: "On · approvals, finished runs, long replies", off: "Off", denied: "Blocked in iOS Settings", unsupported: "Not supported in this browser", "needs-homescreen": "Add to Home Screen first" }[st];
+  const o = opt(ICON.bell, "Notifications", sub, () => { closeSheet(); st === "on" ? disablePush() : enablePush(); });
+  if (st === "on") {
+    o.append(el("span", "check", ICON.check));
+    const t = el("button", "copy", "Send test"); t.onclick = async (e) => { e.stopPropagation(); const r = await api("/api/push/test", {}); toast(r.delivered ? "Test sent" : "Test failed", !r.delivered); };
+    o.append(t);
+  }
+  b.append(o);
+}
+
 // ---------------------------------------------------------------- workflows
 // Views: "chat" (default), "workflow" (one workflow), "run" (one run). The
 // workflow views render into #wfview and hide the composer.
@@ -1215,6 +1280,12 @@ function renderWorkflow() {
   act.append(runBtn, editBtn, more);
   v.append(act);
 
+  pushState().then((st) => {
+    if (st === "on" || st === "unsupported" || S.view !== "workflow") return;
+    const n = el("button", "push-nudge", `${ICON.bell}<div><b>Get notified when runs need you</b><span>${st === "needs-homescreen" ? "Add pocketpi to your Home Screen first, then tap here there." : st === "denied" ? "Notifications are blocked in Settings." : "Approvals, finished and failed runs."}</span></div>`);
+    n.onclick = () => enablePush().then(() => S.wf && renderWorkflow());
+    act.after(n);
+  });
   // sensors
   v.append(el("div", "wf-section", "Sensors"));
   const sens = el("div", "wf-card");

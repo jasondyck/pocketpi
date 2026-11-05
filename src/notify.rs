@@ -1,5 +1,4 @@
-//! Run notifications. Milestone 1 broadcasts in-app notices on the runs
-//! stream; web push (milestone 3) hooks in here.
+//! Run notifications: in-app notices on the runs stream plus web push.
 
 use crate::AppState;
 use crate::engine::{Run, Status};
@@ -16,7 +15,10 @@ fn notice(app: &Arc<AppState>, title: &str, body: &str, run: &Run, level: &str) 
 }
 
 pub async fn approval_needed(app: &Arc<AppState>, run: &Run, stage: &str, message: &str) {
-    notice(app, &format!("{} · {stage}", run.workflow_name), message, run, "approval");
+    let title = format!("{} · {stage}", run.workflow_name);
+    notice(app, &title, message, run, "approval");
+    let url = format!("/?r={}", run.id);
+    app.push.send(&format!("Approval needed · {}", run.workflow_name), message, &url, &format!("run-{}", run.id)).await;
 }
 
 pub async fn run_finished(app: &Arc<AppState>, run: &Run) {
@@ -27,4 +29,6 @@ pub async fn run_finished(app: &Arc<AppState>, run: &Run) {
     };
     let body = run.error.clone().unwrap_or_else(|| format!("${:.3} · {} stages", run.cost, run.stages.len()));
     notice(app, &title, &body, run, level);
+    let url = format!("/?r={}", run.id);
+    app.push.send(&title, &body, &url, &format!("run-{}", run.id)).await;
 }

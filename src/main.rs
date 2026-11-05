@@ -13,6 +13,7 @@ mod workflows;
 mod engine;
 mod notify;
 mod sensors;
+mod push;
 
 use axum::{
     Json, Router,
@@ -88,6 +89,7 @@ pub struct AppState {
     pub(crate) projects_lock: StdMutex<()>,
     pub(crate) engine: Arc<engine::Engine>,
     pub(crate) sensors: sensors::Sensors,
+    pub(crate) push: push::Push,
 }
 
 pub struct Live {
@@ -101,6 +103,7 @@ pub struct Live {
     pub(crate) last_active: StdMutex<Instant>,
     pub(crate) session_file: StdMutex<Option<String>>,
     pub(crate) stderr_tail: StdMutex<VecDeque<String>>,
+    pub(crate) turn_started: StdMutex<Option<Instant>>,
 }
 
 impl Live {
@@ -146,6 +149,7 @@ async fn main() {
         projects_lock: StdMutex::new(()),
         engine: Arc::new(engine::Engine::new(&home)),
         sensors: sensors::Sensors::new(&home),
+        push: push::Push::new(&home),
         home,
         allowed_users,
         suggest_model: std::env::var("POCKETPI_SUGGEST_MODEL").unwrap_or_else(|_| "opencode-go/minimax-m3.1-flash".into()),
@@ -185,6 +189,11 @@ async fn main() {
         .route("/api/workflows/{id}/delete", post(delete_workflow))
         .route("/api/workflows/{id}/webhook/rotate", post(rotate_webhook))
         .route("/hook/{id}/{token}", post(webhook))
+        .route("/api/push", get(push_info))
+        .route("/api/push/subscribe", post(push_subscribe))
+        .route("/api/push/unsubscribe", post(push_unsubscribe))
+        .route("/api/push/test", post(push_test))
+        .route("/sw.js", get(|| async { static_file("sw.js") }))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/events", get(run_events))
         .route("/api/runs/{id}", get(get_run))
@@ -256,6 +265,7 @@ fn static_file(name: &str) -> Response {
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
+        "sw.js" => (include_bytes!("../web/sw.js"), "text/javascript; charset=utf-8"),
         "geist.woff2" => (include_bytes!("../web/Geist-Variable.woff2"), "font/woff2"),
         "geist-mono.woff2" => (include_bytes!("../web/GeistMono-Variable.woff2"), "font/woff2"),
         "manifest.webmanifest" => (include_bytes!("../web/manifest.webmanifest"), "application/manifest+json"),
@@ -327,6 +337,7 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
         last_active: StdMutex::new(Instant::now()),
         session_file: StdMutex::new(session.map(String::from)),
         stderr_tail: StdMutex::new(VecDeque::new()),
+        turn_started: StdMutex::new(None),
     });
     app.live.lock().unwrap().insert(key.clone(), live.clone());
 
@@ -366,7 +377,30 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
             }
             let Ok(line) = std::str::from_utf8(&buf) else { continue };
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+            let ty = v.get("type").and_then(Value::as_str).unwrap_or("").to_string();
             handle_record(&live2, line, v);
+            match ty.as_str() {
+                "agent_start" => {
+                    let mut t = live2.turn_started.lock().unwrap();
+                    if t.is_none() {
+                        *t = Some(Instant::now());
+                    }
+                }
+                "agent_settled" => {
+                    let took = live2.turn_started.lock().unwrap().take().map(|t| t.elapsed());
+                    // Long reply finished and nobody has the chat open: tell the phone.
+                    if took.is_some_and(|d| d > Duration::from_secs(45)) && live2.tx.receiver_count() == 0 {
+                        let (app3, live3) = (app2.clone(), live2.clone());
+                        tokio::spawn(async move {
+                            let file = live3.session_file().unwrap_or_default();
+                            let project = live3.cwd.rsplit('/').next().unwrap_or("").to_string();
+                            let url = format!("/?s={}", urlencode(&file));
+                            app3.push.send(&format!("pi finished · {project}"), "Your chat has a new reply.", &url, &format!("chat-{}", live3.key)).await;
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
         let _ = child.wait().await;
         live2.streaming.store(false, Ordering::Relaxed);
@@ -913,4 +947,59 @@ async fn webhook(State(app): State<Arc<AppState>>, Path((id, token)): Path<(Stri
     inputs.insert("payload".into(), text.chars().take(20_000).collect());
     let run_id = app.engine.start(app.clone(), w, "webhook", inputs).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "run_id": run_id })))
+}
+
+// ---------------------------------------------------------------- web push
+
+pub(crate) fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct PushQuery {
+    endpoint: Option<String>,
+}
+
+async fn push_info(State(app): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<PushQuery>) -> Json<Value> {
+    let subscribed = q.endpoint.as_deref().is_some_and(|e| app.push.has(e));
+    Json(json!({ "key": app.push.public_key, "devices": app.push.count(), "subscribed": subscribed }))
+}
+
+#[derive(Deserialize)]
+struct SubReq {
+    subscription: Value,
+    #[serde(default)]
+    label: String,
+}
+
+async fn push_subscribe(State(app): State<Arc<AppState>>, Json(req): Json<SubReq>) -> AppResult<Json<Value>> {
+    let sub = push::sub_from_json(&req.subscription, &req.label).ok_or_else(|| err(StatusCode::BAD_REQUEST, "invalid subscription"))?;
+    let host = sub.endpoint.split('/').nth(2).unwrap_or("").to_string();
+    // Only real push services, so this can't be pointed at arbitrary URLs.
+    let known = ["push.apple.com", "fcm.googleapis.com", "push.services.mozilla.com", "notify.windows.com", "web.push.apple.com"];
+    if !sub.endpoint.starts_with("https://") || !known.iter().any(|k| host == *k || host.ends_with(&format!(".{k}"))) {
+        return Err(err(StatusCode::BAD_REQUEST, format!("unexpected push service {host}")));
+    }
+    app.push.subscribe(sub);
+    Ok(Json(json!({ "ok": true, "devices": app.push.count() })))
+}
+
+#[derive(Deserialize)]
+struct UnsubReq {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(State(app): State<Arc<AppState>>, Json(req): Json<UnsubReq>) -> Json<Value> {
+    app.push.unsubscribe(&req.endpoint);
+    Json(json!({ "ok": true }))
+}
+
+async fn push_test(State(app): State<Arc<AppState>>) -> Json<Value> {
+    let n = app.push.send("pocketpi", "Notifications are working.", "/", "test").await;
+    Json(json!({ "delivered": n }))
 }
