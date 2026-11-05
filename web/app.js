@@ -217,25 +217,47 @@ function toolArgSummary(name, a) {
   if (a.url) return a.url;
   const s = JSON.stringify(a); return s === "{}" ? "" : s;
 }
-function truncBlock(text, limit = 6000) {
+// Long text is trimmed by lines (and chars) with a "Show all" button. On touch
+// screens these blocks are not scroll boxes of their own (nested scrollers trap
+// iOS swipes), so the trim is what keeps the chat readable. `fromEnd` keeps the
+// last lines instead, which is where bash errors usually are.
+const coarse = matchMedia("(pointer: coarse)").matches;
+function truncBlock(text, limit = 6000, fromEnd = false) {
+  const maxLines = coarse ? 40 : 200;
+  const lines = text.split("\n");
   const wrap = el("div");
   const pre = el("pre");
-  pre.textContent = text.length > limit ? text.slice(0, limit) : text;
+  let shown = text;
+  if (lines.length > maxLines) shown = (fromEnd ? lines.slice(-maxLines) : lines.slice(0, maxLines)).join("\n");
+  if (shown.length > limit) shown = fromEnd ? shown.slice(-limit) : shown.slice(0, limit);
+  const trimmed = shown.length < text.length;
+  if (trimmed && fromEnd) wrap.append(el("div", "trim-note", `… ${lines.length > maxLines ? `${lines.length - maxLines} earlier lines` : "earlier output"} hidden`));
+  pre.textContent = shown;
   wrap.append(pre);
-  if (text.length > limit) {
-    const more = el("button", "more", `Show all · ${fmtTokens(text.length)} chars`);
-    more.onclick = (e) => { e.preventDefault(); pre.textContent = text; more.remove(); };
+  if (trimmed) {
+    const more = el("button", "more", `Show all · ${plural(lines.length, "line")}`);
+    more.onclick = (e) => { e.preventDefault(); pre.textContent = text; more.remove(); wrap.querySelector(".trim-note")?.remove(); };
     wrap.append(more);
   }
   return wrap;
 }
 function diffBlock(diff) {
+  const lines = diff.split("\n");
+  const max = coarse ? 120 : 600;
+  const wrap = el("div");
   const pre = el("pre");
-  pre.innerHTML = diff.split("\n").slice(0, 600).map((l) => {
+  const paint = (ls) => { pre.innerHTML = ls.map((l) => {
     const c = /^\+(?!\+\+)/.test(l) ? "d-add" : /^-(?!--)/.test(l) ? "d-del" : /^@@/.test(l) ? "d-hunk" : "";
     return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
-  }).join("\n");
-  return pre;
+  }).join("\n"); };
+  paint(lines.slice(0, max));
+  wrap.append(pre);
+  if (lines.length > max) {
+    const more = el("button", "more", `Show all · ${plural(lines.length, "line")}`);
+    more.onclick = (e) => { e.preventDefault(); paint(lines); more.remove(); };
+    wrap.append(more);
+  }
+  return wrap;
 }
 function makeCard(call) {
   const d = el("details", "tool");
@@ -267,7 +289,7 @@ function makeCard(call) {
       else if (a.oldText != null || a.old_string != null) sec("Edit", diffBlock([...String(a.oldText ?? a.old_string).split("\n").map((l) => "-" + l), ...String(a.newText ?? a.new_string ?? "").split("\n").map((l) => "+" + l)].join("\n")));
       if (r && Array.isArray(r.content)) {
         const text = textOf(r.content);
-        if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text));
+        if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text, 6000, api.name === "bash"));
         for (const p of r.content) if (p.type === "image") { const img = el("img"); img.src = `data:${p.mimeType};base64,${p.data}`; sec("Image", img); }
       } else if (!r) sec("Status", el("pre", "", "waiting…"));
     },
@@ -1146,6 +1168,25 @@ async function maybeSuggest() {
   };
   document.addEventListener("touchend", end);
   document.addEventListener("touchcancel", end);
+})();
+
+// ---------------------------------------------------------------- swipe keyboard away
+// With the composer focused, dragging down over the conversation dismisses the
+// keyboard (like the Claude app). The chat still scrolls with the finger.
+(function swipeKeyboard() {
+  let g = null;
+  $("scroller").addEventListener("touchstart", (e) => {
+    g = document.activeElement === input && e.touches.length === 1
+      ? { x0: e.touches[0].clientX, y0: e.touches[0].clientY } : null;
+  }, { passive: true });
+  $("scroller").addEventListener("touchmove", (e) => {
+    if (!g) return;
+    const dx = e.touches[0].clientX - g.x0, dy = e.touches[0].clientY - g.y0;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 12) { g = null; return; }
+    if (dy > 30) { input.blur(); g = null; }
+    else if (dy < -30) g = null; // scrolling the other way keeps the keyboard
+  }, { passive: true });
+  $("scroller").addEventListener("touchend", () => { g = null; }, { passive: true });
 })();
 
 // ---------------------------------------------------------------- swipe sheet down

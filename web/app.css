@@ -266,6 +266,12 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
 .tlabel { font: 600 10.5px var(--font); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 5px; }
 .tbody pre { margin: 0; font: 12px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 44vh; overflow-y: auto; }
 .tbody img { max-width: 100%; border-radius: 8px; }
+.trim-note { font: 11.5px var(--mono); color: var(--muted); margin-bottom: 4px; }
+/* Touch: no nested vertical scroll areas inside the chat, so a swipe that
+   starts on tool output or thinking always scrolls the conversation. */
+@media (pointer: coarse) {
+  .tbody pre, .think-body { max-height: none; overflow: visible; }
+}
 .more { font-size: 12.5px; font-weight: 550; color: var(--signal-text); margin-top: 7px; }
 .d-add { color: var(--ok); } .d-del { color: var(--danger); } .d-hunk { color: var(--muted); }
 
