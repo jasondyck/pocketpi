@@ -1005,6 +1005,68 @@ document.addEventListener("visibilitychange", () => {
   loadProjects();
 });
 
+// ---------------------------------------------------------------- swipe drawer
+// Swipe right anywhere to pull the drawer open (it tracks the finger), swipe
+// left to push it closed. Direction is locked after a few pixels so vertical
+// scrolling is untouched, and gestures that start on horizontally scrollable
+// content (code blocks, tables) are left alone.
+(function swipeDrawer() {
+  const drawer = $("drawer"), scrim = $("scrim");
+  const docked = () => matchMedia("(min-width: 960px)").matches;
+  const isOpen = () => document.body.classList.contains("drawer-open");
+  let g = null;
+  function scrollsX(node) {
+    for (let n = node; n && n !== document.body; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 2) {
+        const o = getComputedStyle(n).overflowX;
+        if (o === "auto" || o === "scroll") return true;
+      }
+    }
+    return false;
+  }
+  document.addEventListener("touchstart", (e) => {
+    g = null;
+    if (docked() || e.touches.length !== 1 || document.body.classList.contains("sheet-open")) return;
+    if (!isOpen() && scrollsX(e.target)) return;
+    const t = e.touches[0];
+    g = { mode: isOpen() ? "close" : "open", x0: t.clientX, y0: t.clientY, t0: performance.now(), w: drawer.offsetWidth, locked: false, x: 0, lastX: t.clientX, lastT: performance.now(), vx: 0 };
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!g) return;
+    const t = e.touches[0], dx = t.clientX - g.x0, dy = t.clientY - g.y0;
+    if (!g.locked) {
+      if (Math.hypot(dx, dy) < 9) return;
+      const horizontal = Math.abs(dx) > Math.abs(dy) * 1.25;
+      if (!horizontal || (g.mode === "open" ? dx < 0 : dx > 0)) { g = null; return; }
+      g.locked = true;
+      drawer.style.transition = scrim.style.transition = "none";
+      scrim.style.pointerEvents = "auto";
+      if (g.mode === "open") loadProjects();
+    }
+    e.preventDefault();
+    const now = performance.now();
+    g.vx = (t.clientX - g.lastX) / Math.max(1, now - g.lastT);
+    g.lastX = t.clientX; g.lastT = now;
+    g.x = g.mode === "open" ? Math.min(0, -g.w + dx) : Math.min(0, dx);
+    drawer.style.transform = `translateX(${g.x}px)`;
+    scrim.style.opacity = String(1 + g.x / g.w);
+  }, { passive: false });
+  const end = () => {
+    if (!g || !g.locked) { g = null; return; }
+    const shown = 1 + g.x / g.w; // 0 = closed, 1 = open
+    const open = g.vx > 0.35 ? true : g.vx < -0.35 ? false : shown > 0.4;
+    drawer.style.transition = scrim.style.transition = "";
+    document.body.classList.toggle("drawer-open", open);
+    requestAnimationFrame(() => {
+      drawer.style.transform = ""; scrim.style.opacity = ""; scrim.style.pointerEvents = "";
+    });
+    if (open) input.blur();
+    g = null;
+  };
+  document.addEventListener("touchend", end);
+  document.addEventListener("touchcancel", end);
+})();
+
 // ---------------------------------------------------------------- live updates
 // The server's build id changes on every deploy; reload into the new version
 // as soon as that won't throw away a draft or interrupt a stream.
