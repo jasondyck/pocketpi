@@ -63,7 +63,9 @@ simulator, run a local pocketpi and connect to `http://127.0.0.1:3457`
 ## TestFlight
 
 `gh workflow run ios.yml --ref master -f runner=macos-26 -f testflight=true`
-archives a signed build and uploads it to App Store Connect. Signing is Xcode's
-automatic cloud signing with the App Store Connect API key in the repo secrets
-`ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8`. The build number is the
+archives a signed build and uploads it to App Store Connect. It signs manually
+with an Apple Distribution certificate and the "pocketpi App Store" profile
+(secrets `DIST_P12`, `DIST_P12_PASSWORD`, `ASC_PROFILE`; both expire 2027-11),
+and uploads with the App Store Connect API key (`ASC_KEY_ID`, `ASC_ISSUER_ID`,
+`ASC_KEY_P8`). Automatic signing can't archive on CI without a registered device. The build number is the
 workflow's run number. Bump `MARKETING_VERSION` in project.yml for a new version.
