@@ -32,6 +32,9 @@ private struct ChatScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var session: ChatSession
     @State private var atBottom = true
+    /// Keep the end in view as the reply streams (off once scrolled away).
+    @State private var following = true
+    @State private var scrollPhase: ScrollPhase = .idle
     @State private var renaming = false
     @State private var newName = ""
 
@@ -64,7 +67,9 @@ private struct ChatScreen: View {
             }
             // The reason this app exists: the keyboard follows the finger down.
             .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
+            // Start at the end, but don't pin to it as the content grows: that
+            // fought a finger scrolling up while a reply streamed in.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .onScrollGeometryChange(for: Bool.self) { g in
                 // visibleRect leaves out the insets (the floating composer),
                 // so short chats and the bottom both count as "at the end".
@@ -72,13 +77,24 @@ private struct ChatScreen: View {
                     || g.contentSize.height <= g.visibleRect.height
             } action: { _, near in
                 atBottom = near
+                // Scrolled away by hand: stop following the reply.
+                if !near, scrollPhase != .idle { following = false }
             }
-            .onChange(of: session.transcript) {
-                if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            // Follow the reply like Messages: only while the person isn't
+            // touching the list, and again once they've come back to the end.
+            .onScrollPhaseChange { _, phase in
+                scrollPhase = phase
+                if phase == .idle, atBottom { following = true }
+            }
+            .onChange(of: session.transcript) { old, new in
+                // Sending a message brings the end back, even after scrolling up.
+                if new.items.count > old.items.count, case .user? = new.items.last?.kind { following = true }
+                if following, scrollPhase == .idle { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .overlay(alignment: .bottomTrailing) {
                 if !atBottom {
                     Button {
+                        following = true
                         withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                     } label: {
                         Image(systemName: "arrow.down")
