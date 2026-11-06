@@ -138,6 +138,18 @@ private struct ProjectsView: View {
         }
         .tag(Scope.project(p.path))
         .accessibilityIdentifier("project-" + Format.baseName(p.path))
+        .swipeActions(edge: .leading) {
+            if !p.pinned {
+                Button("Pin", systemImage: "pin") { act { try await $0.saveProject(path: p.path) } }
+                    .tint(.orange)
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(p.pinned ? "Unpin and hide" : "Hide", systemImage: "eye.slash", role: .destructive) {
+                if scope == .project(p.path) { scope = .all }
+                act { try await $0.hideProject(path: p.path) }
+            }
+        }
         .contextMenu {
             if !p.pinned {
                 Button("Pin", systemImage: "pin") { act { try await $0.saveProject(path: p.path) } }
@@ -193,6 +205,8 @@ private struct ChatsView: View {
     /// Show the detail column (iPhone): a new chat isn't a list selection.
     let showDetail: () -> Void
     @State private var search = ""
+    @State private var renaming: SessionInfo?
+    @State private var newName = ""
 
     private var project: String? {
         if case .project(let p) = scope { return p }
@@ -225,6 +239,18 @@ private struct ChatsView: View {
                 SessionRow(session: s, showProject: project == nil)
                     .tag(s.path)
                     .accessibilityIdentifier("chat-row")
+                    .swipeActions(edge: .trailing) {
+                        Button("Rename", systemImage: "pencil") {
+                            newName = s.displayTitle
+                            renaming = s
+                        }
+                    }
+                    .contextMenu {
+                        Button("Rename", systemImage: "pencil") {
+                            newName = s.displayTitle
+                            renaming = s
+                        }
+                    }
             }
             if visible.isEmpty, !model.loading, model.loadError == nil {
                 ContentUnavailableView("No chats", systemImage: "bubble.left.and.bubble.right",
@@ -234,6 +260,18 @@ private struct ChatsView: View {
         }
         .listStyle(.plain)
         .modifier(ChatsSearch(search: $search, newChat: newChatButton))
+        .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                guard let s = renaming, let client = model.client else { return }
+                let name = newName
+                Task {
+                    try? await client.renameSession(s, to: name)
+                    await model.refresh()
+                }
+            }
+        }
         .refreshable { await model.refresh() }
         .navigationTitle(project.map(model.projectName(for:)) ?? "All chats")
     }

@@ -141,6 +141,31 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func renamesFromTheList() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("hello")
+        try await waitFor("the reply") { !s.isStreaming && lastAssistantText(s) != nil }
+        let key = try #require(s.key)
+        s.leave()
+        try await client.close(key: key)
+        var info: SessionInfo?
+        for _ in 0..<40 {
+            info = try await client.sessions().first { $0.path == s.path && !$0.live }
+            if info != nil { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let closed = try #require(info)
+        try await client.renameSession(closed, to: "From the list")
+        var named: SessionInfo?
+        for _ in 0..<40 {
+            named = try await client.sessions().first { $0.path == closed.path }
+            if named?.displayTitle == "From the list", named?.live == false { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(named?.displayTitle == "From the list")
+        #expect(named?.live == false)
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

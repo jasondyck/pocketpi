@@ -112,14 +112,13 @@ private struct ChatScreen: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { Task { await session.rename(newName) } }
         }
-        .overlay(alignment: .top) {
-            if let t = session.toast {
-                Toast(text: t)
-                    .task {
-                        try? await Task.sleep(for: .seconds(3))
-                        if session.toast == t { session.toast = nil }
-                    }
-            }
+        .alert("Something went wrong", isPresented: Binding(
+            get: { session.problem != nil },
+            set: { if !$0 { session.problem = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(session.problem ?? "")
         }
     }
 
@@ -158,8 +157,10 @@ private struct ChatScreen: View {
             }
             .disabled(session.isStreaming || session.path == nil)
         } label: {
-            ContextRing(fraction: session.stats?.contextFraction ?? 0)
+            Image(systemName: "ellipsis")
         }
+        .accessibilityLabel("Chat options")
+        .accessibilityIdentifier("chat-menu")
     }
 }
 
@@ -167,12 +168,12 @@ private struct EmptyChat: View {
     let project: String
     let cwd: String
     var body: some View {
-        VStack(spacing: 6) {
-            Text("What should pi do?").font(.title2.weight(.semibold))
-            Text("\(project) · \(cwd)").font(.footnote.monospaced()).foregroundStyle(.secondary)
+        ContentUnavailableView {
+            Label("What should pi do?", systemImage: "terminal")
+        } description: {
+            Text("\(project) · \(cwd)").font(.footnote.monospaced())
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 120)
+        .padding(.top, 80)
     }
 }
 
@@ -212,36 +213,6 @@ private struct StatusBanner: View {
         case .idle, .connected:
             EmptyView()
         }
-    }
-}
-
-struct ContextRing: View {
-    let fraction: Double
-    var body: some View {
-        ZStack {
-            Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 2.5)
-            Circle()
-                .trim(from: 0, to: fraction)
-                .stroke(fraction > 0.85 ? Theme.danger : fraction > 0.65 ? .orange : Theme.signalText,
-                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
-        .frame(width: 20, height: 20)
-        .accessibilityLabel("Chat settings, context \(Int(fraction * 100)) percent")
-    }
-}
-
-private struct Toast: View {
-    let text: String
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var body: some View {
-        Text(text)
-            .font(.footnote)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .glass(in: Capsule())
-            .padding(.top, 8)
-            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
     }
 }
 
@@ -295,6 +266,35 @@ private struct ExtensionSheet: View {
 }
 
 // MARK: - composer
+
+/// iOS 26: the system's prominent glass button, tinted lime (the one
+/// primary action gets the colour, on its background). iOS 18: a lime circle.
+private struct SendButtonStyle: ViewModifier {
+    let ready: Bool
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) {
+            content
+                .foregroundStyle(ready ? Theme.signalInk : .secondary)
+                .frame(width: 22, height: 22)
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.circle)
+                .tint(Theme.signal)
+        } else {
+            fallback(content)
+        }
+        #else
+        fallback(content)
+        #endif
+    }
+
+    private func fallback(_ content: Content) -> some View {
+        content
+            .frame(width: 34, height: 34)
+            .background(ready ? Theme.signal : Theme.surface, in: Circle())
+            .foregroundStyle(Theme.signalInk)
+    }
+}
 
 private struct FloatingBar: ViewModifier {
     func body(content: Content) -> some View {
@@ -377,12 +377,9 @@ private struct Composer: View {
             .accessibilityLabel("Stop")
         } else {
             Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.callout.weight(.bold))
-                    .frame(width: 34, height: 34)
-                    .background(hasText || !images.isEmpty ? Theme.signal : Theme.surface, in: Circle())
-                    .foregroundStyle(Theme.signalInk)
+                Image(systemName: "arrow.up").font(.callout.weight(.bold))
             }
+            .modifier(SendButtonStyle(ready: hasText || !images.isEmpty))
             .disabled(sending || (!hasText && images.isEmpty))
             .accessibilityLabel("Send")
         }
@@ -399,7 +396,7 @@ private struct Composer: View {
             do { try await session.send(text, images: imgs) } catch {
                 if session.composer.isEmpty { session.composer = text }
                 images = imgs
-                session.toast = error.localizedDescription
+                session.problem = "Not sent: " + error.localizedDescription
             }
         }
     }

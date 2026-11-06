@@ -42,7 +42,8 @@ public final class ChatSession {
     /// The message box. Here rather than in the view because pi can set it
     /// (set_editor_text) and stop() puts queued messages back into it.
     public var composer = ""
-    public var toast: String?
+    /// An error to show as an alert (send failed, a command failed, pi said so).
+    public var problem: String?
     /// Called after each turn, so lists elsewhere can refresh.
     @ObservationIgnored public var onTurnFinished: (@MainActor () -> Void)?
 
@@ -180,8 +181,8 @@ public final class ChatSession {
                 pendingRequest = r
             case .setComposer(let t):
                 composer = t
-            case .toast(let t, _):
-                toast = t
+            case .problem(let t):
+                problem = t
             case .thinkingLevelChanged(let l):
                 state?.thinkingLevel = l
             case .sessionNameChanged(let n):
@@ -284,7 +285,7 @@ public final class ChatSession {
             }
             try await command(["type": "abort"])
         } catch {
-            toast = error.localizedDescription
+            problem = error.localizedDescription
         }
     }
 
@@ -302,24 +303,24 @@ public final class ChatSession {
         case .value(let v): c["value"] = .string(v)
         case .cancelled: c["cancelled"] = true
         }
-        do { try await command(.object(c)) } catch { toast = error.localizedDescription }
+        do { try await command(.object(c)) } catch { problem = error.localizedDescription }
     }
 
     public func setThinkingLevel(_ level: String) async {
         do {
             try await command(["type": "set_thinking_level", "level": .string(level)])
             state?.thinkingLevel = level
-        } catch { toast = error.localizedDescription }
+        } catch { problem = error.localizedDescription }
     }
 
     public func rename(_ name: String) async {
         do {
             try await command(["type": "set_session_name", "name": .string(name)])
             state?.sessionName = name
-        } catch { toast = error.localizedDescription }
+        } catch { problem = error.localizedDescription }
     }
 
     public func compact() async {
-        do { try await command(["type": "compact"]) } catch { toast = error.localizedDescription }
+        do { try await command(["type": "compact"]) } catch { problem = error.localizedDescription }
     }
 }

@@ -47,6 +47,11 @@ final class LaunchTests: XCTestCase {
                       || app.textFields["composer"].waitForExistence(timeout: 2))
         sleep(1)
         keep(app, "chat")
+
+        // The chat's "…" menu (context, thinking, rename, compact).
+        app.descendants(matching: .any)["chat-menu"].firstMatch.tap()
+        sleep(1)
+        keep(app, "chat-menu")
     }
 
     @MainActor

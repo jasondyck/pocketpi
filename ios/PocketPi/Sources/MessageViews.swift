@@ -87,6 +87,7 @@ private struct AssistantMessageView: View {
             let text = message.plainText
             if !text.isEmpty {
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+                ShareLink(item: text)
             }
         }
     }
@@ -158,43 +159,40 @@ struct ToolCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { withAnimation(.snappy) { open.toggle() } } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: icon).font(.caption).frame(width: 16)
-                    Text(name).font(.footnote.monospaced().weight(.semibold))
-                    Text(summary).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    status
+        // The system's expand control, like the Thought rows.
+        DisclosureGroup(isExpanded: $open) {
+            VStack(alignment: .leading, spacing: 8) {
+                if name != "bash", case .object(let o) = arguments, !o.isEmpty {
+                    Text(arguments.compactText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(6)
+                } else if name == "bash" {
+                    Text(summary).font(.caption.monospaced()).textSelection(.enabled)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if open {
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    if name != "bash", case .object(let o) = arguments, !o.isEmpty {
-                        Text(arguments.compactText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(6)
-                    } else if name == "bash" {
-                        Text(summary).font(.caption.monospaced()).textSelection(.enabled)
-                    }
-                    if let diff = result?.diff {
-                        DiffView(diff: diff)
-                    } else if let out = (result ?? partial)?.text, !out.isEmpty {
-                        let long = out.count > 4000 && !showAll
-                        Text(long ? "…" + String(out.suffix(4000)) : out)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(result?.isError == true ? Theme.danger : .primary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        if long { Button("Show all \(out.count) characters") { showAll = true }.font(.caption) }
-                    }
+                if let diff = result?.diff {
+                    DiffView(diff: diff)
+                } else if let out = (result ?? partial)?.text, !out.isEmpty {
+                    let long = out.count > 4000 && !showAll
+                    Text(long ? "…" + String(out.suffix(4000)) : out)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(result?.isError == true ? Theme.danger : .primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if long { Button("Show all \(out.count) characters") { showAll = true }.font(.caption) }
                 }
-                .padding(10)
             }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.caption).frame(width: 16)
+                Text(name).font(.footnote.monospaced().weight(.semibold))
+                Text(summary).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                status
+            }
+            .foregroundStyle(.primary)
         }
+        .tint(.secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(Theme.code, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
     }

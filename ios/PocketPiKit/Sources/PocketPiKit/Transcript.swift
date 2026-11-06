@@ -23,7 +23,8 @@ public enum TranscriptEffect: Sendable, Equatable {
     case extensionRequest(ExtensionRequest)
     /// Put this in the composer (extension set_editor_text).
     case setComposer(String)
-    case toast(String, isError: Bool)
+    /// Something went wrong that the person should see now (an alert).
+    case problem(String)
     case thinkingLevelChanged(String)
     case sessionNameChanged(String?)
     /// Compaction finished; stats are stale.
@@ -178,7 +179,7 @@ public struct Transcript: Sendable, Equatable {
                 push(.note("Context compacted · \(Format.tokens(r["tokensBefore"]?.int)) → \(Format.tokens(r["estimatedTokensAfter"]?.int))"))
                 return [.statsStale]
             }
-            if let e = ev["errorMessage"]?.string { return [.toast("Compaction failed: \(e)", isError: true)] }
+            if let e = ev["errorMessage"]?.string { return [.problem("Compaction failed: \(e)")] }
         case "auto_retry_start":
             let n = ev["attempt"]?.int.map(String.init) ?? "?"
             let of = ev["maxAttempts"]?.int.map(String.init) ?? "?"
@@ -192,7 +193,7 @@ public struct Transcript: Sendable, Equatable {
         case "extension_ui_request":
             return extensionRequest(ev)
         case "extension_error":
-            return [.toast("Extension error: \(ev["error"]?.string ?? "")", isError: true)]
+            return [.problem("Extension error: \(ev["error"]?.string ?? "")")]
         default:
             break
         }
@@ -270,11 +271,16 @@ public struct Transcript: Sendable, Equatable {
         }
     }
 
-    private func extensionRequest(_ ev: JSONValue) -> [TranscriptEffect] {
+    private mutating func extensionRequest(_ ev: JSONValue) -> [TranscriptEffect] {
         let method = ev["method"]?.string ?? ""
         switch method {
         case "notify":
-            return [.toast(ev["message"]?.string ?? "", isError: ev["notifyType"]?.string == "error")]
+            // Errors are alerts; anything else is a line in the transcript,
+            // like the system lines in Messages.
+            let msg = ev["message"]?.string ?? ""
+            if ev["notifyType"]?.string == "error" { return [.problem(msg)] }
+            if !msg.isEmpty { push(.note(msg)) }
+            return []
         case "set_editor_text":
             return [.setComposer(ev["text"]?.string ?? "")]
         default:

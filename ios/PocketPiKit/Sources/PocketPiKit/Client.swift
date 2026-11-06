@@ -159,6 +159,15 @@ public final class PocketPiClient: Sendable {
         return r["data"] ?? .null
     }
 
+    /// Rename a chat from the list. Opens (or joins) its pi to set the name,
+    /// and closes it again only if it wasn't already running, so a chat that's
+    /// open somewhere else keeps going.
+    public func renameSession(_ s: SessionInfo, to name: String) async throws {
+        let key = try await open(path: s.path).key
+        _ = try await command(key: key, ["type": "set_session_name", "name": .string(name)])
+        if !s.live { try? await close(key: key) }
+    }
+
     /// The chat's events. The first is always `pocketpi_hello`.
     public func events(key: String) -> AsyncThrowingStream<JSONValue, Error> {
         do {
