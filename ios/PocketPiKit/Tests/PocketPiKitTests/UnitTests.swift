@@ -219,3 +219,11 @@ import Testing
         #expect(NotificationLink.hexToken(Data([0x0f, 0xa0, 0xff])) == "0fa0ff")
     }
 }
+
+@Test func providerLabels() {
+    #expect(ModelInfo.providerLabel("opencode-go") == "OpenCode Go")
+    #expect(ModelInfo.providerLabel("openai") == "OpenAI")
+    #expect(ModelInfo.providerLabel("deepseek") == "DeepSeek")
+    #expect(ModelInfo.providerLabel("my-proxy_v2") == "My Proxy V2")
+    #expect(ModelInfo.providerLabel("fake") == "Fake")
+}

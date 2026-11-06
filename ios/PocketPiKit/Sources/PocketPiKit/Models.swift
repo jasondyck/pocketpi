@@ -106,6 +106,27 @@ public struct ModelInfo: Sendable, Hashable, Identifiable {
         vision = v["input"]?.array?.contains(.string("image")) ?? false
     }
 
+    /// The provider as people write it: known ones by their own spelling,
+    /// others with each word capitalised ("my-proxy" → "My Proxy").
+    public var providerLabel: String { Self.providerLabel(provider) }
+
+    public static func providerLabel(_ p: String) -> String {
+        let known: [String: String] = [
+            "anthropic": "Anthropic", "openai": "OpenAI", "openai-codex": "OpenAI Codex",
+            "google": "Google", "google-vertex": "Google Vertex", "gemini": "Gemini",
+            "deepseek": "DeepSeek", "xai": "xAI", "mistral": "Mistral", "groq": "Groq",
+            "openrouter": "OpenRouter", "opencode": "OpenCode", "opencode-go": "OpenCode Go",
+            "github-copilot": "GitHub Copilot", "amazon-bedrock": "Amazon Bedrock",
+            "azure-openai": "Azure OpenAI", "cerebras": "Cerebras", "zai": "Z.ai",
+            "moonshot": "Moonshot", "minimax": "MiniMax", "ollama": "Ollama",
+            "lmstudio": "LM Studio", "huggingface": "Hugging Face", "vercel-ai-gateway": "Vercel AI Gateway",
+        ]
+        if let k = known[p.lowercased()] { return k }
+        return p.split(whereSeparator: { "-_ ".contains($0) })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
     /// What the picker shows: the model's name, else the last part of its id.
     public var label: String {
         if let n = name, !n.isEmpty { return n }

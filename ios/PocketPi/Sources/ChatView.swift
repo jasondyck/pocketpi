@@ -286,7 +286,7 @@ private struct ModelButton: View {
                 modelPicker(session.models)
             } else {
                 ForEach(providers, id: \.self) { p in
-                    Menu(p) { modelPicker(session.models.filter { $0.provider == p }) }
+                    Menu(ModelInfo.providerLabel(p)) { modelPicker(session.models.filter { $0.provider == p }) }
                 }
             }
             if session.currentModel?.reasoning == true, session.thinkingLevels.count > 1 {
