@@ -544,7 +544,8 @@ private struct ApprovalView: View {
                         Text(run.headline).font(.title2.weight(.semibold))
                         Text(run.workflowName + " · " + Self.started(run.trigger))
                             .font(.footnote).foregroundStyle(.secondary)
-                        MarkdownView(text: stage.prompt ?? "Continue this run?")
+                        // The text without its first line, which is the title above.
+                        MarkdownView(text: Self.body(of: stage.prompt ?? "", headline: run.headline))
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -559,12 +560,13 @@ private struct ApprovalView: View {
                             .buttonStyle(.borderedProminent)
                             .disabled(busy)
                             .accessibilityIdentifier("approve")
+                            // On the button, so iOS 26 points the confirmation at it.
+                            .confirmationDialog(run.headline, isPresented: $confirmApprove, titleVisibility: .visible) {
+                                Button("Approve") { answer(run, true) }
+                            } message: {
+                                Text("The workflow carries on, for example posting the comment or publishing.")
+                            }
                     }
-                }
-                .confirmationDialog(run.headline, isPresented: $confirmApprove, titleVisibility: .visible) {
-                    Button("Approve") { answer(run, true) }
-                } message: {
-                    Text("The workflow carries on, for example posting the comment or publishing.")
                 }
             } else {
                 ContentUnavailableView("Already answered", systemImage: "checkmark.seal",
@@ -573,6 +575,18 @@ private struct ApprovalView: View {
         }
         .navigationTitle("Approval")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The approval text minus a first line that just repeats the headline.
+    static func body(of prompt: String, headline: String) -> String {
+        var lines = prompt.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+        if let first = lines.first,
+           first.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+               .trimmingCharacters(in: .whitespaces) == headline {
+            lines.removeFirst()
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// How the run began, in words.
