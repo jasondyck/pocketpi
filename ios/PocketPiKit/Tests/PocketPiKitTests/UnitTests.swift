@@ -274,3 +274,10 @@ import Testing
     #expect(run.headline == "Post this review on PR #89?")
     #expect(run.verdict == "changes requested")
 }
+
+@Test func approvalHeadlineSkipsTheVerdict() throws {
+    let v = try JSONValue.parse(#"{"id":"r","workflow_id":"w","workflow_name":"x","status":"waiting","stages":[{"id":"a","name":"Post it?","kind":"approval","status":"waiting","prompt":"**Verdict: pass**\n\nNo blocking issues."}]}"#)
+    let run = try #require(RunInfo(v))
+    #expect(run.headline == "No blocking issues.")
+    #expect(run.verdict == "pass")
+}

@@ -24,7 +24,7 @@ cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-review.json" <<JSON
  "triggers":[{"type":"manual"}],"inputs":[],"improve":"off",
  "stages":[{"id":"review","type":"shell","name":"Review","needs":[],"run":"echo reviewed"},
            {"id":"approve","type":"approval","name":"Post review on #92?","needs":["review"],
-            "prompt":"**Verdict: changes requested**\\n\\n1. \`src/record.rs:88\` drops the last audio frame.\\n2. CHANGELOG has no line for the new flag."},
+            "prompt":"Post this review on PR #92?\\n\\n**Verdict: changes requested**\\n\\n1. \`src/record.rs:88\` drops the last audio frame.\\n2. CHANGELOG has no line for the new flag."},
            {"id":"comment","type":"shell","name":"Comment","needs":["approve"],"run":"echo posted"}]}
 JSON
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \

@@ -128,7 +128,8 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
         for line in (stage.prompt ?? "").split(separator: "\n") {
             let clean = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
                 .trimmingCharacters(in: .whitespaces)
-            if !clean.isEmpty { return clean }
+            // The verdict has its own label; the headline is what it's about.
+            if !clean.isEmpty, !clean.lowercased().hasPrefix("verdict:") { return clean }
         }
         return stage.name
     }

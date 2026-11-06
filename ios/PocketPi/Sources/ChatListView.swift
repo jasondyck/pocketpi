@@ -516,10 +516,13 @@ private struct VerdictLabel: View {
     let verdict: String
     private var pass: Bool { verdict.lowercased().hasPrefix("pass") }
     var body: some View {
-        Label(verdict.prefix(1).uppercased() + verdict.dropFirst(),
-              systemImage: pass ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(pass ? Color.green : Color.orange)
+        HStack(spacing: 4) {
+            Image(systemName: pass ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+            Text(verdict.prefix(1).uppercased() + verdict.dropFirst())
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(pass ? Color.green : Color.orange)
+        .accessibilityElement(children: .combine)
     }
 }
 
