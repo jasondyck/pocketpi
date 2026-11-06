@@ -17,6 +17,16 @@ mkdir -p "$SCRATCH/sessions"
 mkdir -p "$SCRATCH/home/.pi/agent"
 echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
 for p in clipt natter canopy lantern-keep; do mkdir -p "$SCRATCH/home/projects/$p"; done
+# A workflow that stops at an approval, for the Approvals screen.
+mkdir -p "$SCRATCH/home/.config/pocketpi/workflows"
+cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-review.json" <<JSON
+{"id":"clipt-review","name":"clipt: PR check-in","project":"$SCRATCH/home/projects/clipt","worktree":false,"enabled":true,
+ "triggers":[{"type":"manual"}],"inputs":[],"improve":"off",
+ "stages":[{"id":"review","type":"shell","name":"Review","needs":[],"run":"echo reviewed"},
+           {"id":"approve","type":"approval","name":"Post review on #92?","needs":["review"],
+            "prompt":"**Verdict: changes requested**\\n\\n1. \`src/record.rs:88\` drops the last audio frame.\\n2. CHANGELOG has no line for the new flag."},
+           {"id":"comment","type":"shell","name":"Comment","needs":["approve"],"run":"echo posted"}]}
+JSON
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
   PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
   POCKETPI_PORT="$PORT" nohup "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &
@@ -35,6 +45,7 @@ chat() {
   post "/api/s/$key/cmd" "{\"type\":\"prompt\",\"message\":\"$2\"}" >/dev/null
   sleep 1
 }
+post /api/workflows/clipt-review/run '{}' >/dev/null
 chat "$P/clipt" "Why does the region picker flicker on the second monitor?"
 chat "$P/clipt" "Add a tool call to check the changelog"
 chat "$P/natter" "Summarize what changed in the SFU since Monday"

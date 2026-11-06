@@ -113,6 +113,19 @@ public final class PocketPiClient: Sendable {
         try await get("/api/models/enabled", as: JSONValue.self)["enabled"]?.array?.compactMap(\.string) ?? []
     }
 
+    /// Recent workflow runs, newest first (the server keeps the last 50).
+    public func runs() async throws -> [RunInfo] {
+        try await get("/api/runs", as: JSONValue.self)["runs"]?.array?.compactMap(RunInfo.init) ?? []
+    }
+
+    /// Answer a run's approval stage. Approving lets the run go on (for a PR
+    /// review: post the comment); rejecting stops it there.
+    public func answer(run: String, stage: String, approve: Bool, note: String = "") async throws {
+        _ = try await post("/api/runs/\(run)/approve",
+                           ["stage": .string(stage), "approve": .bool(approve), "note": .string(note)],
+                           as: JSONValue.self)
+    }
+
     /// The archived chats (left out of `sessions()`).
     public func archivedSessions() async throws -> [SessionInfo] {
         try await get("/api/sessions?archived=1", as: SessionsResponse.self).sessions

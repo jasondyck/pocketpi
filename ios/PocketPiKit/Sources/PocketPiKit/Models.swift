@@ -84,6 +84,51 @@ public struct ChatState: Sendable, Equatable {
     }
 }
 
+/// A workflow run (`/api/runs`): the parts the Approvals screen uses.
+public struct RunInfo: Sendable, Identifiable, Equatable {
+    public struct Stage: Sendable, Equatable {
+        public var id: String
+        public var name: String
+        public var kind: String
+        public var status: String
+        /// For an approval: the question and what it's about (Markdown).
+        public var prompt: String?
+        public var summary: String
+    }
+
+    public var id: String
+    public var workflowId: String
+    public var workflowName: String
+    public var status: String
+    public var trigger: String
+    /// Milliseconds since 1970.
+    public var created: UInt64
+    public var stages: [Stage]
+
+    public init?(_ v: JSONValue) {
+        guard let id = v["id"]?.string, let wf = v["workflow_id"]?.string else { return nil }
+        self.id = id
+        workflowId = wf
+        workflowName = v["workflow_name"]?.string ?? wf
+        status = v["status"]?.string ?? ""
+        trigger = v["trigger"]?.string ?? ""
+        created = UInt64(v["created"]?.double ?? 0)
+        stages = (v["stages"]?.array ?? []).compactMap { s in
+            guard let id = s["id"]?.string else { return nil }
+            return Stage(id: id, name: s["name"]?.string ?? id, kind: s["kind"]?.string ?? "",
+                         status: s["status"]?.string ?? "", prompt: s["prompt"]?.string,
+                         summary: s["summary"]?.string ?? "")
+        }
+    }
+
+    /// The approval this run is waiting for, if it is.
+    public var waitingApproval: Stage? {
+        stages.first { $0.kind == "approval" && $0.status == "waiting" }
+    }
+
+    public var createdDate: Date { Date(timeIntervalSince1970: Double(created) / 1000) }
+}
+
 /// A model pi can use (`get_available_models`): only the ones with a key set
 /// up in pi.
 public struct ModelInfo: Sendable, Hashable, Identifiable {

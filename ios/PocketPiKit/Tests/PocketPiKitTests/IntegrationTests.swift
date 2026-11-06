@@ -204,6 +204,33 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func answersApprovals() async throws {
+        // ios/test-linux.sh writes the "approve-test" workflow: shell, approval, shell.
+        for approve in [true, false] {
+            let started: JSONValue = try await client.post("/api/workflows/approve-test/run", [:])
+            let id = try #require(started["run_id"]?.string)
+            var run: RunInfo?
+            for _ in 0..<50 {
+                run = try await client.runs().first { $0.id == id }
+                if run?.waitingApproval != nil { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let stage = try #require(run?.waitingApproval)
+            #expect(stage.prompt == "Ship it?")
+            #expect(run?.workflowName == "Approve test")
+            try await client.answer(run: id, stage: stage.id, approve: approve)
+            for _ in 0..<50 {
+                run = try await client.runs().first { $0.id == id }
+                if run?.status == "succeeded" || run?.status == "failed" { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            #expect(run?.status == (approve ? "succeeded" : "failed"))
+        }
+        await #expect(throws: PocketPiError.self) {
+            try await client.answer(run: "nope", stage: "ask", approve: true)
+        }
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

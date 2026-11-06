@@ -6,6 +6,7 @@ enum Scope: Hashable {
     case all
     case project(String)
     case archived
+    case approvals
 }
 
 /// What the detail column shows.
@@ -13,6 +14,8 @@ enum ChatTarget: Hashable {
     case chat(path: String, cwd: String)
     /// A chat that doesn't exist yet; the id makes each "new chat" distinct.
     case new(cwd: String, id: UUID)
+    /// A workflow run waiting for an approval.
+    case approval(runId: String)
 }
 
 /// Apple's pattern for a list of containers (Mail's Mailboxes): a three-column
@@ -30,7 +33,9 @@ struct ChatListView: View {
         NavigationSplitView(preferredCompactColumn: $column) {
             ProjectsView(scope: $scope)
         } content: {
-            if let scope {
+            if scope == .approvals {
+                ApprovalsList(target: $target)
+            } else if let scope {
                 ChatsView(scope: scope, target: $target) { column = .detail }
             } else {
                 ContentUnavailableView("Pick a project", systemImage: "folder")
@@ -42,6 +47,12 @@ struct ChatListView: View {
                     ChatView(path: path, cwd: cwd).id(target)
                 case .new(let cwd, _):
                     ChatView(newIn: cwd).id(target)
+                case .approval(let runId):
+                    ApprovalView(runId: runId) {
+                        target = nil
+                        column = .content
+                    }
+                    .id(target)
                 case nil:
                     ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
                                            description: Text("Pick a chat or start one."))
@@ -60,8 +71,11 @@ struct ChatListView: View {
                 scope = scope ?? .all
                 target = .chat(path: path, cwd: cwd)
                 column = .detail
-            case .run:
-                break // workflow runs have no screen in the app yet
+            case .run(let id):
+                await model.refresh()
+                scope = .approvals
+                target = .approval(runId: id)
+                column = .detail
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -98,6 +112,12 @@ private struct ProjectsView: View {
     var body: some View {
         List(selection: $scope) {
             Section {
+                // The lime dot: something is waiting for you.
+                ScopeRow(title: "Approvals", count: model.approvals.count, live: !model.approvals.isEmpty) {
+                    Image(systemName: "checkmark.seal")
+                }
+                .tag(Scope.approvals)
+                .accessibilityIdentifier("project-approvals")
                 ScopeRow(title: "All chats", count: model.sessions.count,
                          live: model.sessions.contains(where: \.streaming)) {
                     Image(systemName: "tray.full")
@@ -435,5 +455,112 @@ private struct NewChatButton: View {
     private func begin(_ cwd: String) {
         model.lastCwd = cwd
         start(cwd)
+    }
+}
+
+// MARK: - approvals
+
+/// Workflow runs waiting for you (a PR review to post, a release to publish).
+private struct ApprovalsList: View {
+    @Environment(AppModel.self) private var model
+    @Binding var target: ChatTarget?
+
+    private var selection: Binding<String?> {
+        Binding(
+            get: { if case .approval(let id) = target { return id } else { return nil } },
+            set: { id in target = id.map { .approval(runId: $0) } })
+    }
+
+    var body: some View {
+        List(selection: selection) {
+            ForEach(model.approvals) { run in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(run.workflowName).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(run.waitingApproval?.name ?? "")
+                        Text(run.createdDate, format: .relative(presentation: .named))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .combine)
+                .tag(run.id)
+                .accessibilityIdentifier("approval-row")
+            }
+            if model.approvals.isEmpty {
+                ContentUnavailableView("Nothing to approve", systemImage: "checkmark.seal",
+                                       description: Text("Workflows that need your OK show up here."))
+                    .listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.plain)
+        .refreshable { await model.refresh() }
+        .navigationTitle("Approvals")
+        // Runs move on their own (and other devices answer too): keep fresh.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                await model.refresh()
+            }
+        }
+    }
+}
+
+/// One approval: what the workflow wants to do, in full, and the answer.
+private struct ApprovalView: View {
+    @Environment(AppModel.self) private var model
+    let runId: String
+    let done: () -> Void
+    @State private var busy = false
+    @State private var confirmApprove = false
+
+    private var run: RunInfo? { model.approvals.first { $0.id == runId } }
+
+    var body: some View {
+        Group {
+            if let run, let stage = run.waitingApproval {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(stage.name).font(.title2.weight(.semibold))
+                        Text(run.workflowName + " · started " + (run.trigger == "agent" ? "by pi" : "by " + run.trigger))
+                            .font(.footnote).foregroundStyle(.secondary)
+                        MarkdownView(text: stage.prompt ?? "Continue this run?")
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Reject", role: .destructive) { answer(run, false) }
+                            .disabled(busy)
+                    }
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Approve") { confirmApprove = true }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(busy)
+                            .accessibilityIdentifier("approve")
+                    }
+                }
+                .confirmationDialog("Approve “\(stage.name)”?", isPresented: $confirmApprove, titleVisibility: .visible) {
+                    Button("Approve") { answer(run, true) }
+                } message: {
+                    Text("The workflow carries on, for example posting the comment or publishing.")
+                }
+            } else {
+                ContentUnavailableView("Already answered", systemImage: "checkmark.seal",
+                                       description: Text("This run isn't waiting any more."))
+            }
+        }
+        .navigationTitle("Approval")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func answer(_ run: RunInfo, _ approve: Bool) {
+        busy = true
+        Task {
+            if await model.answer(run, approve: approve) { done() }
+            busy = false
+        }
     }
 }

@@ -27,6 +27,14 @@ if [ "${1:-}" != "--unit" ]; then
   cargo build --release --quiet
   mkdir -p "$SCRATCH/home/project" "$SCRATCH/sessions" "$SCRATCH/home/.config/pocketpi/apns"
   mkdir -p "$SCRATCH/home/.pi/agent"
+  mkdir -p "$SCRATCH/home/.config/pocketpi/workflows"
+  cat > "$SCRATCH/home/.config/pocketpi/workflows/approve-test.json" <<JSON
+{"id":"approve-test","name":"Approve test","project":"$SCRATCH/home/project","worktree":false,"enabled":true,
+ "triggers":[{"type":"manual"}],"inputs":[],"improve":"off",
+ "stages":[{"id":"prep","type":"shell","name":"Prep","needs":[],"run":"echo ready"},
+           {"id":"ask","type":"approval","name":"Ship?","needs":["prep"],"prompt":"Ship it?"},
+           {"id":"ship","type":"shell","name":"Ship","needs":["ask"],"run":"echo shipped"}]}
+JSON
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # A throwaway APNs key, so device registration can be tested. Nothing in the
   # tests makes the server send a notification to Apple.

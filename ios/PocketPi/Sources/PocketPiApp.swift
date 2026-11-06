@@ -55,6 +55,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// In the foreground too: the server only notifies for things worth it.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
                                             willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        // Something changed on the server (an approval, a finished run).
+        await MainActor.run { Task { await self.model.refresh() } }
         [.banner, .list, .sound]
     }
 
@@ -77,6 +79,8 @@ final class AppModel {
     private(set) var projects: [Project] = []
     private(set) var sessions: [SessionInfo] = []
     private(set) var archived: [SessionInfo] = []
+    /// Workflow runs waiting for an approval, newest first.
+    private(set) var approvals: [RunInfo] = []
     private(set) var home: String?
     private(set) var loadError: String?
     /// An action that failed (archive), shown as an alert.
@@ -115,6 +119,7 @@ final class AppModel {
         projects = []
         sessions = []
         archived = []
+        approvals = []
     }
 
     // MARK: - notifications
@@ -157,7 +162,9 @@ final class AppModel {
             async let p = client.projects()
             async let s = client.sessions()
             async let a = client.archivedSessions()
-            let (pr, ss, aa) = try await (p, s, a)
+            async let r = client.runs()
+            let (pr, ss, aa, rr) = try await (p, s, a, r)
+            approvals = rr.filter { $0.waitingApproval != nil }
             projects = pr.projects
             home = pr.home
             sessions = ss
@@ -186,6 +193,21 @@ final class AppModel {
             problem = (on ? "Couldn't archive: " : "Couldn't unarchive: ") + error.localizedDescription
         }
         await refresh()
+    }
+
+    /// Approve or reject a run's waiting stage; the list updates at once.
+    func answer(_ run: RunInfo, approve: Bool) async -> Bool {
+        guard let client, let stage = run.waitingApproval else { return false }
+        do {
+            try await client.answer(run: run.id, stage: stage.id, approve: approve)
+            approvals.removeAll { $0.id == run.id }
+            await refresh()
+            return true
+        } catch {
+            problem = (approve ? "Couldn't approve: " : "Couldn't reject: ") + error.localizedDescription
+            await refresh()
+            return false
+        }
     }
 
     func projectName(for path: String) -> String {

@@ -44,6 +44,18 @@ final class LaunchTests: XCTestCase {
         let natter = app.descendants(matching: .any)["project-natter"].firstMatch
         XCTAssertTrue(natter.waitForExistence(timeout: 5))
         keep(app, "projects")
+
+        // Approvals: the waiting run and its review text.
+        app.descendants(matching: .any)["project-approvals"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Approvals"].waitForExistence(timeout: 5))
+        keep(app, "approvals")
+        app.descendants(matching: .any)["approval-row"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["approve"].waitForExistence(timeout: 5))
+        keep(app, "approval")
+        app.navigationBars["Approval"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Approvals"].waitForExistence(timeout: 5))
+        app.navigationBars["Approvals"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(natter.waitForExistence(timeout: 5))
         natter.tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
         keep(app, "project")
