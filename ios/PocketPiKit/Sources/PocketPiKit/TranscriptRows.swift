@@ -134,7 +134,8 @@ public enum ActivitySummary {
         } else {
             line = parts.removeFirst()
             if !parts.isEmpty { line += ", " + parts.joined(separator: ", ") }
-            if thoughts > 0 { line += " · " + thought }
+            // History has no thinking times; a bare "· thought" says nothing.
+            if seconds > 0 { line += " · " + thought }
         }
         return line.prefix(1).uppercased() + line.dropFirst()
     }

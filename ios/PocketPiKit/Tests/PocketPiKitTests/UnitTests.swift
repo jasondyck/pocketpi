@@ -254,7 +254,7 @@ import Testing
     guard case .activity(_, let steps, let live) = rows[1] else { Issue.record("one activity row"); return }
     #expect(steps.count == 5)
     #expect(!live)
-    #expect(ActivitySummary.text(steps) == "Ran 2 commands, read 1 file · thought")
+    #expect(ActivitySummary.text(steps) == "Ran 2 commands, read 1 file")
     guard case .text(_, let m) = rows[2] else { Issue.record("then the text"); return }
     #expect(m.plainText == "Do the audio plan.")
 }
