@@ -233,19 +233,52 @@ private struct ChatsView: View {
             }
         }
         .listStyle(.plain)
-        // Always shown: an auto-hiding search field collapses and re-expands
-        // with the large title during the back swipe to Projects.
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+        .modifier(ChatsSearch(search: $search, newChat: newChatButton))
         .refreshable { await model.refresh() }
         .navigationTitle(project.map(model.projectName(for:)) ?? "All chats")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NewChatButton(project: project) { cwd in
-                    target = .new(cwd: cwd, id: UUID())
-                    showDetail()
-                }
-            }
+    }
+
+    private var newChatButton: some View {
+        NewChatButton(project: project) { cwd in
+            target = .new(cwd: cwd, id: UUID())
+            showDetail()
         }
+    }
+}
+
+/// iOS 26: search and new chat in the bottom toolbar, like Mail. Search sits
+/// as a button that expands when tapped. A search field in the navigation bar
+/// stays behind (cross-fades) while the page slides during the back swipe;
+/// the bottom toolbar moves with the page. iOS 18: the field under the title.
+private struct ChatsSearch<NewChat: View>: ViewModifier {
+    @Binding var search: String
+    let newChat: NewChat
+
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) {
+            content
+                .searchable(text: $search)
+                .searchToolbarBehavior(.minimize)
+                .toolbar {
+                    DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) { newChat }
+                }
+        } else {
+            fallback(content)
+        }
+        #else
+        fallback(content)
+        #endif
+    }
+
+    private func fallback(_ content: Content) -> some View {
+        content
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { newChat }
+            }
     }
 }
 
