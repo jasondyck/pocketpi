@@ -1,8 +1,8 @@
 import XCTest
 
 /// Launches the app and keeps screenshots for a person to look at (the CI job
-/// exports them). With POCKETPI_UITEST_URL set, also connects to that server
-/// and opens a new chat.
+/// exports them). With POCKETPI_UITEST_URL set (ios/ui-test-server.sh), also
+/// connects to that server, opens the side menu, picks a project and a chat.
 final class LaunchTests: XCTestCase {
     @MainActor
     func testConnectScreen() throws {
@@ -19,6 +19,22 @@ final class LaunchTests: XCTestCase {
         app.buttons["connect"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 15))
         keep(app, "chats")
+
+        // The side menu: open, pick a project, the list follows.
+        app.buttons["menu"].tap()
+        let natter = app.buttons["project-natter"]
+        XCTAssertTrue(natter.waitForExistence(timeout: 5))
+        keep(app, "menu")
+        natter.tap()
+        XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
+        keep(app, "project")
+
+        // A chat, for the composer and the transcript.
+        app.cells.firstMatch.tap()
+        XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
+                      || app.textFields["composer"].waitForExistence(timeout: 2))
+        sleep(1)
+        keep(app, "chat")
     }
 
     @MainActor

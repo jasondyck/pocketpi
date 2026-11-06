@@ -39,6 +39,20 @@ struct IntegrationTests {
         _ = try await client.sessions()
     }
 
+    @Test func pinsRenamesAndHidesProjects() async throws {
+        try await client.saveProject(path: projectDir)
+        var p = try await client.projects().projects.first { $0.path == projectDir }
+        #expect(p?.pinned == true)
+        try await client.saveProject(path: projectDir, name: "Renamed")
+        p = try await client.projects().projects.first { $0.path == projectDir }
+        #expect(p?.name == "Renamed")
+        try await client.hideProject(path: projectDir)
+        p = try await client.projects().projects.first { $0.path == projectDir }
+        #expect(p == nil || p?.pinned == false)
+        // Back to how the other tests expect it.
+        try await client.saveProject(path: projectDir, name: "")
+    }
+
     @Test func registersForPush() async throws {
         let token = String(repeating: "a1", count: 32)
         try await client.registerPush(token: token, environment: .sandbox, label: "test phone")

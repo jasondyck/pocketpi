@@ -107,6 +107,18 @@ public final class PocketPiClient: Sendable {
     public func projects() async throws -> ProjectsResponse { try await get("/api/projects") }
     public func sessions() async throws -> [SessionInfo] { try await get("/api/sessions", as: SessionsResponse.self).sessions }
 
+    /// Pin a project folder, optionally under a new name (empty = folder name).
+    public func saveProject(path: String, name: String? = nil) async throws {
+        var body: [String: JSONValue] = ["path": .string(path)]
+        if let name { body["name"] = .string(name) }
+        _ = try await post("/api/projects/save", .object(body), as: JSONValue.self)
+    }
+
+    /// Unpin and hide a project; its chats stay on disk.
+    public func hideProject(path: String) async throws {
+        _ = try await post("/api/projects/hide", ["path": .string(path)], as: JSONValue.self)
+    }
+
     /// Start pi in a folder (absolute, or ~/...). The chat has no session file
     /// until its first prompt.
     public func newChat(cwd: String) async throws -> OpenResponse { try await post("/api/new", ["cwd": .string(cwd)]) }

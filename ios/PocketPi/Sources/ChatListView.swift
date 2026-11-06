@@ -6,13 +6,14 @@ enum Route: Hashable {
     case newChat(cwd: String)
 }
 
-/// Chats, newest first, filtered by project. The drawer of the web app.
+/// Chats, newest first, filtered by the project picked in the side menu.
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @State private var route: [Route] = []
     @State private var project: String?
     @State private var search = ""
+    @State private var menuOpen = false
 
     private var visible: [SessionInfo] {
         model.sessions.filter { s in
@@ -22,14 +23,16 @@ struct ChatListView: View {
     }
 
     var body: some View {
+        SideMenu(isOpen: $menuOpen, edgeSwipe: route.isEmpty) {
+            ProjectMenu(selected: $project) { menuOpen = false }
+        } content: {
+            stack
+        }
+    }
+
+    private var stack: some View {
         NavigationStack(path: $route) {
             List {
-                if model.projects.count > 1 {
-                    ProjectStrip(selected: $project)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                }
                 if let e = model.loadError {
                     Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.danger)
                 }
@@ -50,12 +53,17 @@ struct ChatListView: View {
             .navigationTitle(project.map(model.projectName(for:)) ?? "Chats")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Text(model.client?.server.display ?? "")
-                        Button("Disconnect", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
-                            model.disconnect()
-                        }
-                    } label: { Image(systemName: "server.rack") }
+                    Button { menuOpen = true } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .overlay(alignment: .topTrailing) {
+                                // Something is working in a project not shown.
+                                if project != nil && model.sessions.contains(where: { $0.streaming && $0.cwd != project }) {
+                                    Circle().fill(Theme.signal).frame(width: 7, height: 7).offset(x: 4, y: -3)
+                                }
+                            }
+                    }
+                    .accessibilityLabel("Projects")
+                    .accessibilityIdentifier("menu")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     NewChatButton(project: project) { cwd in route.append(.newChat(cwd: cwd)) }
@@ -85,40 +93,6 @@ struct ChatListView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refresh() } }
         }
-    }
-}
-
-private struct ProjectStrip: View {
-    @Environment(AppModel.self) private var model
-    @Binding var selected: String?
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                chip("All", path: nil, live: false)
-                ForEach(model.projects.filter(\.exists)) { p in
-                    chip(p.name, path: p.path, live: p.streaming)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-        }
-    }
-
-    private func chip(_ title: String, path: String?, live: Bool) -> some View {
-        let on = selected == path
-        return Button {
-            selected = path
-        } label: {
-            HStack(spacing: 5) {
-                if live { Circle().fill(Theme.signal).frame(width: 6, height: 6) }
-                Text(title).font(.subheadline.weight(on ? .semibold : .regular))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(on ? Color.primary.opacity(0.12) : Theme.surface, in: Capsule())
-        }
-        .buttonStyle(.plain)
     }
 }
 

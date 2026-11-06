@@ -72,7 +72,7 @@ private struct ChatScreen: View {
                         Image(systemName: "arrow.down")
                             .font(.callout.weight(.semibold))
                             .padding(10)
-                            .background(.regularMaterial, in: Circle())
+                            .glass(in: Circle(), interactive: true)
                     }
                     .padding()
                     .accessibilityLabel("Jump to the end")
@@ -194,9 +194,11 @@ private struct StatusBanner: View {
                 Text(status == .opening ? "Opening…" : "Reconnecting…")
             }
             .font(.footnote)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .glass(in: Capsule())
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(.bar)
+            .padding(.top, 4)
         case .failed(let msg):
             Text(msg)
                 .font(.footnote)
@@ -233,7 +235,7 @@ private struct Toast: View {
             .font(.footnote)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.regularMaterial, in: Capsule())
+            .glass(in: Capsule())
             .padding(.top, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
     }
@@ -290,6 +292,16 @@ private struct ExtensionSheet: View {
 
 // MARK: - composer
 
+private struct FloatingBar: ViewModifier {
+    func body(content: Content) -> some View {
+        if LiquidGlass.available {
+            content.glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        } else {
+            content
+        }
+    }
+}
+
 private struct Composer: View {
     @Bindable var session: ChatSession
     @State private var images: [ImageAttachment] = []
@@ -324,16 +336,19 @@ private struct Composer: View {
                 TextField(session.isStreaming ? "Steer pi…" : "Message pi", text: $session.composer, axis: .vertical)
                     .lineLimit(1...8)
                     .focused($focused)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, LiquidGlass.available ? 4 : 12)
                     .padding(.vertical, 8)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18))
+                    .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 18))
                     .accessibilityIdentifier("composer")
                 sendButton
             }
+            // iOS 26: one floating glass bar over the transcript, like Messages.
+            .padding(LiquidGlass.available ? 6 : 0)
+            .modifier(FloatingBar())
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(LiquidGlass.available ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task {

@@ -68,8 +68,15 @@ jobs:
                     for x in xs if x["name"].startswith("iPhone")]
           print(phones[0]["udid"])')
           echo "udid=$id" >> "$GITHUB_OUTPUT"
+      # A scratch pocketpi with a fake pi and a few projects and chats, so the
+      # UI test can connect and the screenshots show the real screens.
+      - name: Scratch pocketpi
+        id: server
+        run: echo "url=$(ios/ui-test-server.sh | tail -1)" >> "$GITHUB_OUTPUT"
       - name: Build and run the UI tests
         working-directory: ios/PocketPi
+        env:
+          TEST_RUNNER_POCKETPI_UITEST_URL: ${{ steps.server.outputs.url }}
         run: |
           set -o pipefail
           xcodebuild test -project PocketPi.xcodeproj -scheme PocketPi \
