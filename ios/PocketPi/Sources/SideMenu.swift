@@ -52,6 +52,7 @@ struct SideMenu<Drawer: View, Content: View>: View {
             }
         }
         .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0.05), value: isOpen)
+        .sensoryFeedback(.impact(weight: .light), trigger: isOpen)
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {
@@ -69,9 +70,6 @@ struct SideMenu<Drawer: View, Content: View>: View {
     }
 
     private func set(_ open: Bool) {
-        if open != isOpen {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
         isOpen = open
     }
 }
