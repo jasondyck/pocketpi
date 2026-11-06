@@ -532,7 +532,6 @@ private struct ApprovalView: View {
     let runId: String
     let done: () -> Void
     @State private var busy = false
-    @State private var confirmApprove = false
 
     private var run: RunInfo? { model.approvals.first { $0.id == runId } }
 
@@ -556,16 +555,13 @@ private struct ApprovalView: View {
                             .disabled(busy)
                     }
                     ToolbarItem(placement: .bottomBar) {
-                        Button("Approve") { confirmApprove = true }
+                        // One tap: this screen is where the decision is made, and a
+                        // posted comment can be deleted (HIG: no alerts for
+                        // deliberate, undoable actions).
+                        Button("Approve") { answer(run, true) }
                             .buttonStyle(.borderedProminent)
                             .disabled(busy)
                             .accessibilityIdentifier("approve")
-                            // On the button, so iOS 26 points the confirmation at it.
-                            .confirmationDialog(run.headline, isPresented: $confirmApprove, titleVisibility: .visible) {
-                                Button("Approve") { answer(run, true) }
-                            } message: {
-                                Text("The workflow carries on, for example posting the comment or publishing.")
-                            }
                     }
                 }
             } else {
