@@ -234,3 +234,36 @@ import Testing
     #expect(!ModelInfo.matches("xai/grok-4.7", "xai/grok-4.7-mini"))
     #expect(ModelInfo.matches("*", "anything"))
 }
+
+@Test func foldsThinkingAndToolsIntoOneRow() throws {
+    func j(_ s: String) -> JSONValue { try! JSONDecoder().decode(JSONValue.self, from: Data(s.utf8)) }
+    var t = Transcript()
+    t.load(messages: [
+        j(#"{"role":"user","content":"what's next?"}"#),
+        j(#"{"role":"assistant","content":[{"type":"thinking","thinking":"look"},{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"git log"}}],"stopReason":"toolUse"}"#),
+        j(#"{"role":"toolResult","toolCallId":"a","content":[{"type":"text","text":"ok"}]}"#),
+        j(#"{"role":"assistant","content":[{"type":"toolCall","id":"b","name":"read","arguments":{"path":"x"}},{"type":"toolCall","id":"c","name":"bash","arguments":{"command":"ls"}}],"stopReason":"toolUse"}"#),
+        j(#"{"role":"toolResult","toolCallId":"b","content":[{"type":"text","text":"x"}]}"#),
+        j(#"{"role":"toolResult","toolCallId":"c","content":[{"type":"text","text":"y"}]}"#),
+        j(#"{"role":"assistant","content":[{"type":"thinking","thinking":"so"},{"type":"text","text":"Do the audio plan."}],"stopReason":"stop"}"#),
+    ], isStreaming: false)
+    let rows = t.rows
+    #expect(rows.count == 3)
+    guard rows.count == 3 else { return }
+    if case .item = rows[0] {} else { Issue.record("first row is the user's message") }
+    guard case .activity(_, let steps, let live) = rows[1] else { Issue.record("one activity row"); return }
+    #expect(steps.count == 5)
+    #expect(!live)
+    #expect(ActivitySummary.text(steps) == "Ran 2 commands, read 1 file · thought")
+    guard case .text(_, let m) = rows[2] else { Issue.record("then the text"); return }
+    #expect(m.plainText == "Do the audio plan.")
+}
+
+@Test func activitySummaries() {
+    #expect(ActivitySummary.text([.thinking("", seconds: 3, live: false)]) == "Thought for 3s")
+    #expect(ActivitySummary.text([.tool(id: "1", name: "edit", arguments: [:])]) == "Edited 1 file")
+    #expect(ActivitySummary.text([
+        .tool(id: "1", name: "bash", arguments: [:]), .thinking("", seconds: 2, live: false),
+        .tool(id: "2", name: "bash", arguments: [:]), .thinking("", seconds: 4, live: false),
+    ]) == "Ran 2 commands · thought for 6s")
+}

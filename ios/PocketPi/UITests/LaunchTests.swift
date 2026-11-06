@@ -67,6 +67,15 @@ final class LaunchTests: XCTestCase {
         sleep(1)
         keep(app, "chat")
 
+        // Thinking and tool calls fold into one line; it opens to the steps.
+        let activity = app.descendants(matching: .any)["activity-row"].firstMatch
+        if activity.waitForExistence(timeout: 3) {
+            activity.tap()
+            sleep(1)
+            keep(app, "activity-open")
+            activity.tap()
+        }
+
         // The model button in the message box opens the model sheet.
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))

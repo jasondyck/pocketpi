@@ -42,10 +42,19 @@ private struct ChatScreen: View {
                     if session.transcript.isEmpty, session.path == nil {
                         EmptyChat(project: model.projectName(for: session.cwd), cwd: Format.tilde(session.cwd, home: model.home))
                     }
-                    ForEach(session.transcript.items) { item in
-                        TranscriptItemView(item: item, transcript: session.transcript, home: model.home)
+                    let rows = session.transcript.rows
+                    ForEach(rows) { row in
+                        switch row {
+                        case .item(let item):
+                            TranscriptItemView(item: item, transcript: session.transcript, home: model.home)
+                        case .text(_, let message):
+                            AssistantMessageView(message: message, live: false, transcript: session.transcript, home: model.home)
+                        case .activity(_, let steps, let live):
+                            ActivityRow(steps: steps, live: live, transcript: session.transcript, home: model.home)
+                        }
                     }
-                    if session.isStreaming {
+                    // A live activity row says what pi is doing; otherwise this does.
+                    if session.isStreaming, !Self.endsLive(rows) {
                         WorkingLine(activity: session.transcript.activity)
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -123,6 +132,11 @@ private struct ChatScreen: View {
         } message: {
             Text(session.problem ?? "")
         }
+    }
+
+    static func endsLive(_ rows: [TranscriptRow]) -> Bool {
+        if case .activity(_, _, true)? = rows.last { return true }
+        return false
     }
 
     private var subtitle: String {

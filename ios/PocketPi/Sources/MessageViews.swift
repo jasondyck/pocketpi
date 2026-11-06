@@ -64,7 +64,7 @@ private struct UserBubble: View {
     }
 }
 
-private struct AssistantMessageView: View {
+struct AssistantMessageView: View {
     let message: ChatMessage
     let live: Bool
     let transcript: Transcript
@@ -112,7 +112,7 @@ private struct AssistantMessageView: View {
     }
 }
 
-private struct ThinkingView: View {
+struct ThinkingView: View {
     let text: String
     let seconds: Int?
     let live: Bool
@@ -134,6 +134,66 @@ private struct ThinkingView: View {
             }
             .tint(.secondary)
         }
+    }
+}
+
+/// Thinking and tool calls between two pieces of text, as one line: what pi
+/// did ("Ran 9 commands · thought for 12s"), or what it's doing now while it
+/// works. Opens to the steps themselves.
+struct ActivityRow: View {
+    let steps: [ActivityStep]
+    let live: Bool
+    let transcript: Transcript
+    let home: String?
+    @State private var open = false
+
+    private var failed: Int {
+        steps.reduce(0) { n, s in
+            if case .tool(let id, _, _) = s, transcript.toolResults[id]?.isError == true { return n + 1 }
+            return n
+        }
+    }
+
+    /// While live: the step pi is on.
+    private var now: String {
+        switch steps.last {
+        case .thinking(_, _, true): return "Thinking…"
+        case .tool(let id, let name, let args) where transcript.runningTools.contains(id):
+            return name + " " + ToolSummary.summary(name: name, arguments: args, home: home)
+        default: return "Working…"
+        }
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $open) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                    switch step {
+                    case .thinking(let text, let secs, let isLive):
+                        ThinkingView(text: text, seconds: secs, live: isLive)
+                    case .tool(let id, let name, let args):
+                        ToolCard(name: name, summary: ToolSummary.summary(name: name, arguments: args, home: home),
+                                 arguments: args, result: transcript.toolResults[id],
+                                 partial: transcript.partialResults[id], running: transcript.runningTools.contains(id))
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                if live { ProgressView().controlSize(.small).tint(Theme.signalText) }
+                Text(live ? now : ActivitySummary.text(steps))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if failed > 0 {
+                    Text("\(failed) failed").foregroundStyle(Theme.danger)
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .tint(.secondary)
+        .accessibilityIdentifier("activity-row")
     }
 }
 

@@ -48,7 +48,7 @@ chat() {
 post /api/workflows/clipt-review/run '{}' >/dev/null
 chat "$P/clipt" "Why does the region picker flicker on the second monitor?"
 chat "$P/clipt" "Add a tool call to check the changelog"
-chat "$P/natter" "Summarize what changed in the SFU since Monday"
+chat "$P/natter" "Check the SFU log with a tool and summarize what changed since Monday"
 chat "$P/canopy" "What does the Modbus poller do when a sensor times out?"
 chat "$P/lantern-keep" "Plan the next puzzle room"
 echo "$URL"
