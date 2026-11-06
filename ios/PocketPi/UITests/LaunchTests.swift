@@ -32,6 +32,13 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["All chats"].waitForExistence(timeout: 15))
         keep(app, "chats")
 
+        // Swipe actions on a chat (Archive, Rename), then put the row back.
+        let firstRow = app.descendants(matching: .any)["chat-row"].firstMatch
+        firstRow.swipeLeft()
+        sleep(1)
+        keep(app, "swipe")
+        firstRow.swipeRight()
+
         // Back to the projects list, pick one, the list follows.
         app.navigationBars["All chats"].buttons.element(boundBy: 0).tap()
         let natter = app.descendants(matching: .any)["project-natter"].firstMatch

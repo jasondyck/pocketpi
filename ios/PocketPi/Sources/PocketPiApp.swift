@@ -76,8 +76,11 @@ final class AppModel {
     private(set) var client: PocketPiClient?
     private(set) var projects: [Project] = []
     private(set) var sessions: [SessionInfo] = []
+    private(set) var archived: [SessionInfo] = []
     private(set) var home: String?
     private(set) var loadError: String?
+    /// An action that failed (archive), shown as an alert.
+    var problem: String?
     private(set) var loading = false
     /// A tapped notification, for the chat list to open.
     var pendingLink: NotificationLink?
@@ -111,6 +114,7 @@ final class AppModel {
         client = nil
         projects = []
         sessions = []
+        archived = []
     }
 
     // MARK: - notifications
@@ -152,14 +156,36 @@ final class AppModel {
         do {
             async let p = client.projects()
             async let s = client.sessions()
-            let (pr, ss) = try await (p, s)
+            async let a = client.archivedSessions()
+            let (pr, ss, aa) = try await (p, s, a)
             projects = pr.projects
             home = pr.home
             sessions = ss
+            archived = aa
             loadError = nil
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    /// Archive (or bring back) a chat: moved between the lists at once, then
+    /// saved; on failure the lists reload from the server and an alert says so.
+    func archive(_ s: SessionInfo, _ on: Bool) async {
+        guard let client else { return }
+        if on {
+            sessions.removeAll { $0.path == s.path }
+            archived.insert(s, at: 0)
+        } else {
+            archived.removeAll { $0.path == s.path }
+            sessions.insert(s, at: 0)
+            sessions.sort { $0.modified > $1.modified }
+        }
+        do {
+            try await client.archiveSession(path: s.path, archived: on)
+        } catch {
+            problem = (on ? "Couldn't archive: " : "Couldn't unarchive: ") + error.localizedDescription
+        }
+        await refresh()
     }
 
     func projectName(for path: String) -> String {

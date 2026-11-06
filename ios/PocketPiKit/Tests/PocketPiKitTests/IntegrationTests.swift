@@ -166,6 +166,26 @@ struct IntegrationTests {
         #expect(named?.live == false)
     }
 
+    @Test func archivesAndUnarchives() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("archive me")
+        try await waitFor("the reply") { !s.isStreaming && lastAssistantText(s) != nil }
+        s.leave()
+        let path = try #require(s.path)
+        let before = try await client.projects().projects.first { $0.path == projectDir }?.chats ?? 0
+        try await client.archiveSession(path: path)
+        #expect(try await !client.sessions().contains { $0.path == path })
+        #expect(try await client.archivedSessions().contains { $0.path == path })
+        let during = try await client.projects().projects.first { $0.path == projectDir }?.chats ?? 0
+        #expect(during == before - 1)
+        try await client.archiveSession(path: path, archived: false)
+        #expect(try await client.sessions().contains { $0.path == path })
+        #expect(try await !client.archivedSessions().contains { $0.path == path })
+        await #expect(throws: PocketPiError.self) {
+            try await client.archiveSession(path: "/etc/passwd")
+        }
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

@@ -2,7 +2,8 @@
 //!
 //! A project is a working directory. Every folder that has pi sessions shows up
 //! automatically; pinning gives it a custom name and a fixed position, and
-//! hiding removes an auto-discovered one from the rail.
+//! hiding removes an auto-discovered one from the rail. The same file keeps
+//! the archived chats (session file paths), which the chat lists leave out.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,9 @@ pub struct Config {
     pub pinned: Vec<Pinned>,
     #[serde(default)]
     pub hidden: Vec<String>,
+    /// Archived chats: session file paths. Kept on disk, left out of lists.
+    #[serde(default)]
+    pub archived: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -179,6 +179,7 @@ async fn main() {
         .route("/api/projects/save", post(save_project))
         .route("/api/projects/hide", post(hide_project))
         .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/archive", post(archive_session))
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
         .route("/api/suggest", post(suggest))
@@ -588,13 +589,59 @@ async fn scan_with_live(app: &Arc<AppState>) -> Vec<sessions::SessionInfo> {
     list
 }
 
-async fn list_sessions(State(app): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({ "sessions": scan_with_live(&app).await }))
+#[derive(Deserialize)]
+struct SessionsQuery {
+    /// `?archived=1`: only the archived chats (default: only the others).
+    #[serde(default)]
+    archived: Option<String>,
+}
+
+async fn list_sessions(
+    State(app): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<SessionsQuery>,
+) -> Json<Value> {
+    let want_archived = q.archived.as_deref().is_some_and(|v| v == "1" || v == "true");
+    let cfg = projects::load(&app.projects_path);
+    let mut list = scan_with_live(&app).await;
+    list.retain(|s| cfg.archived.contains(&s.path) == want_archived);
+    Json(json!({ "sessions": list }))
+}
+
+#[derive(Deserialize)]
+struct ArchiveReq {
+    path: String,
+    #[serde(default = "yes")]
+    archived: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Archive (or bring back) a chat. Its session file stays where it is; only
+/// the lists leave it out.
+async fn archive_session(State(app): State<Arc<AppState>>, Json(req): Json<ArchiveReq>) -> AppResult<Json<Value>> {
+    let path = std::fs::canonicalize(&req.path).map_err(|_| err(StatusCode::NOT_FOUND, "session file not found"))?;
+    let root = std::fs::canonicalize(&app.sessions_dir).unwrap_or(app.sessions_dir.clone());
+    if !path.starts_with(&root) || path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return Err(err(StatusCode::FORBIDDEN, "not a pi session file"));
+    }
+    let path = path.to_string_lossy().to_string();
+    let _g = app.projects_lock.lock().unwrap();
+    let mut cfg = projects::load(&app.projects_path);
+    cfg.archived.retain(|p| p != &path);
+    if req.archived {
+        cfg.archived.push(path.clone());
+    }
+    projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "path": path, "archived": req.archived })))
 }
 
 async fn list_projects(State(app): State<Arc<AppState>>) -> Json<Value> {
-    let list = scan_with_live(&app).await;
+    let mut list = scan_with_live(&app).await;
     let cfg = projects::load(&app.projects_path);
+    // Counts and recency leave archived chats out, like the chat list.
+    list.retain(|s| !cfg.archived.contains(&s.path));
     let home = app.home.to_string_lossy().to_string();
     Json(json!({ "projects": projects::build(&cfg, &list, &home), "home": home }))
 }

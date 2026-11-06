@@ -5,6 +5,7 @@ import SwiftUI
 enum Scope: Hashable {
     case all
     case project(String)
+    case archived
 }
 
 /// What the detail column shows.
@@ -66,6 +67,14 @@ struct ChatListView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refresh() } }
         }
+        .alert("Something went wrong", isPresented: Binding(
+            get: { model.problem != nil },
+            set: { if !$0 { model.problem = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.problem ?? "")
+        }
         // iPhone: backing out of a chat closes it, so it doesn't reopen.
         .onChange(of: column) { _, c in
             if c != .detail { target = nil }
@@ -101,6 +110,13 @@ private struct ProjectsView: View {
             }
             if !recent.isEmpty {
                 Section(pinned.isEmpty ? "Projects" : "Recent") { ForEach(recent) { projectRow($0) } }
+            }
+            Section {
+                ScopeRow(title: "Archived", count: model.archived.count, live: false) {
+                    Image(systemName: "archivebox")
+                }
+                .tag(Scope.archived)
+                .accessibilityIdentifier("project-archived")
             }
             if let e = model.loadError {
                 Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.danger)
@@ -213,8 +229,11 @@ private struct ChatsView: View {
         return nil
     }
 
+    private var isArchive: Bool { scope == .archived }
+    private var source: [SessionInfo] { isArchive ? model.archived : model.sessions }
+
     private var visible: [SessionInfo] {
-        model.sessions.filter { s in
+        source.filter { s in
             (project == nil || s.cwd == project)
                 && (search.isEmpty || s.displayTitle.localizedCaseInsensitiveContains(search))
         }
@@ -225,7 +244,7 @@ private struct ChatsView: View {
         Binding(
             get: { if case .chat(let path, _) = target { return path } else { return nil } },
             set: { path in
-                guard let path, let s = model.sessions.first(where: { $0.path == path }) else {
+                guard let path, let s = source.first(where: { $0.path == path }) else {
                     target = nil
                     return
                 }
@@ -239,7 +258,9 @@ private struct ChatsView: View {
                 SessionRow(session: s, showProject: project == nil)
                     .tag(s.path)
                     .accessibilityIdentifier("chat-row")
+                    // Like Mail: a full swipe left archives.
                     .swipeActions(edge: .trailing) {
+                        archiveButton(s)
                         Button("Rename", systemImage: "pencil") {
                             newName = s.displayTitle
                             renaming = s
@@ -250,12 +271,20 @@ private struct ChatsView: View {
                             newName = s.displayTitle
                             renaming = s
                         }
+                        archiveButton(s)
                     }
             }
             if visible.isEmpty, !model.loading, model.loadError == nil {
-                ContentUnavailableView("No chats", systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("Start one with the pencil."))
-                    .listRowSeparator(.hidden)
+                Group {
+                    if isArchive {
+                        ContentUnavailableView("Nothing archived", systemImage: "archivebox",
+                                               description: Text("Swipe left on a chat to archive it."))
+                    } else {
+                        ContentUnavailableView("No chats", systemImage: "bubble.left.and.bubble.right",
+                                               description: Text("Start one with the pencil."))
+                    }
+                }
+                .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)
@@ -273,7 +302,22 @@ private struct ChatsView: View {
             }
         }
         .refreshable { await model.refresh() }
-        .navigationTitle(project.map(model.projectName(for:)) ?? "All chats")
+        .navigationTitle(isArchive ? "Archived" : project.map(model.projectName(for:)) ?? "All chats")
+    }
+
+    @ViewBuilder private func archiveButton(_ s: SessionInfo) -> some View {
+        if isArchive {
+            Button("Unarchive", systemImage: "tray.and.arrow.up") { archive(s, false) }
+                .tint(.blue)
+        } else {
+            Button("Archive", systemImage: "archivebox") { archive(s, true) }
+                .tint(.indigo)
+        }
+    }
+
+    private func archive(_ s: SessionInfo, _ on: Bool) {
+        if case .chat(let path, _) = target, path == s.path { target = nil }
+        Task { await model.archive(s, on) }
     }
 
     private var newChatButton: some View {
