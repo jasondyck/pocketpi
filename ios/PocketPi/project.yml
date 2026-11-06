@@ -1,0 +1,79 @@
+# The Xcode project, as a file that can be read and diffed. Generated with
+# XcodeGen (`xcodegen generate` in this folder) on a Mac or a CI runner, so the
+# .xcodeproj is never committed and a file added on Linux is in the build
+# without anybody opening Xcode.
+name: PocketPi
+options:
+  bundleIdPrefix: ca.caldron
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "6.0"
+    # The team from Membership in developer.apple.com, for signed builds.
+    # Simulator builds do not need it.
+    DEVELOPMENT_TEAM: 57YB5MQBTL
+    CODE_SIGN_STYLE: Automatic
+packages:
+  PocketPiKit:
+    path: ../PocketPiKit
+targets:
+  PocketPi:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: PocketPiKit
+    # Push. Archiving for TestFlight turns development into production.
+    entitlements:
+      path: Sources/PocketPi.entitlements
+      properties:
+        aps-environment: development
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: pocketpi
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # pocketpi is reached over the tailnet with a real *.ts.net
+        # certificate, so ATS stays on. Plain http is only for a local address
+        # (the simulator against a server on the Mac, 127.0.0.1).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: >-
+          pocketpi connects to your pocketpi server when you give it a local
+          address.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.caldron.pocketpi
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_PREVIEWS: YES
+  PocketPiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: PocketPi
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  PocketPi:
+    build:
+      targets:
+        PocketPi: all
+    test:
+      targets: [PocketPiUITests]

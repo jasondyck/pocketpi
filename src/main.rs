@@ -13,6 +13,7 @@ mod workflows;
 mod engine;
 mod notify;
 mod sensors;
+mod apns;
 mod push;
 mod improve;
 
@@ -199,6 +200,8 @@ async fn main() {
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
         .route("/api/push/test", post(push_test))
+        .route("/api/apns/register", post(apns_register))
+        .route("/api/apns/unregister", post(apns_unregister))
         .route("/sw.js", get(|| async { static_file("sw.js") }))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/events", get(run_events))
@@ -1023,7 +1026,42 @@ struct PushQuery {
 
 async fn push_info(State(app): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<PushQuery>) -> Json<Value> {
     let subscribed = q.endpoint.as_deref().is_some_and(|e| app.push.has(e));
-    Json(json!({ "key": app.push.public_key, "devices": app.push.count(), "subscribed": subscribed }))
+    let apns = app.push.apns.as_ref().map(|a| json!({ "devices": a.count() }));
+    Json(json!({ "key": app.push.public_key, "devices": app.push.count(), "subscribed": subscribed, "apns": apns }))
+}
+
+#[derive(Deserialize)]
+struct ApnsReq {
+    token: String,
+    #[serde(default)]
+    environment: apns::Env,
+    #[serde(default)]
+    label: String,
+}
+
+/// The iOS app's device token, sent each launch after notification permission.
+async fn apns_register(State(app): State<Arc<AppState>>, Json(req): Json<ApnsReq>) -> AppResult<Json<Value>> {
+    let a = app.push.apns.as_ref().ok_or_else(|| {
+        err(StatusCode::SERVICE_UNAVAILABLE, "no APNs key on the server (~/.config/pocketpi/apns/AuthKey_<KEYID>.p8)")
+    })?;
+    if !apns::valid_token(&req.token) {
+        return Err(err(StatusCode::BAD_REQUEST, "not an APNs device token"));
+    }
+    let label: String = req.label.chars().take(60).collect();
+    a.register(&req.token, req.environment, &label);
+    Ok(Json(json!({ "ok": true, "devices": a.count() })))
+}
+
+#[derive(Deserialize)]
+struct ApnsUnreq {
+    token: String,
+}
+
+async fn apns_unregister(State(app): State<Arc<AppState>>, Json(req): Json<ApnsUnreq>) -> Json<Value> {
+    if let Some(a) = &app.push.apns {
+        a.unregister(&req.token);
+    }
+    Json(json!({ "ok": true }))
 }
 
 #[derive(Deserialize)]

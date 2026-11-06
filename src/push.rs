@@ -29,9 +29,11 @@ pub struct Push {
     subs: StdMutex<Vec<Sub>>,
     http: reqwest::Client,
     contact: String,
+    /// The native app's notifications, when an APNs key is installed.
+    pub apns: Option<crate::apns::Apns>,
 }
 
-fn write_private(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
@@ -63,7 +65,10 @@ impl Push {
         let public_key = Base64UrlUnpadded::encode_string(&key.public_key().public_key().to_bytes_uncompressed());
         let subs_path = data.join("push.json");
         let subs = std::fs::read_to_string(&subs_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let config = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config")).join("pocketpi");
+        let apns = crate::apns::Apns::load(&config, &data);
         Push {
+            apns,
             key,
             public_key,
             subs_path,
@@ -102,8 +107,17 @@ impl Push {
         self.subs.lock().unwrap().len()
     }
 
-    /// Sends to every subscription. `url` is opened when the notification is tapped.
+    /// Sends to every web push subscription and every iOS app device. `url`
+    /// is opened when the notification is tapped.
     pub async fn send(&self, title: &str, body: &str, url: &str, tag: &str) -> usize {
+        let native = match &self.apns {
+            Some(a) => a.send(title, body, url, tag).await,
+            None => 0,
+        };
+        native + self.send_web(title, body, url, tag).await
+    }
+
+    async fn send_web(&self, title: &str, body: &str, url: &str, tag: &str) -> usize {
         let payload = json!({ "title": title, "body": body, "url": url, "tag": tag }).to_string();
         let subs: Vec<Sub> = self.subs.lock().unwrap().clone();
         let mut delivered = 0;

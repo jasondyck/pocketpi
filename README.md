@@ -11,6 +11,8 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - **push-review** (`extensions/push-review.ts`): pi's own `git push` is reviewed by `opencode-go/deepseek-v4-pro` first
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works, stop, image attachments, slash commands, extension dialogs
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
+- **iOS app** (`ios/`, early): native SwiftUI client for the same API; see `ios/README.md`
+- **APNs** (`src/apns.rs`): the same notifications go to the iOS app when `~/.config/pocketpi/apns/AuthKey_<KEYID>.p8` exists (team/topic: `POCKETPI_APNS_TEAM`, `POCKETPI_APNS_TOPIC`)
 
 ## Run
 
