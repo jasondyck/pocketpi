@@ -57,7 +57,10 @@ private struct ChatScreen: View {
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 90
+                // visibleRect leaves out the insets (the floating composer),
+                // so short chats and the bottom both count as "at the end".
+                g.visibleRect.maxY >= g.contentSize.height + g.contentInsets.bottom - 90
+                    || g.contentSize.height <= g.visibleRect.height
             } action: { _, near in
                 atBottom = near
             }
