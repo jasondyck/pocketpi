@@ -278,7 +278,7 @@ public final class ChatSession {
             if let s = try? await command(["type": "get_state"]) { state = ChatState(s) }
             await loadThinkingLevels()
             await refreshStats()
-        } catch { problem = error.localizedDescription }
+        } catch { problem = error.reportable }
     }
 
     public func refreshStats() async {
@@ -343,7 +343,7 @@ public final class ChatSession {
             }
             try await command(["type": "abort"])
         } catch {
-            problem = error.localizedDescription
+            problem = error.reportable
         }
     }
 
@@ -361,24 +361,24 @@ public final class ChatSession {
         case .value(let v): c["value"] = .string(v)
         case .cancelled: c["cancelled"] = true
         }
-        do { try await command(.object(c)) } catch { problem = error.localizedDescription }
+        do { try await command(.object(c)) } catch { problem = error.reportable }
     }
 
     public func setThinkingLevel(_ level: String) async {
         do {
             try await command(["type": "set_thinking_level", "level": .string(level)])
             state?.thinkingLevel = level
-        } catch { problem = error.localizedDescription }
+        } catch { problem = error.reportable }
     }
 
     public func rename(_ name: String) async {
         do {
             try await command(["type": "set_session_name", "name": .string(name)])
             state?.sessionName = name
-        } catch { problem = error.localizedDescription }
+        } catch { problem = error.reportable }
     }
 
     public func compact() async {
-        do { try await command(["type": "compact"]) } catch { problem = error.localizedDescription }
+        do { try await command(["type": "compact"]) } catch { problem = error.reportable }
     }
 }

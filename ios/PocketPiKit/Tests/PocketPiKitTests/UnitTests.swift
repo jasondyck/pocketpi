@@ -281,3 +281,10 @@ import Testing
     #expect(run.headline == "No blocking issues.")
     #expect(run.verdict == "pass")
 }
+
+@Test func cancellationsAreNotReported() {
+    #expect(URLError(.cancelled).isCancellation)
+    #expect(CancellationError().reportable == nil)
+    #expect(!URLError(.timedOut).isCancellation)
+    #expect(PocketPiError.command("boom").reportable == "boom")
+}

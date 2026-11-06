@@ -3,6 +3,19 @@ import Foundation
 import FoundationNetworking
 #endif
 
+extension Error {
+    /// A request cut short on purpose (the screen went away, a newer refresh
+    /// replaced it): not something to show anyone.
+    public var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if let u = self as? URLError, u.code == .cancelled { return true }
+        return (self as NSError).domain == NSURLErrorDomain && (self as NSError).code == NSURLErrorCancelled
+    }
+
+    /// What to tell the person, or nil for a cancellation.
+    public var reportable: String? { isCancellation ? nil : localizedDescription }
+}
+
 public enum PocketPiError: Error, Equatable, LocalizedError {
     case badAddress(String)
     case http(status: Int, message: String)

@@ -170,6 +170,8 @@ final class AppModel {
             sessions = ss
             archived = aa
             loadError = nil
+        } catch where error.isCancellation {
+            // Cut short (left the screen, a newer refresh): keep what's shown.
         } catch {
             loadError = error.localizedDescription
         }
@@ -190,7 +192,7 @@ final class AppModel {
         do {
             try await client.archiveSession(path: s.path, archived: on)
         } catch {
-            problem = (on ? "Couldn't archive: " : "Couldn't unarchive: ") + error.localizedDescription
+            if let m = error.reportable { problem = (on ? "Couldn't archive: " : "Couldn't unarchive: ") + m }
         }
         await refresh()
     }
@@ -204,7 +206,7 @@ final class AppModel {
             await refresh()
             return true
         } catch {
-            problem = (approve ? "Couldn't approve: " : "Couldn't reject: ") + error.localizedDescription
+            if let m = error.reportable { problem = (approve ? "Couldn't approve: " : "Couldn't reject: ") + m }
             await refresh()
             return false
         }
