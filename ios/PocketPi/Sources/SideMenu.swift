@@ -172,7 +172,10 @@ struct ProjectMenu: View {
                     Text("\(count)").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
+            .contentShape(Rectangle())
         }
+        // Plain, so the names read as text rather than accent-coloured links.
+        .buttonStyle(.plain)
         .listRowBackground(on ? Theme.signalText.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityIdentifier("project-" + (path.map(Format.baseName) ?? "all"))

@@ -40,6 +40,7 @@ struct ChatListView: View {
                     NavigationLink(value: Route.chat(path: s.path, cwd: s.cwd)) {
                         SessionRow(session: s, showProject: project == nil)
                     }
+                    .accessibilityIdentifier("chat-row")
                 }
                 if visible.isEmpty, !model.loading, model.loadError == nil {
                     ContentUnavailableView("No chats", systemImage: "bubble.left.and.bubble.right",

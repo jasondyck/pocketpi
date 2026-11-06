@@ -115,6 +115,8 @@ final class AppModel {
     /// Ask once (iOS remembers the answer), then get a device token. APNs
     /// hands one over on every launch; it is sent to the server each time.
     func enablePush() async {
+        // UI tests: no permission alert over the screenshots.
+        if ProcessInfo.processInfo.arguments.contains("-noPush") { return }
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         if granted { UIApplication.shared.registerForRemoteNotifications() }

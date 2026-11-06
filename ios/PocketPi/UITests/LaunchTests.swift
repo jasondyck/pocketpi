@@ -7,7 +7,7 @@ final class LaunchTests: XCTestCase {
     @MainActor
     func testConnectScreen() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-reset"]
+        app.launchArguments = ["-reset", "-noPush"]
         app.launch()
         let address = app.textFields["address"]
         XCTAssertTrue(address.waitForExistence(timeout: 10))
@@ -30,7 +30,7 @@ final class LaunchTests: XCTestCase {
         keep(app, "project")
 
         // A chat, for the composer and the transcript.
-        app.cells.firstMatch.tap()
+        app.descendants(matching: .any)["chat-row"].firstMatch.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
                       || app.textFields["composer"].waitForExistence(timeout: 2))
         sleep(1)
