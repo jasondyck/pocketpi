@@ -31,6 +31,13 @@ public final class ChatSession {
     public private(set) var state: ChatState?
     public private(set) var stats: SessionStats?
     public private(set) var thinkingLevels: [String] = []
+    /// Set at the first send; until then leaving a new chat stops its pi.
+    private var sentAny = false
+    /// What the model picker offers (loaded once per chat).
+    public private(set) var models: [ModelInfo] = []
+
+    /// The chat's model as a `ModelInfo`, for the picker's checkmark.
+    public var currentModel: ModelInfo? { state?.model.flatMap(ModelInfo.init) }
     /// The session file; nil for a new chat until its first prompt is saved.
     public private(set) var path: String?
     public private(set) var cwd: String
@@ -94,6 +101,30 @@ public final class ChatSession {
         streamTask?.cancel()
         streamTask = nil
         resumeWaiter()
+        // A new chat that was opened but never sent to: its pi has no session
+        // file and nothing to keep, so stop it rather than wait for the reaper.
+        if path == nil, !sentAny, let key {
+            self.key = nil
+            Task { [client] in try? await client.close(key: key) }
+        }
+    }
+
+    /// A new chat: start its pi now (not at the first send), so the model
+    /// picker and thinking levels work before anything is typed.
+    public func prepare() async {
+        guard key == nil, path == nil else { return }
+        do { try await ensureStarted() } catch { status = .failed(error.localizedDescription) }
+    }
+
+    private func ensureStarted() async throws {
+        if key == nil, path != nil { try await reopen() }
+        if key == nil {
+            let r = try await client.newChat(cwd: cwd)
+            key = r.key
+            cwd = r.cwd
+            transcript = Transcript()
+            await connect()
+        }
     }
 
     func reopen() async throws {
@@ -211,10 +242,28 @@ public final class ChatSession {
             return
         }
         await refreshStats()
-        if thinkingLevels.isEmpty {
-            thinkingLevels = ((try? await command(["type": "get_available_thinking_levels"]))?["levels"]?.array ?? [])
-                .compactMap(\.string)
+        if thinkingLevels.isEmpty { await loadThinkingLevels() }
+        if models.isEmpty {
+            models = ((try? await command(["type": "get_available_models"]))?["models"]?.array ?? [])
+                .compactMap(ModelInfo.init)
+                .sorted { ($0.provider, $0.label) < ($1.provider, $1.label) }
         }
+    }
+
+    private func loadThinkingLevels() async {
+        thinkingLevels = ((try? await command(["type": "get_available_thinking_levels"]))?["levels"]?.array ?? [])
+            .compactMap(\.string)
+    }
+
+    /// Switch this chat's model. pi keeps the choice in the session; the
+    /// thinking levels and the context numbers change with it.
+    public func setModel(_ m: ModelInfo) async {
+        do {
+            try await command(["type": "set_model", "provider": .string(m.provider), "modelId": .string(m.id)])
+            if let s = try? await command(["type": "get_state"]) { state = ChatState(s) }
+            await loadThinkingLevels()
+            await refreshStats()
+        } catch { problem = error.localizedDescription }
     }
 
     public func refreshStats() async {
@@ -253,14 +302,8 @@ public final class ChatSession {
     public func send(_ text: String, images: [ImageAttachment] = []) async throws {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !images.isEmpty else { return }
-        if key == nil, path != nil { try await reopen() }
-        if key == nil {
-            let r = try await client.newChat(cwd: cwd)
-            key = r.key
-            cwd = r.cwd
-            transcript = Transcript()
-            await connect()
-        }
+        sentAny = true
+        try await ensureStarted()
         var c: [String: JSONValue] = ["type": "prompt", "message": .string(text)]
         if !images.isEmpty {
             c["images"] = .array(images.map {

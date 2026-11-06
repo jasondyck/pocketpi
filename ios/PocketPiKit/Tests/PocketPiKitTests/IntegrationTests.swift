@@ -186,6 +186,22 @@ struct IntegrationTests {
         }
     }
 
+    @Test func picksAModel() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        await s.prepare()
+        try await waitFor("the models") { !s.models.isEmpty }
+        #expect(s.models.count == 3)
+        #expect(s.currentModel?.id == "fake/echo-1")
+        #expect(s.thinkingLevels.count == 4)
+        let mini = try #require(s.models.first { $0.id == "fake/echo-mini" })
+        #expect(mini.label == "Echo Mini")
+        await s.setModel(mini)
+        #expect(s.currentModel?.id == "fake/echo-mini")
+        #expect(s.thinkingLevels == ["off"])
+        #expect(s.problem == nil)
+        s.leave()
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

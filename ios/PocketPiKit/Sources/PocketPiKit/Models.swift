@@ -84,6 +84,35 @@ public struct ChatState: Sendable, Equatable {
     }
 }
 
+/// A model pi can use (`get_available_models`): only the ones with a key set
+/// up in pi.
+public struct ModelInfo: Sendable, Hashable, Identifiable {
+    public var provider: String
+    public var id: String
+    public var name: String?
+    public var reasoning: Bool
+    public var contextWindow: Int?
+    public var vision: Bool
+    /// Unique across providers.
+    public var key: String { provider + "/" + id }
+
+    public init?(_ v: JSONValue) {
+        guard let provider = v["provider"]?.string, let id = v["id"]?.string else { return nil }
+        self.provider = provider
+        self.id = id
+        name = v["name"]?.string
+        reasoning = v["reasoning"]?.bool ?? false
+        contextWindow = v["contextWindow"]?.int
+        vision = v["input"]?.array?.contains(.string("image")) ?? false
+    }
+
+    /// What the picker shows: the model's name, else the last part of its id.
+    public var label: String {
+        if let n = name, !n.isEmpty { return n }
+        return id.split(separator: "/").last.map(String.init) ?? id
+    }
+}
+
 /// pi's `get_session_stats`: tokens, cost and how full the context is.
 public struct SessionStats: Sendable, Equatable {
     public var cost: Double?

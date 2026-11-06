@@ -127,14 +127,23 @@ def run(prompt, cmd_id):
     out({"type": "agent_settled"})
 
 
+MODELS = [
+    {"id": "fake/echo-1", "name": "Echo", "provider": "fake", "reasoning": True, "contextWindow": 200000, "input": ["text", "image"]},
+    {"id": "fake/echo-mini", "name": "Echo Mini", "provider": "fake", "reasoning": False, "contextWindow": 128000, "input": ["text"]},
+    {"id": "glm-5.2", "name": "GLM 5.2", "provider": "other", "reasoning": True, "contextWindow": 256000, "input": ["text"]},
+]
+model = MODELS[0]
+thinking = "medium"
+
+
 def state():
     return {
         "sessionFile": session_file,
         "sessionName": name,
         "isStreaming": streaming,
-        "thinkingLevel": "medium",
+        "thinkingLevel": thinking if model["reasoning"] else "off",
         "messageCount": len(messages),
-        "model": {"id": "fake/echo-1", "name": "Echo", "provider": "fake", "reasoning": True},
+        "model": model,
     }
 
 
@@ -167,7 +176,19 @@ for line in sys.stdin:
     elif t == "get_session_stats":
         respond(cmd, {"cost": 0.0012, "tokens": {"total": 1234}, "contextUsage": {"percent": 12.5, "contextWindow": 200000}})
     elif t == "get_available_thinking_levels":
-        respond(cmd, {"levels": ["off", "low", "medium", "high"]})
+        respond(cmd, {"levels": ["off", "low", "medium", "high"] if model["reasoning"] else ["off"]})
+    elif t == "set_thinking_level":
+        thinking = cmd.get("level", thinking)
+        respond(cmd, {})
+    elif t == "get_available_models":
+        respond(cmd, {"models": MODELS})
+    elif t == "set_model":
+        found = [m for m in MODELS if m["provider"] == cmd.get("provider") and m["id"] == cmd.get("modelId")]
+        if found:
+            model = found[0]
+            respond(cmd, model)
+        else:
+            respond(cmd, ok=False, error="model not found")
     elif t == "set_session_name":
         name = cmd.get("name")
         save({"type": "session_info", "name": name})

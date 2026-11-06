@@ -99,7 +99,10 @@ private struct ChatScreen: View {
             }
             ToolbarItem(placement: .topBarTrailing) { chatMenu }
         }
-        .task { await session.start() }
+        .task {
+            await session.start()
+            await session.prepare() // a new chat: pi now, so the model picker works
+        }
         .onDisappear { session.leave() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await session.start() } }
@@ -137,15 +140,6 @@ private struct ChatScreen: View {
                     Text(verbatim: "Context " + percent + " of " + Format.tokens(stats.contextWindow))
                     Text(verbatim: Format.tokens(stats.totalTokens) + " tokens · " + Format.cost(stats.cost))
                 }
-            }
-            if session.state?.model?["reasoning"]?.bool == true, session.thinkingLevels.count > 1 {
-                Picker("Thinking", selection: Binding(
-                    get: { session.state?.thinkingLevel ?? "" },
-                    set: { l in Task { await session.setThinkingLevel(l) } })
-                ) {
-                    ForEach(session.thinkingLevels, id: \.self) { Text($0).tag($0) }
-                }
-                .pickerStyle(.menu)
             }
             Button("Rename", systemImage: "pencil") {
                 newName = session.state?.sessionName ?? session.title
@@ -267,6 +261,79 @@ private struct ExtensionSheet: View {
 
 // MARK: - composer
 
+/// The model and thinking level, like the Claude app's pill in the message
+/// box: a standard menu with a checkmark on the current model, grouped by
+/// provider, and the thinking levels when the model reasons.
+private struct ModelButton: View {
+    @Bindable var session: ChatSession
+
+    private var providers: [String] {
+        var seen: [String] = []
+        for m in session.models where !seen.contains(m.provider) { seen.append(m.provider) }
+        return seen
+    }
+
+    private var thinking: String? {
+        guard session.currentModel?.reasoning == true, let l = session.state?.thinkingLevel, l != "off" else { return nil }
+        return l.capitalized
+    }
+
+    var body: some View {
+        Menu {
+            if session.models.isEmpty {
+                Text("No models yet")
+            } else if providers.count == 1 {
+                modelPicker(session.models)
+            } else {
+                ForEach(providers, id: \.self) { p in
+                    Menu(p) { modelPicker(session.models.filter { $0.provider == p }) }
+                }
+            }
+            if session.currentModel?.reasoning == true, session.thinkingLevels.count > 1 {
+                Picker(selection: Binding(
+                    get: { session.state?.thinkingLevel ?? "" },
+                    set: { l in Task { await session.setThinkingLevel(l) } })
+                ) {
+                    ForEach(session.thinkingLevels, id: \.self) { Text($0.capitalized).tag($0) }
+                } label: {
+                    Label("Thinking", systemImage: "brain")
+                }
+                .pickerStyle(.menu)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(session.currentModel?.label ?? session.state?.modelLabel ?? "Model")
+                    .foregroundStyle(.primary)
+                if let thinking {
+                    Text(thinking).foregroundStyle(.secondary)
+                }
+            }
+            .font(.subheadline)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.primary.opacity(0.07), in: Capsule())
+        }
+        .disabled(session.isStreaming)
+        .accessibilityLabel("Model: " + (session.currentModel?.label ?? "none") + (thinking.map { ", thinking " + $0 } ?? ""))
+        .accessibilityIdentifier("model-button")
+    }
+
+    private func modelPicker(_ models: [ModelInfo]) -> some View {
+        Picker("Model", selection: Binding(
+            get: { session.currentModel?.key ?? "" },
+            set: { k in
+                if let m = session.models.first(where: { $0.key == k }) { Task { await session.setModel(m) } }
+            })
+        ) {
+            ForEach(models, id: \.key) { m in
+                Text(m.label).tag(m.key)
+            }
+        }
+        .pickerStyle(.inline)
+    }
+}
+
 /// iOS 26: the system's prominent glass button, tinted lime (the one
 /// primary action gets the colour, on its background). iOS 18: a lime circle.
 private struct SendButtonStyle: ViewModifier {
@@ -333,20 +400,25 @@ private struct Composer: View {
                     }
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
-                    Image(systemName: "plus").font(.title3).frame(width: 34, height: 34)
-                }
-                .accessibilityLabel("Attach images")
+            VStack(alignment: .leading, spacing: 4) {
                 TextField(session.isStreaming ? "Steer pi…" : "Message pi", text: $session.composer, axis: .vertical)
                     .lineLimit(1...8)
                     .focused($focused)
-                    .padding(.horizontal, LiquidGlass.available ? 4 : 12)
-                    .padding(.vertical, 8)
-                    .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 18))
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
                     .accessibilityIdentifier("composer")
-                sendButton
+                HStack(spacing: 8) {
+                    PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
+                        Image(systemName: "plus").font(.title3).frame(width: 34, height: 34)
+                    }
+                    .accessibilityLabel("Attach images")
+                    ModelButton(session: session)
+                    Spacer(minLength: 0)
+                    sendButton
+                }
             }
+            .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 20))
             // iOS 26: one floating glass bar over the transcript, like Messages.
             .padding(LiquidGlass.available ? 6 : 0)
             .modifier(FloatingBar())

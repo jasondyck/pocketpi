@@ -55,6 +55,13 @@ final class LaunchTests: XCTestCase {
         sleep(1)
         keep(app, "chat")
 
+        // The model button in the message box: models and thinking.
+        app.descendants(matching: .any)["model-button"].firstMatch.tap()
+        sleep(1)
+        keep(app, "models")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+        sleep(1)
+
         // The chat's "…" menu (context, thinking, rename, compact).
         app.descendants(matching: .any)["chat-menu"].firstMatch.tap()
         sleep(1)
