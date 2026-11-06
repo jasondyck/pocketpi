@@ -256,6 +256,9 @@ private struct ChatsView: View {
         List(selection: selection) {
             ForEach(visible) { s in
                 SessionRow(session: s, showProject: project == nil)
+                    // One element per row: VoiceOver reads it as one line, and
+                    // UI tests swipe the row rather than a label inside it.
+                    .accessibilityElement(children: .combine)
                     .tag(s.path)
                     .accessibilityIdentifier("chat-row")
                     // Like Mail: a full swipe left archives.
