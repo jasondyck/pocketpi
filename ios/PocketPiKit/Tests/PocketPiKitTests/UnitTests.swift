@@ -227,3 +227,10 @@ import Testing
     #expect(ModelInfo.providerLabel("my-proxy_v2") == "My Proxy V2")
     #expect(ModelInfo.providerLabel("fake") == "Fake")
 }
+
+@Test func modelPatterns() {
+    #expect(ModelInfo.matches("xai/grok-4.7", "xai/grok-4.7"))
+    #expect(ModelInfo.matches("opencode-go/deepseek-*", "opencode-go/deepseek-v4-pro"))
+    #expect(!ModelInfo.matches("xai/grok-4.7", "xai/grok-4.7-mini"))
+    #expect(ModelInfo.matches("*", "anything"))
+}

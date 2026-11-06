@@ -128,8 +128,8 @@ def run(prompt, cmd_id):
 
 
 MODELS = [
-    {"id": "fake/echo-1", "name": "Echo", "provider": "fake", "reasoning": True, "contextWindow": 200000, "input": ["text", "image"]},
-    {"id": "fake/echo-mini", "name": "Echo Mini", "provider": "fake", "reasoning": False, "contextWindow": 128000, "input": ["text"]},
+    {"id": "echo-1", "name": "Echo", "provider": "fake", "reasoning": True, "contextWindow": 200000, "input": ["text", "image"]},
+    {"id": "echo-mini", "name": "Echo Mini", "provider": "fake", "reasoning": False, "contextWindow": 128000, "input": ["text"]},
     {"id": "glm-5.2", "name": "GLM 5.2", "provider": "other", "reasoning": True, "contextWindow": 256000, "input": ["text"]},
 ]
 model = MODELS[0]

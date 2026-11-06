@@ -55,11 +55,15 @@ final class LaunchTests: XCTestCase {
         sleep(1)
         keep(app, "chat")
 
-        // The model button in the message box: models and thinking.
+        // The model button in the message box opens the model sheet.
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
-        sleep(1)
+        XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
         keep(app, "models")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+        app.buttons["More models"].tap()
+        XCTAssertTrue(app.navigationBars["More models"].waitForExistence(timeout: 5))
+        keep(app, "more-models")
+        // Above the half-height sheet: dismisses it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
         sleep(1)
 
         // The chat's "…" menu (context, thinking, rename, compact).

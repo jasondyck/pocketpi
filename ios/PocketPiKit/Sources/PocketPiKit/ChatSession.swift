@@ -36,6 +36,20 @@ public final class ChatSession {
     /// What the model picker offers (loaded once per chat).
     public private(set) var models: [ModelInfo] = []
 
+    /// pi's enabled-model patterns (from its settings, via the server).
+    public private(set) var enabledPatterns: [String] = []
+
+    /// The models picked in pi, in pi's order: the top of the model sheet.
+    public var favorites: [ModelInfo] {
+        var out: [ModelInfo] = []
+        for p in enabledPatterns {
+            for m in models where !out.contains(m) && (ModelInfo.matches(p, m.key) || ModelInfo.matches(p, m.id)) {
+                out.append(m)
+            }
+        }
+        return out
+    }
+
     /// The chat's model as a `ModelInfo`, for the picker's checkmark.
     public var currentModel: ModelInfo? { state?.model.flatMap(ModelInfo.init) }
     /// The session file; nil for a new chat until its first prompt is saved.
@@ -247,6 +261,7 @@ public final class ChatSession {
             models = ((try? await command(["type": "get_available_models"]))?["models"]?.array ?? [])
                 .compactMap(ModelInfo.init)
                 .sorted { ($0.provider, $0.label) < ($1.provider, $1.label) }
+            enabledPatterns = (try? await client.enabledModels()) ?? []
         }
     }
 

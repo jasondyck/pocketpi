@@ -14,6 +14,8 @@ URL="http://127.0.0.1:$PORT"
 
 cargo build --release --quiet
 mkdir -p "$SCRATCH/sessions"
+mkdir -p "$SCRATCH/home/.pi/agent"
+echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
 for p in clipt natter canopy lantern-keep; do mkdir -p "$SCRATCH/home/projects/$p"; done
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
   PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \

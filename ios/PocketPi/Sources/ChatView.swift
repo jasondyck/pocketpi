@@ -262,16 +262,10 @@ private struct ExtensionSheet: View {
 // MARK: - composer
 
 /// The model and thinking level, like the Claude app's pill in the message
-/// box: a standard menu with a checkmark on the current model, grouped by
-/// provider, and the thinking levels when the model reasons.
+/// box. Opens the model sheet.
 private struct ModelButton: View {
     @Bindable var session: ChatSession
-
-    private var providers: [String] {
-        var seen: [String] = []
-        for m in session.models where !seen.contains(m.provider) { seen.append(m.provider) }
-        return seen
-    }
+    @State private var showing = false
 
     private var thinking: String? {
         guard session.currentModel?.reasoning == true, let l = session.state?.thinkingLevel, l != "off" else { return nil }
@@ -279,28 +273,7 @@ private struct ModelButton: View {
     }
 
     var body: some View {
-        Menu {
-            if session.models.isEmpty {
-                Text("No models yet")
-            } else if providers.count == 1 {
-                modelPicker(session.models)
-            } else {
-                ForEach(providers, id: \.self) { p in
-                    Menu(ModelInfo.providerLabel(p)) { modelPicker(session.models.filter { $0.provider == p }) }
-                }
-            }
-            if session.currentModel?.reasoning == true, session.thinkingLevels.count > 1 {
-                Picker(selection: Binding(
-                    get: { session.state?.thinkingLevel ?? "" },
-                    set: { l in Task { await session.setThinkingLevel(l) } })
-                ) {
-                    ForEach(session.thinkingLevels, id: \.self) { Text($0.capitalized).tag($0) }
-                } label: {
-                    Label("Thinking", systemImage: "brain")
-                }
-                .pickerStyle(.menu)
-            }
-        } label: {
+        Button { showing = true } label: {
             HStack(spacing: 5) {
                 Text(session.currentModel?.label ?? session.state?.modelLabel ?? "Model")
                     .foregroundStyle(.primary)
@@ -314,23 +287,172 @@ private struct ModelButton: View {
             .padding(.vertical, 7)
             .background(Color.primary.opacity(0.07), in: Capsule())
         }
+        .buttonStyle(.plain)
         .disabled(session.isStreaming)
         .accessibilityLabel("Model: " + (session.currentModel?.label ?? "none") + (thinking.map { ", thinking " + $0 } ?? ""))
         .accessibilityIdentifier("model-button")
+        .sheet(isPresented: $showing) {
+            ModelSheet(session: session)
+                .presentationDetents([.medium, .large])
+        }
     }
+}
 
-    private func modelPicker(_ models: [ModelInfo]) -> some View {
-        Picker("Model", selection: Binding(
-            get: { session.currentModel?.key ?? "" },
-            set: { k in
-                if let m = session.models.first(where: { $0.key == k }) { Task { await session.setModel(m) } }
-            })
-        ) {
-            ForEach(models, id: \.key) { m in
-                Text(m.label).tag(m.key)
+/// Select model: the models picked in pi first (its enabled models), then
+/// Effort and More models, each a page of its own. A standard sheet with a
+/// grouped list, like the Claude app's model sheet.
+private struct ModelSheet: View {
+    @Bindable var session: ChatSession
+    @Environment(\.dismiss) private var dismiss
+
+    private var reasoning: Bool { session.currentModel?.reasoning == true && session.thinkingLevels.count > 1 }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                let favorites = session.favorites
+                if favorites.isEmpty {
+                    // Nothing picked in pi: every model, by provider, right here.
+                    AllModels(session: session) { dismiss() }
+                } else {
+                    Section {
+                        ForEach(favorites, id: \.key) { m in
+                            ModelRow(model: m, current: m.key == session.currentModel?.key) { pick(m) }
+                        }
+                    }
+                }
+                if reasoning {
+                    Section {
+                        NavigationLink {
+                            EffortList(session: session)
+                        } label: {
+                            LabeledContent("Effort", value: (session.state?.thinkingLevel ?? "").capitalized)
+                        }
+                    }
+                }
+                if !favorites.isEmpty {
+                    Section {
+                        NavigationLink("More models") {
+                            List { AllModels(session: session) { dismiss() } }
+                                .navigationTitle("More models")
+                                .navigationBarTitleDisplayMode(.inline)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Select model")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
             }
         }
-        .pickerStyle(.inline)
+    }
+
+    private func pick(_ m: ModelInfo) {
+        Task { await session.setModel(m) }
+        dismiss()
+    }
+}
+
+/// Every model pi has a key for, one section per provider.
+private struct AllModels: View {
+    @Bindable var session: ChatSession
+    let done: () -> Void
+
+    var body: some View {
+        let providers = session.models.reduce(into: [String]()) { if !$0.contains($1.provider) { $0.append($1.provider) } }
+        if providers.isEmpty {
+            Text("No models. Is an API key set up in pi?").foregroundStyle(.secondary)
+        }
+        ForEach(providers, id: \.self) { p in
+            Section(ModelInfo.providerLabel(p)) {
+                ForEach(session.models.filter { $0.provider == p }, id: \.key) { m in
+                    ModelRow(model: m, current: m.key == session.currentModel?.key, showProvider: false) {
+                        Task { await session.setModel(m) }
+                        done()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ModelRow: View {
+    let model: ModelInfo
+    let current: Bool
+    var showProvider = true
+    let pick: () -> Void
+
+    /// What the Claude app says in words, from what pi knows: the provider,
+    /// the context size, and whether it reasons or takes images.
+    private var detail: String {
+        var parts: [String] = []
+        if showProvider { parts.append(model.providerLabel) }
+        if let c = model.contextWindow { parts.append(Format.tokens(c) + " context") }
+        if model.reasoning { parts.append("reasoning") }
+        if model.vision { parts.append("images") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button(action: pick) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.label).foregroundStyle(.primary)
+                    if !detail.isEmpty {
+                        Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if current {
+                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+}
+
+private struct EffortList: View {
+    @Bindable var session: ChatSession
+
+    var body: some View {
+        List {
+            ForEach(session.thinkingLevels, id: \.self) { l in
+                Button {
+                    Task { await session.setThinkingLevel(l) }
+                } label: {
+                    HStack {
+                        Text(l.capitalized).foregroundStyle(.primary)
+                        Spacer()
+                        if session.state?.thinkingLevel == l {
+                            Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityAddTraits(session.state?.thinkingLevel == l ? .isSelected : [])
+            }
+        }
+        .navigationTitle("Effort")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The system Close button (iOS 26: the glass ✕), else an ✕ button.
+private struct CloseButton: View {
+    let action: () -> Void
+    var body: some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) {
+            Button(role: .close, action: action)
+        } else {
+            Button("Close", systemImage: "xmark", action: action)
+        }
+        #else
+        Button("Close", systemImage: "xmark", action: action)
+        #endif
     }
 }
 

@@ -107,6 +107,12 @@ public final class PocketPiClient: Sendable {
     public func projects() async throws -> ProjectsResponse { try await get("/api/projects") }
     public func sessions() async throws -> [SessionInfo] { try await get("/api/sessions", as: SessionsResponse.self).sessions }
 
+    /// The models chosen in pi (its settings' `enabledModels`): "provider/id"
+    /// or patterns with `*`, in pi's order.
+    public func enabledModels() async throws -> [String] {
+        try await get("/api/models/enabled", as: JSONValue.self)["enabled"]?.array?.compactMap(\.string) ?? []
+    }
+
     /// The archived chats (left out of `sessions()`).
     public func archivedSessions() async throws -> [SessionInfo] {
         try await get("/api/sessions?archived=1", as: SessionsResponse.self).sessions

@@ -26,6 +26,8 @@ ENVS=()
 if [ "${1:-}" != "--unit" ]; then
   cargo build --release --quiet
   mkdir -p "$SCRATCH/home/project" "$SCRATCH/sessions" "$SCRATCH/home/.config/pocketpi/apns"
+  mkdir -p "$SCRATCH/home/.pi/agent"
+  echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # A throwaway APNs key, so device registration can be tested. Nothing in the
   # tests makes the server send a notification to Apple.
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \

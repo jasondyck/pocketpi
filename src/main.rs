@@ -80,6 +80,8 @@ const IDLE_REAP: Duration = Duration::from_secs(20 * 60);
 pub struct AppState {
     pub(crate) pi_bin: String,
     pub(crate) sessions_dir: PathBuf,
+    /// pi's own folder (settings.json: the models people picked in pi).
+    pub(crate) agent_dir: PathBuf,
     pub(crate) home: PathBuf,
     pub(crate) allowed_users: Option<Vec<String>>,
     pub(crate) suggest_model: String,
@@ -147,6 +149,7 @@ async fn main() {
     let app = Arc::new(AppState {
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
         sessions_dir,
+        agent_dir: agent_dir.clone(),
         projects_path: projects::config_path(&home),
         projects_lock: StdMutex::new(()),
         engine: Arc::new(engine::Engine::new(&home)),
@@ -180,6 +183,7 @@ async fn main() {
         .route("/api/projects/hide", post(hide_project))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/archive", post(archive_session))
+        .route("/api/models/enabled", get(enabled_models))
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
         .route("/api/suggest", post(suggest))
@@ -605,6 +609,19 @@ async fn list_sessions(
     let mut list = scan_with_live(&app).await;
     list.retain(|s| cfg.archived.contains(&s.path) == want_archived);
     Json(json!({ "sessions": list }))
+}
+
+/// The models chosen in pi (`enabledModels` in pi's settings.json, the ones
+/// pi cycles through), in pi's order, as "provider/id" or patterns with `*`.
+/// pi's RPC has no command for this, so the app's model sheet gets it here.
+async fn enabled_models(State(app): State<Arc<AppState>>) -> Json<Value> {
+    let list: Vec<String> = std::fs::read_to_string(app.agent_dir.join("settings.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("enabledModels").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    Json(json!({ "enabled": list }))
 }
 
 #[derive(Deserialize)]

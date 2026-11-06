@@ -106,6 +106,17 @@ public struct ModelInfo: Sendable, Hashable, Identifiable {
         vision = v["input"]?.array?.contains(.string("image")) ?? false
     }
 
+    /// pi's model patterns: exact, or `*` for any run of characters.
+    public static func matches(_ pattern: String, _ s: String) -> Bool {
+        let p = Array(pattern.lowercased()), t = Array(s.lowercased())
+        func go(_ i: Int, _ j: Int) -> Bool {
+            if i == p.count { return j == t.count }
+            if p[i] == "*" { return (j...t.count).contains { go(i + 1, $0) } }
+            return j < t.count && p[i] == t[j] && go(i + 1, j + 1)
+        }
+        return go(0, 0)
+    }
+
     /// The provider as people write it: known ones by their own spelling,
     /// others with each word capitalised ("my-proxy" → "My Proxy").
     public var providerLabel: String { Self.providerLabel(provider) }
