@@ -474,10 +474,13 @@ private struct ApprovalsList: View {
     var body: some View {
         List(selection: selection) {
             ForEach(model.approvals) { run in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(run.workflowName).lineLimit(1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(run.headline).lineLimit(2)
+                    if let v = run.verdict {
+                        VerdictLabel(verdict: v)
+                    }
                     HStack(spacing: 6) {
-                        Text(run.waitingApproval?.name ?? "")
+                        Text(run.workflowName)
                         Text(run.createdDate, format: .relative(presentation: .named))
                     }
                     .font(.caption)
@@ -507,6 +510,19 @@ private struct ApprovalsList: View {
     }
 }
 
+/// A review's verdict as a small coloured label: green for pass, orange for
+/// changes requested (colour carries meaning here, per the HIG).
+private struct VerdictLabel: View {
+    let verdict: String
+    private var pass: Bool { verdict.lowercased().hasPrefix("pass") }
+    var body: some View {
+        Label(verdict.prefix(1).uppercased() + verdict.dropFirst(),
+              systemImage: pass ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(pass ? Color.green : Color.orange)
+    }
+}
+
 /// One approval: what the workflow wants to do, in full, and the answer.
 private struct ApprovalView: View {
     @Environment(AppModel.self) private var model
@@ -522,7 +538,7 @@ private struct ApprovalView: View {
             if let run, let stage = run.waitingApproval {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(stage.name).font(.title2.weight(.semibold))
+                        Text(run.headline).font(.title2.weight(.semibold))
                         Text(run.workflowName + " · " + Self.started(run.trigger))
                             .font(.footnote).foregroundStyle(.secondary)
                         MarkdownView(text: stage.prompt ?? "Continue this run?")
@@ -542,7 +558,7 @@ private struct ApprovalView: View {
                             .accessibilityIdentifier("approve")
                     }
                 }
-                .confirmationDialog("Approve “\(stage.name)”?", isPresented: $confirmApprove, titleVisibility: .visible) {
+                .confirmationDialog(run.headline, isPresented: $confirmApprove, titleVisibility: .visible) {
                     Button("Approve") { answer(run, true) }
                 } message: {
                     Text("The workflow carries on, for example posting the comment or publishing.")

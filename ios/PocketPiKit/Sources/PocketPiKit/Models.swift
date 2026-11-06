@@ -121,6 +121,26 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
         }
     }
 
+    /// What a waiting approval is about, for the list: the first line of its
+    /// text without Markdown ("Post this review on PR #89?"), else the stage.
+    public var headline: String {
+        guard let stage = waitingApproval else { return workflowName }
+        for line in (stage.prompt ?? "").split(separator: "\n") {
+            let clean = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if !clean.isEmpty { return clean }
+        }
+        return stage.name
+    }
+
+    /// A review's verdict when the text has one ("Verdict: pass").
+    public var verdict: String? {
+        guard let p = waitingApproval?.prompt?.replacingOccurrences(of: "**", with: ""),
+              let r = p.range(of: "Verdict:", options: .caseInsensitive) else { return nil }
+        let rest = p[r.upperBound...].split(separator: "\n").first.map { $0.trimmingCharacters(in: .whitespaces) }
+        return rest.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// The approval this run is waiting for, if it is.
     public var waitingApproval: Stage? {
         stages.first { $0.kind == "approval" && $0.status == "waiting" }

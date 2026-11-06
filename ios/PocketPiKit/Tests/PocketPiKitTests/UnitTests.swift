@@ -267,3 +267,10 @@ import Testing
         .tool(id: "2", name: "bash", arguments: [:]), .thinking("", seconds: 4, live: false),
     ]) == "Ran 2 commands · thought for 6s")
 }
+
+@Test func approvalHeadlines() throws {
+    let v = try JSONValue.parse(#"{"id":"r","workflow_id":"w","workflow_name":"clipt: PR check-in","status":"waiting","stages":[{"id":"approve","name":"Post it?","kind":"approval","status":"waiting","prompt":"Post this review on PR #89?\n\n**Verdict: changes requested**\n\n1. `x`"}]}"#)
+    let run = try #require(RunInfo(v))
+    #expect(run.headline == "Post this review on PR #89?")
+    #expect(run.verdict == "changes requested")
+}
