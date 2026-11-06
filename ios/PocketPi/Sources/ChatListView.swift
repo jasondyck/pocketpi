@@ -233,7 +233,9 @@ private struct ChatsView: View {
             }
         }
         .listStyle(.plain)
-        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic))
+        // Always shown: an auto-hiding search field collapses and re-expands
+        // with the large title during the back swipe to Projects.
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
         .refreshable { await model.refresh() }
         .navigationTitle(project.map(model.projectName(for:)) ?? "All chats")
         .toolbar {
