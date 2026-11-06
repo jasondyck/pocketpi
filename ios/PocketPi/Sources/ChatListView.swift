@@ -523,7 +523,7 @@ private struct ApprovalView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(stage.name).font(.title2.weight(.semibold))
-                        Text(run.workflowName + " · started " + (run.trigger == "agent" ? "by pi" : "by " + run.trigger))
+                        Text(run.workflowName + " · " + Self.started(run.trigger))
                             .font(.footnote).foregroundStyle(.secondary)
                         MarkdownView(text: stage.prompt ?? "Continue this run?")
                     }
@@ -554,6 +554,18 @@ private struct ApprovalView: View {
         }
         .navigationTitle("Approval")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// How the run began, in words.
+    static func started(_ trigger: String) -> String {
+        switch trigger {
+        case "manual": "started manually"
+        case "agent": "started by pi"
+        case "schedule": "started on a schedule"
+        case "webhook": "started by a webhook"
+        case "": "started"
+        default: "started by a new " + trigger // pr, issue, commit sensors
+        }
     }
 
     private func answer(_ run: RunInfo, _ approve: Bool) {
