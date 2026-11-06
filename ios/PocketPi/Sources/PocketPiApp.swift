@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                                             willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         // Something changed on the server (an approval, a finished run).
         await MainActor.run { Task { await self.model.refresh() } }
-        [.banner, .list, .sound]
+        return [.banner, .list, .sound]
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
