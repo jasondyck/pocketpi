@@ -79,6 +79,9 @@ struct Handle {
     approvals: StdMutex<HashMap<String, oneshot::Sender<(bool, String)>>>,
     cancelled: std::sync::atomic::AtomicBool,
     cancel_notify: tokio::sync::Notify,
+    /// The run's slot. Given back while the run waits at an approval, so
+    /// runs waiting for a person don't stop every other workflow.
+    slot: StdMutex<Option<tokio::sync::OwnedSemaphorePermit>>,
 }
 
 pub struct Engine {
@@ -87,7 +90,7 @@ pub struct Engine {
     pub workflows_dir: PathBuf,
     active: StdMutex<HashMap<String, Arc<Handle>>>,
     pub tx: broadcast::Sender<Arc<str>>,
-    slots: tokio::sync::Semaphore,
+    slots: Arc<tokio::sync::Semaphore>,
 }
 
 fn now() -> u64 {
@@ -124,7 +127,7 @@ impl Engine {
             workflows_dir: workflows::dir(home),
             active: StdMutex::new(HashMap::new()),
             tx,
-            slots: tokio::sync::Semaphore::new(2),
+            slots: Arc::new(tokio::sync::Semaphore::new(2)),
         };
         // Runs that were in flight when pocketpi stopped cannot resume.
         for mut r in e.list_runs(None) {
@@ -308,13 +311,15 @@ impl Engine {
             approvals: StdMutex::new(HashMap::new()),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             cancel_notify: tokio::sync::Notify::new(),
+            slot: StdMutex::new(None),
         });
         self.active.lock().unwrap().insert(id.clone(), h.clone());
         self.publish(&run);
         let me = self.clone();
         tokio::spawn(async move {
-            let _slot = me.slots.acquire().await;
+            *h.slot.lock().unwrap() = me.slots.clone().acquire_owned().await.ok();
             let result = me.execute(&app, &wf, &h).await;
+            drop(h.slot.lock().unwrap().take());
             if let Err(e) = &result {
                 if e.starts_with(NOOP_MARK) {
                     // Nothing to do: drop the run without history, notice or reflection.
@@ -733,7 +738,12 @@ impl Engine {
         });
         let snapshot = h.run.lock().unwrap().clone();
         crate::notify::approval_needed(app, &snapshot, &stage.label(), &msg).await;
+        // Waiting for a person: give the slot to other runs meanwhile.
+        drop(h.slot.lock().unwrap().take());
         let answer = rx.await.unwrap_or((false, "run ended".into()));
+        if answer.0 {
+            *h.slot.lock().unwrap() = self.slots.clone().acquire_owned().await.ok();
+        }
         self.update(h, |r| r.status = Status::Running);
         match answer {
             (true, note) => Ok((note.clone(), if note.is_empty() { "approved".into() } else { format!("approved: {note}") })),
