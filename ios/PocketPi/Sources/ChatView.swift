@@ -293,7 +293,8 @@ private struct ModelButton: View {
         .accessibilityIdentifier("model-button")
         .sheet(isPresented: $showing) {
             ModelSheet(session: session)
-                .presentationDetents([.medium, .large])
+                // Tall enough for a few models, Effort and More models.
+                .presentationDetents([.fraction(0.75), .large])
         }
     }
 }
