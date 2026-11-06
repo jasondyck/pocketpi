@@ -2,7 +2,7 @@ import XCTest
 
 /// Launches the app and keeps screenshots for a person to look at (the CI job
 /// exports them). With POCKETPI_UITEST_URL set (ios/ui-test-server.sh), also
-/// connects to that server, opens the side menu, picks a project and a chat.
+/// connects to that server, goes back to Projects, picks a project and a chat.
 final class LaunchTests: XCTestCase {
     @MainActor
     func testConnectScreen() throws {
@@ -28,14 +28,15 @@ final class LaunchTests: XCTestCase {
         address.tap()
         address.typeText(url)
         app.buttons["connect"].tap()
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 15))
+        // Opens one step in, on All chats (like Mail on Inbox).
+        XCTAssertTrue(app.navigationBars["All chats"].waitForExistence(timeout: 15))
         keep(app, "chats")
 
-        // The side menu: open, pick a project, the list follows.
-        app.buttons["menu"].tap()
-        let natter = app.buttons["project-natter"]
+        // Back to the projects list, pick one, the list follows.
+        app.navigationBars["All chats"].buttons.element(boundBy: 0).tap()
+        let natter = app.descendants(matching: .any)["project-natter"].firstMatch
         XCTAssertTrue(natter.waitForExistence(timeout: 5))
-        keep(app, "menu")
+        keep(app, "projects")
         natter.tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
         keep(app, "project")
