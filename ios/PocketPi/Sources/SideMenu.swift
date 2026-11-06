@@ -27,6 +27,7 @@ struct SideMenu<Drawer: View, Content: View>: View {
                     .accessibilityHidden(isOpen)
 
                 Color.black.opacity(0.35 * progress)
+                    .animation(slide, value: isOpen)
                     .ignoresSafeArea()
                     .allowsHitTesting(isOpen)
                     .onTapGesture { set(false) }
@@ -44,15 +45,25 @@ struct SideMenu<Drawer: View, Content: View>: View {
                     .frame(width: width)
                     .frame(maxHeight: .infinity)
                     .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-                    .offset(x: shown - width)
+                    // Reduce Motion: the menu stays put and fades instead.
+                    .offset(x: reduceMotion ? 0 : shown - width)
+                    .opacity(reduceMotion ? progress : 1)
                     .shadow(color: .black.opacity(0.18 * progress), radius: 16, x: 4)
+                    // Only the menu and the dimming animate; the list behind
+                    // changes without riding the spring.
+                    .animation(slide, value: isOpen)
+                    .allowsHitTesting(isOpen)
                     .gesture(dragGesture(width: width), isEnabled: isOpen)
                     .accessibilityHidden(!isOpen)
                     .accessibilityAddTraits(.isModal)
             }
         }
-        .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0.05), value: isOpen)
         .sensoryFeedback(.impact(weight: .light), trigger: isOpen)
+    }
+
+    /// A short spring, or a quick fade with Reduce Motion (HIG Motion).
+    private var slide: Animation {
+        reduceMotion ? .easeOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.05)
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {

@@ -230,6 +230,7 @@ struct ContextRing: View {
 
 private struct Toast: View {
     let text: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Text(text)
             .font(.footnote)
@@ -237,7 +238,7 @@ private struct Toast: View {
             .padding(.vertical, 8)
             .glass(in: Capsule())
             .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
     }
 }
 
