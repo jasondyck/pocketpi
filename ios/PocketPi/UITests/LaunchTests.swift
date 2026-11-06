@@ -6,8 +6,19 @@ import XCTest
 final class LaunchTests: XCTestCase {
     @MainActor
     func testConnectScreen() throws {
+        try walkThrough(dark: false)
+    }
+
+    /// The same screens in dark mode, where the lime signal shows.
+    @MainActor
+    func testDarkMode() throws {
+        try walkThrough(dark: true)
+    }
+
+    @MainActor
+    private func walkThrough(dark: Bool) throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-reset", "-noPush"]
+        app.launchArguments = ["-reset", "-noPush"] + (dark ? ["-dark"] : [])
         app.launch()
         let address = app.textFields["address"]
         XCTAssertTrue(address.waitForExistence(timeout: 10))
@@ -40,7 +51,8 @@ final class LaunchTests: XCTestCase {
     @MainActor
     private func keep(_ app: XCUIApplication, _ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())
-        a.name = name
+        let dark = app.launchArguments.contains("-dark")
+        a.name = dark ? "dark-\(name)" : name
         a.lifetime = .keepAlways
         add(a)
     }

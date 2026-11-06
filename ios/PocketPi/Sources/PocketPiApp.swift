@@ -9,9 +9,12 @@ struct PocketPiApp: App {
 
     var body: some Scene {
         WindowGroup {
+            // No app-wide tint: controls stay graphite (AccentColor) and the
+            // lime only marks live things and the send button (HIG: colour
+            // sparingly, toolbar symbols monochrome).
             RootView()
                 .environment(delegate.model)
-                .tint(Theme.signalText)
+                .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("-dark") ? .dark : nil)
         }
     }
 }

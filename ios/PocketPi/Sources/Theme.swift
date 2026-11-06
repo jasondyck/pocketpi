@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 /// The web app's palette (web/app.css): graphite surfaces and one lime
-/// "signal" that only shows when something is live.
+/// "signal" that only shows when something is live or is the primary action
+/// (send). Controls use the graphite AccentColor, not the lime.
 enum Theme {
     static let signal = Color(red: 0xB8 / 255, green: 0xF1 / 255, blue: 0x3A / 255)
     static let signalInk = Color(red: 0x10 / 255, green: 0x14 / 255, blue: 0x0A / 255)

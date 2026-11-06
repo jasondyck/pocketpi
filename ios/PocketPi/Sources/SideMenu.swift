@@ -176,7 +176,7 @@ struct ProjectMenu: View {
         }
         // Plain, so the names read as text rather than accent-coloured links.
         .buttonStyle(.plain)
-        .listRowBackground(on ? Theme.signalText.opacity(0.14) : Color(uiColor: .secondarySystemGroupedBackground))
+        .listRowBackground(on ? Color.primary.opacity(0.08) : Color(uiColor: .secondarySystemGroupedBackground))
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityIdentifier("project-" + (path.map(Format.baseName) ?? "all"))
     }
