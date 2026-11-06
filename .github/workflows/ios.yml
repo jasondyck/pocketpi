@@ -5,6 +5,10 @@
 #          thing ios/test-linux.sh does locally).
 #   app  - on a macOS runner: generate the Xcode project from project.yml,
 #          build for the simulator, run the UI tests, upload their screenshots.
+#   testflight - (only with the testflight input) archive a signed build and
+#          upload it to App Store Connect. Signing is Xcode's automatic cloud
+#          signing through the App Store Connect API key, so no certificate or
+#          profile lives in the repo. The build number is the run number.
 #
 # Manual only (Actions -> iOS -> Run workflow, or `gh workflow run ios.yml --ref <branch>`): macOS minutes cost a multiple
 # of Linux ones, and the Kit's tests run locally for free.
@@ -20,6 +24,12 @@ on:
         type: choice
         options: [macos-26, macos-15]
         default: macos-26
+      testflight:
+        description: >-
+          Also archive a signed build and upload it to TestFlight (needs
+          macos-26 and the ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 secrets).
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -78,3 +88,65 @@ jobs:
           name: ios-screenshots
           path: ${{ runner.temp }}/shots
           if-no-files-found: warn
+
+  testflight:
+    if: ${{ inputs.testflight }}
+    runs-on: ${{ inputs.runner || 'macos-26' }}
+    timeout-minutes: 45
+    needs: app
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: XcodeGen
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+      - name: Generate the project
+        working-directory: ios/PocketPi
+        run: xcodegen generate
+      - name: API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8"
+          chmod 600 "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8"
+      - name: Archive
+        working-directory: ios/PocketPi
+        run: |
+          set -o pipefail
+          xcodebuild archive -project PocketPi.xcodeproj -scheme PocketPi \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/PocketPi.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} | tail -200
+      - name: Export and upload to App Store Connect
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>57YB5MQBTL</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/PocketPi.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey_$ASC_KEY_ID.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" | tail -100
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"

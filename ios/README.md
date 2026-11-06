@@ -59,3 +59,11 @@ simulator, run a local pocketpi and connect to `http://127.0.0.1:3457`
 - Tapping a run notification opens the app but not the run (no runs screen yet)
 - Model picker, slash-command completion, suggested replies
 - Folding finished tool steps into a summary line, like the web's `collapseTurns`
+
+## TestFlight
+
+`gh workflow run ios.yml --ref master -f runner=macos-26 -f testflight=true`
+archives a signed build and uploads it to App Store Connect. Signing is Xcode's
+automatic cloud signing with the App Store Connect API key in the repo secrets
+`ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8`. The build number is the
+workflow's run number. Bump `MARKETING_VERSION` in project.yml for a new version.
