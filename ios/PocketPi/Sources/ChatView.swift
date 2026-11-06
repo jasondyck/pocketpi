@@ -276,9 +276,10 @@ private struct SendButtonStyle: ViewModifier {
         if #available(iOS 26, *) {
             content
                 .foregroundStyle(ready ? Theme.signalInk : .secondary)
-                .frame(width: 22, height: 22)
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
+                // Small, so it sits inside the composer bar.
+                .controlSize(.small)
                 .tint(Theme.signal)
         } else {
             fallback(content)
