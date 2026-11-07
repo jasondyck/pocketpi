@@ -19,13 +19,18 @@ base=${3:-main}
 method=${4:-merge}
 api=${POCKETPI_URL:-http://127.0.0.1:3457}
 
-prs=$(gh pr list --state open --base "$base" --author "$author" --limit 50 \
-  --json number,title,isDraft,mergeStateStatus,headRefOid)
-runs=$(curl -sf "$api/api/runs?workflow=$review_wf")
+# Data goes through temp files, not argv: the run history easily exceeds
+# Linux's 128 KiB per-argument limit (exec then fails with exit 126).
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+gh pr list --state open --base "$base" --author "$author" --limit 50 \
+  --json number,title,isDraft,mergeStateStatus,headRefOid >"$tmp/prs.json"
+curl -sf "$api/api/runs?workflow=$review_wf" >"$tmp/runs.json"
 
-plan=$(python3 -I - "$prs" "$runs" <<'EOF'
+plan=$(python3 -I - "$tmp/prs.json" "$tmp/runs.json" <<'EOF'
 import json, re, sys
-prs, runs = json.loads(sys.argv[1]), json.loads(sys.argv[2])["runs"]
+prs = json.load(open(sys.argv[1]))
+runs = json.load(open(sys.argv[2]))["runs"]
 PASS = re.compile(r"verdict:\W*pass", re.I)
 BLOCK = re.compile(r"verdict:\W*(changes|block|fail|request)", re.I)
 for pr in prs:
