@@ -57,6 +57,29 @@ for pr in prs:
 EOF
 )
 
+# Stacked PRs: merging a PR whose branch contains another open PR's commits
+# lands that code too (GitHub then marks the other PR merged). So a PR that
+# contains the head of any PR not cleared to merge waits as well.
+# (2026-11-07: #92 carried #90/#91, whose reviews had asked for changes.)
+refspecs=$(awk 'NF {printf "+refs/pull/%s/head:refs/pocketpi-gate/pr/%s ", $2, $2}' <<< "$plan")
+if [ -n "$refspecs" ]; then
+  # shellcheck disable=SC2086
+  git fetch -q origin $refspecs
+  blocked=$(awk '$1 != "merge" && NF {print $2, $3}' <<< "$plan")
+  plan=$(while read -r action n sha rest; do
+    [ -z "${action:-}" ] && continue
+    if [ "$action" = merge ]; then
+      while read -r on osha; do
+        [ -z "${on:-}" ] && continue
+        if git merge-base --is-ancestor "$osha" "$sha" 2>/dev/null; then
+          action=wait; rest="contains #$on, which isn't cleared to merge"; break
+        fi
+      done <<< "$blocked"
+    fi
+    echo "$action $n $sha $rest"
+  done <<< "$plan")
+fi
+
 if [ -n "${DRY_RUN:-}" ]; then echo "$plan"; exit 0; fi
 
 merged=0
