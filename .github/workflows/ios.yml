@@ -9,10 +9,12 @@
 #          upload it to App Store Connect. Signed with the Apple Distribution
 #          certificate (DIST_P12, DIST_P12_PASSWORD) and the "pocketpi App
 #          Store" profile (ASC_PROFILE) from the repo secrets; uploaded with the
-#          App Store Connect API key. The build number is the run number.
+#          App Store Connect API key. The build number is 1000 + the run number:
+#          the repo was recreated on 2026-11-07, which restarted run numbers,
+#          and App Store Connect refuses a build number it has seen before.
 #
-# Manual only (Actions -> iOS -> Run workflow, or `gh workflow run ios.yml --ref <branch>`): macOS minutes cost a multiple
-# of Linux ones, and the Kit's tests run locally for free.
+# Manual only (Actions -> iOS -> Run workflow, or `gh workflow run ios.yml --ref <branch>`): the
+# Kit's tests run locally, and the app build is only worth running when the app changed.
 name: iOS
 
 on:
@@ -157,7 +159,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/PocketPi.xcarchive" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} | tail -200
+            CURRENT_PROJECT_VERSION=$((1000 + ${{ github.run_number }})) | tail -200
       - name: Export and upload to App Store Connect
         run: |
           set -o pipefail
