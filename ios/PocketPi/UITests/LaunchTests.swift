@@ -55,6 +55,32 @@ final class LaunchTests: XCTestCase {
         app.navigationBars["Approval"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["Approvals"].waitForExistence(timeout: 5))
         app.navigationBars["Approvals"].buttons.element(boundBy: 0).tap()
+
+        // Workflows: the list, one workflow's runs, a run's stages, the Run sheet.
+        app.descendants(matching: .any)["project-workflows"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Workflows"].waitForExistence(timeout: 5))
+        keep(app, "workflows")
+        app.staticTexts["clipt: PR review + fix"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["run-workflow"].waitForExistence(timeout: 5))
+        keep(app, "workflow")
+        let runRow = app.descendants(matching: .any)["run-row"].firstMatch
+        XCTAssertTrue(runRow.waitForExistence(timeout: 10))
+        runRow.tap()
+        XCTAssertTrue(app.buttons["run-again"].waitForExistence(timeout: 10))
+        let stage = app.descendants(matching: .any)["stage-row"].firstMatch
+        if stage.waitForExistence(timeout: 3) { stage.tap(); sleep(1) }
+        keep(app, "run")
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["run-workflow"].waitForExistence(timeout: 5))
+        app.buttons["run-workflow"].tap()
+        XCTAssertTrue(app.buttons["start-run"].waitForExistence(timeout: 5))
+        keep(app, "start-run")
+        app.buttons["Cancel"].firstMatch.tap()
+        sleep(1)
+        // Back out to Projects (iPhone: workflow → list → projects).
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Workflows"].waitForExistence(timeout: 5))
+        app.navigationBars["Workflows"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(natter.waitForExistence(timeout: 5))
         natter.tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))

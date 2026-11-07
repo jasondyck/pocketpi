@@ -84,16 +84,23 @@ public struct ChatState: Sendable, Equatable {
     }
 }
 
-/// A workflow run (`/api/runs`): the parts the Approvals screen uses.
+/// A workflow run (`/api/runs`, src/engine.rs `Run`).
 public struct RunInfo: Sendable, Identifiable, Equatable {
-    public struct Stage: Sendable, Equatable {
+    public struct Stage: Sendable, Equatable, Identifiable {
         public var id: String
         public var name: String
         public var kind: String
         public var status: String
         /// For an approval: the question and what it's about (Markdown).
+        /// For a shell stage: the command it ran.
         public var prompt: String?
         public var summary: String
+        /// What the stage printed or replied (the server keeps the tail).
+        public var output: String
+        public var attempts: Int
+        /// Milliseconds since 1970.
+        public var started: UInt64?
+        public var ended: UInt64?
     }
 
     public var id: String
@@ -103,7 +110,13 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
     public var trigger: String
     /// Milliseconds since 1970.
     public var created: UInt64
+    public var ended: UInt64?
     public var stages: [Stage]
+    public var inputs: [String: String]
+    public var cost: Double
+    /// Why it failed.
+    public var error: String?
+    public var branch: String?
 
     public init?(_ v: JSONValue) {
         guard let id = v["id"]?.string, let wf = v["workflow_id"]?.string else { return nil }
@@ -113,12 +126,57 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
         status = v["status"]?.string ?? ""
         trigger = v["trigger"]?.string ?? ""
         created = UInt64(v["created"]?.double ?? 0)
+        ended = v["ended"]?.double.map { UInt64($0) }
         stages = (v["stages"]?.array ?? []).compactMap { s in
             guard let id = s["id"]?.string else { return nil }
             return Stage(id: id, name: s["name"]?.string ?? id, kind: s["kind"]?.string ?? "",
                          status: s["status"]?.string ?? "", prompt: s["prompt"]?.string,
-                         summary: s["summary"]?.string ?? "")
+                         summary: s["summary"]?.string ?? "", output: s["output"]?.string ?? "",
+                         attempts: s["attempts"]?.int ?? 0,
+                         started: s["started"]?.double.map { UInt64($0) },
+                         ended: s["ended"]?.double.map { UInt64($0) })
         }
+        inputs = (v["inputs"]?.object ?? [:]).compactMapValues(\.string)
+        cost = v["cost"]?.double ?? 0
+        error = v["error"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+        branch = v["branch"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Still going: running, or paused at an approval.
+    public var isActive: Bool { ["pending", "running", "waiting"].contains(status) }
+
+    /// The inputs to start the same run again: the ones a person would set.
+    /// The PR's commit is left out so the server picks the PR's current head,
+    /// and so is what a sensor or schedule adds for its own bookkeeping.
+    public var rerunInputs: [String: String] {
+        inputs.filter { !["commit", "scheduled_for", "title", "url", "branch"].contains($0.key) }
+    }
+
+    /// The inputs worth showing, in a stable order ("pr" → "PR #89").
+    public var inputSummary: String {
+        inputs.filter { !["commit", "scheduled_for", "title", "url", "branch"].contains($0.key) && !$0.value.isEmpty }
+            .sorted { $0.key < $1.key }
+            .map { $0.key == "pr" ? "PR #\($0.value)" : $0.key == "issue" ? "issue #\($0.value)" : "\($0.key): \($0.value)" }
+            .joined(separator: " · ")
+    }
+
+    /// How the run began, in words.
+    public var startedBy: String {
+        switch trigger {
+        case "manual", "chat": "started manually"
+        case "agent": "started by pi"
+        case "schedule": "started on a schedule"
+        case "webhook": "started by a webhook"
+        case "merge-gate": "started by the merge gate"
+        case "": "started"
+        default: "started by a new " + trigger // pr, issue, commit sensors
+        }
+    }
+
+    /// How long it ran (or has been running, as of `now`).
+    public func duration(now: Date = Date()) -> TimeInterval {
+        let end = ended.map { Double($0) / 1000 } ?? now.timeIntervalSince1970
+        return max(0, end - Double(created) / 1000)
     }
 
     /// What a waiting approval is about, for the list: the first line of its
@@ -232,6 +290,14 @@ public struct SessionStats: Sendable, Equatable {
 }
 
 public enum Format {
+    /// "45s", "3m 12s", "1h 4m".
+    public static func duration(_ t: TimeInterval) -> String {
+        let s = Int(t.rounded())
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return s % 60 == 0 ? "\(s / 60)m" : "\(s / 60)m \(s % 60)s" }
+        return "\(s / 3600)h \(s % 3600 / 60)m"
+    }
+
     public static func tokens(_ n: Int?) -> String {
         guard let n else { return "–" }
         let d = Double(n)

@@ -55,8 +55,6 @@ simulator, run a local pocketpi and connect to `http://127.0.0.1:3457`
 
 ## Not done yet
 
-- Workflows and runs (list, DAG, approve, cancel)
-- Tapping a run notification opens the app but not the run (no runs screen yet)
 - Model picker, slash-command completion, suggested replies
 - Folding finished tool steps into a summary line, like the web's `collapseTurns`
 

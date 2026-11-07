@@ -7,6 +7,7 @@ enum Scope: Hashable {
     case project(String)
     case archived
     case approvals
+    case workflows
 }
 
 /// What the detail column shows.
@@ -16,6 +17,8 @@ enum ChatTarget: Hashable {
     case new(cwd: String, id: UUID)
     /// A workflow run waiting for an approval.
     case approval(runId: String)
+    case workflow(id: String)
+    case run(id: String)
 }
 
 /// Apple's pattern for a list of containers (Mail's Mailboxes): a three-column
@@ -35,6 +38,8 @@ struct ChatListView: View {
         } content: {
             if scope == .approvals {
                 ApprovalsList(target: $target)
+            } else if scope == .workflows {
+                WorkflowsList(target: $target)
             } else if let scope {
                 ChatsView(scope: scope, target: $target) { column = .detail }
             } else {
@@ -53,6 +58,10 @@ struct ChatListView: View {
                         column = .content
                     }
                     .id(target)
+                case .workflow(let id):
+                    WorkflowView(workflowId: id).id(target)
+                case .run(let id):
+                    RunView(runId: id).id(target)
                 case nil:
                     ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
                                            description: Text("Pick a chat or start one."))
@@ -72,9 +81,16 @@ struct ChatListView: View {
                 target = .chat(path: path, cwd: cwd)
                 column = .detail
             case .run(let id):
+                // Waiting for you: the approval. Otherwise (finished, failed)
+                // the run itself.
                 await model.refresh()
-                scope = .approvals
-                target = .approval(runId: id)
+                if model.approvals.contains(where: { $0.id == id }) {
+                    scope = .approvals
+                    target = .approval(runId: id)
+                } else {
+                    scope = .workflows
+                    target = .run(id: id)
+                }
                 column = .detail
             }
         }
@@ -118,6 +134,11 @@ private struct ProjectsView: View {
                 }
                 .tag(Scope.approvals)
                 .accessibilityIdentifier("project-approvals")
+                ScopeRow(title: "Workflows", count: model.workflows.count, live: !model.activeRuns.isEmpty) {
+                    Image(systemName: "flowchart")
+                }
+                .tag(Scope.workflows)
+                .accessibilityIdentifier("project-workflows")
                 ScopeRow(title: "All chats", count: model.sessions.count,
                          live: model.sessions.contains(where: \.streaming)) {
                     Image(systemName: "tray.full")
@@ -541,7 +562,7 @@ private struct ApprovalView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(run.headline).font(.title2.weight(.semibold))
-                        Text(run.workflowName + " · " + Self.started(run.trigger))
+                        Text(run.workflowName + " · " + run.startedBy)
                             .font(.footnote).foregroundStyle(.secondary)
                         // The text without its first line, which is the title above.
                         MarkdownView(text: Self.body(of: stage.prompt ?? "", headline: run.headline))
@@ -583,18 +604,6 @@ private struct ApprovalView: View {
             lines.removeFirst()
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// How the run began, in words.
-    static func started(_ trigger: String) -> String {
-        switch trigger {
-        case "manual": "started manually"
-        case "agent": "started by pi"
-        case "schedule": "started on a schedule"
-        case "webhook": "started by a webhook"
-        case "": "started"
-        default: "started by a new " + trigger // pr, issue, commit sensors
-        }
     }
 
     private func answer(_ run: RunInfo, _ approve: Bool) {

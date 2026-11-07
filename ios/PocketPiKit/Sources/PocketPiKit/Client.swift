@@ -131,6 +131,54 @@ public final class PocketPiClient: Sendable {
         try await get("/api/runs", as: JSONValue.self)["runs"]?.array?.compactMap(RunInfo.init) ?? []
     }
 
+    /// One workflow's recent runs, newest first.
+    public func runs(workflow: String) async throws -> [RunInfo] {
+        let q = workflow.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? workflow
+        return try await get("/api/runs?workflow=\(q)", as: JSONValue.self)["runs"]?.array?.compactMap(RunInfo.init) ?? []
+    }
+
+    /// One run, with its stages' output.
+    public func run(id: String) async throws -> RunInfo {
+        guard let r = try await get("/api/runs/\(id)", as: JSONValue.self)["run"].flatMap(RunInfo.init) else {
+            throw PocketPiError.unexpected("no run in the answer")
+        }
+        return r
+    }
+
+    /// Every workflow definition, with its last run.
+    public func workflows() async throws -> [WorkflowInfo] {
+        try await get("/api/workflows", as: JSONValue.self)["workflows"]?.array?.compactMap(WorkflowInfo.init) ?? []
+    }
+
+    /// Start a workflow. Without `force`, the server refuses a run that
+    /// repeats one that's active or succeeded (same PR commit, issue or
+    /// commit) and says which: `.duplicate`.
+    public func start(workflow: String, inputs: [String: String], force: Bool = false) async throws -> StartResult {
+        let body: JSONValue = [
+            "inputs": .object(inputs.mapValues(JSONValue.string)), "trigger": "manual", "force": .bool(force),
+        ]
+        do {
+            let r: JSONValue = try await post("/api/workflows/\(workflow)/run", body)
+            guard let id = r["run_id"]?.string else { throw PocketPiError.unexpected("no run id in the answer") }
+            return .started(runId: id)
+        } catch PocketPiError.http(409, let message) {
+            if let v = try? JSONValue.parse(message), v["duplicate"]?.bool == true, let id = v["run_id"]?.string {
+                return .duplicate(runId: id, message: v["message"]?.string ?? "This already ran.")
+            }
+            throw PocketPiError.http(status: 409, message: message)
+        }
+    }
+
+    /// Stop a running run (its stage's pi or shell is killed).
+    public func cancel(run: String) async throws {
+        _ = try await post("/api/runs/\(run)/cancel", [:], as: JSONValue.self)
+    }
+
+    /// Turn a workflow's sensors (schedule, PR polling, pi starting it) on or off.
+    public func setEnabled(workflow: String, _ on: Bool) async throws {
+        _ = try await post("/api/workflows/\(workflow)/enable", ["enabled": .bool(on)], as: JSONValue.self)
+    }
+
     /// Answer a run's approval stage. Approving lets the run go on (for a PR
     /// review: post the comment); rejecting stops it there.
     public func answer(run: String, stage: String, approve: Bool, note: String = "") async throws {

@@ -35,6 +35,14 @@ if [ "${1:-}" != "--unit" ]; then
            {"id":"ask","type":"approval","name":"Ship?","needs":["prep"],"prompt":"Ship it?"},
            {"id":"ship","type":"shell","name":"Ship","needs":["ask"],"run":"echo shipped"}]}
 JSON
+  # Inputs, duplicates (same issue), force and cancel (the sleep).
+  cat > "$SCRATCH/home/.config/pocketpi/workflows/slow-test.json" <<JSON
+{"id":"slow-test","name":"Slow test","description":"Waits, for cancelling.","project":"$SCRATCH/home/project","worktree":false,"enabled":false,
+ "triggers":[{"type":"manual"},{"type":"schedule","cron":"*/30 * * * *"}],
+ "inputs":[{"name":"issue","description":"Issue number","required":true},{"name":"wait","description":"Seconds","required":false,"default":"0"}],
+ "improve":"off",
+ "stages":[{"id":"nap","type":"shell","name":"Nap","needs":[],"run":"sleep {{input.wait}}; echo rested for issue {{input.issue}}"}]}
+JSON
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # A throwaway APNs key, so device registration can be tested. Nothing in the
   # tests makes the server send a notification to Apple.

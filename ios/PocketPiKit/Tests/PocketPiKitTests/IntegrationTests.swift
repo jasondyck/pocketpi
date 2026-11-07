@@ -231,6 +231,49 @@ struct IntegrationTests {
         }
     }
 
+    @Test func startsRunsAndRefusesDuplicates() async throws {
+        // ios/test-linux.sh writes "slow-test": one shell stage that sleeps {{input.wait}}.
+        let w = try #require(try await client.workflows().first { $0.id == "slow-test" })
+        #expect(w.inputs.map(\.name) == ["issue", "wait"])
+        #expect(w.triggers == ["every 30 minutes"])
+        #expect(!w.enabled)
+
+        let issue = String(Int.random(in: 1000...9999))
+        guard case .started(let first) = try await client.start(workflow: "slow-test", inputs: ["issue": issue]) else {
+            Issue.record("first run didn't start"); return
+        }
+        var run = try await client.run(id: first)
+        for _ in 0..<50 where run.isActive {
+            try await Task.sleep(for: .milliseconds(100))
+            run = try await client.run(id: first)
+        }
+        #expect(run.status == "succeeded")
+        #expect(run.stages.first?.output.contains("rested for issue \(issue)") == true)
+        #expect(run.inputs["issue"] == issue)
+
+        // The same issue again: refused, unless forced.
+        let again = try await client.start(workflow: "slow-test", inputs: ["issue": issue])
+        guard case .duplicate(let dup, let message) = again else { Issue.record("not refused: \(again)"); return }
+        #expect(dup == first && !message.isEmpty)
+        guard case .started(let forced) = try await client.start(workflow: "slow-test", inputs: ["issue": issue, "wait": "30"], force: true) else {
+            Issue.record("forced run didn't start"); return
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await client.run(id: forced).isActive)
+        try await client.cancel(run: forced)
+        run = try await client.run(id: forced)
+        for _ in 0..<50 where run.isActive {
+            try await Task.sleep(for: .milliseconds(100))
+            run = try await client.run(id: forced)
+        }
+        #expect(run.status == "cancelled")
+        #expect(try await client.runs(workflow: "slow-test").map(\.id).contains(forced))
+
+        try await client.setEnabled(workflow: "slow-test", true)
+        #expect(try await client.workflows().first { $0.id == "slow-test" }?.enabled == true)
+        try await client.setEnabled(workflow: "slow-test", false)
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

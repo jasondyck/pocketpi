@@ -81,6 +81,10 @@ final class AppModel {
     private(set) var archived: [SessionInfo] = []
     /// Workflow runs waiting for an approval, newest first.
     private(set) var approvals: [RunInfo] = []
+    private(set) var workflows: [WorkflowInfo] = []
+    /// Recent runs of every workflow, newest first.
+    private(set) var runs: [RunInfo] = []
+    var activeRuns: [RunInfo] { runs.filter(\.isActive) }
     private(set) var home: String?
     private(set) var loadError: String?
     /// An action that failed (archive), shown as an alert.
@@ -120,6 +124,8 @@ final class AppModel {
         sessions = []
         archived = []
         approvals = []
+        workflows = []
+        runs = []
     }
 
     // MARK: - notifications
@@ -163,8 +169,11 @@ final class AppModel {
             async let s = client.sessions()
             async let a = client.archivedSessions()
             async let r = client.runs()
-            let (pr, ss, aa, rr) = try await (p, s, a, r)
+            async let w = client.workflows()
+            let (pr, ss, aa, rr, ww) = try await (p, s, a, r, w)
             approvals = rr.filter { $0.waitingApproval != nil }
+            runs = rr
+            workflows = ww
             projects = pr.projects
             home = pr.home
             sessions = ss

@@ -27,6 +27,18 @@ cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-review.json" <<JSON
             "prompt":"Post this review on PR #92?\\n\\n**Verdict: changes requested**\\n\\n1. \`src/record.rs:88\` drops the last audio frame.\\n2. CHANGELOG has no line for the new flag."},
            {"id":"comment","type":"shell","name":"Comment","needs":["approve"],"run":"echo posted"}]}
 JSON
+# A PR workflow with an input and a finished run, for the Workflows screens.
+cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-pr.json" <<JSON
+{"id":"clipt-pr","name":"clipt: PR review + fix","description":"Review a PR's head; fix what the review asks for and push.",
+ "project":"$SCRATCH/home/projects/clipt","worktree":false,"enabled":true,
+ "triggers":[{"type":"manual"},{"type":"git","on":"pr"},{"type":"agent","when":"asked to review a PR"}],
+ "inputs":[{"name":"pr","description":"PR number","required":true},{"name":"commit","required":false,"default":""}],
+ "improve":"off",
+ "stages":[{"id":"diff","type":"shell","name":"Fetch PR","needs":[],"run":"echo 'PR #{{input.pr}}: Sway tests'; echo 'Files changed: tests/sway.rs'"},
+           {"id":"review","type":"shell","name":"Review PR","needs":["diff"],"run":"echo '**Verdict: pass**'; echo; echo 'No blocking issues.'"},
+           {"id":"decide","type":"shell","name":"Fix needed?","needs":["review"],"run":"echo 'Review passed: nothing to fix.'; exit 79"},
+           {"id":"fix","type":"shell","name":"Fix findings","needs":["decide"],"run":"true"}]}
+JSON
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
   PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
   POCKETPI_PORT="$PORT" nohup "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &
@@ -46,6 +58,7 @@ chat() {
   sleep 1
 }
 post /api/workflows/clipt-review/run '{}' >/dev/null
+post /api/workflows/clipt-pr/run '{"inputs":{"pr":"96","commit":"75348bc"}}' >/dev/null
 chat "$P/clipt" "Why does the region picker flicker on the second monitor?"
 chat "$P/clipt" "Add a tool call to check the changelog"
 chat "$P/natter" "Check the SFU log with a tool and summarize what changed since Monday"

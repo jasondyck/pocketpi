@@ -288,3 +288,48 @@ import Testing
     #expect(!URLError(.timedOut).isCancellation)
     #expect(PocketPiError.command("boom").reportable == "boom")
 }
+
+@Suite struct WorkflowTests {
+    @Test func readsAWorkflowAndItsLastRun() throws {
+        let v = try JSONValue.parse(#"""
+        {"workflow":{"id":"clipt-merge","name":"clipt: auto-merge","description":"Merges.","project":"/p","enabled":true,
+          "triggers":[{"type":"schedule","cron":"*/30 * * * *"},{"type":"manual"},{"type":"git","on":"pr"},{"type":"agent","when":"x"}],
+          "inputs":[{"name":"pr","description":"PR number","required":true,"default":null},{"name":"commit","required":false,"default":""}],
+          "max_cost":2.0,"stages":[{"id":"a"},{"id":"b"}]},
+         "errors":[],"last_run":{"id":"r1","status":"failed","created":1794058218063,"ended":null,"cost":0},"runs":53}
+        """#)
+        let w = try #require(WorkflowInfo(v))
+        #expect(w.id == "clipt-merge")
+        #expect(w.enabled && w.manual)
+        #expect(w.triggers == ["every 30 minutes", "new PR commits", "pi, when it applies"])
+        #expect(w.inputs.map(\.name) == ["pr", "commit"])
+        #expect(w.inputs[0].required && w.inputs[0].defaultValue == "")
+        #expect(w.stageCount == 2 && w.maxCost == 2.0 && w.runCount == 53)
+        #expect(w.lastRun?.id == "r1" && w.lastRun?.status == "failed")
+    }
+
+    @Test func cronInWords() {
+        #expect(WorkflowInfo.cronWords("*/30 * * * *") == "every 30 minutes")
+        #expect(WorkflowInfo.cronWords("5 * * * *") == "hourly at :05")
+        #expect(WorkflowInfo.cronWords("0 */6 * * *") == "every 6 hours")
+        #expect(WorkflowInfo.cronWords("43 16 * * *") == "daily at 16:43")
+        #expect(WorkflowInfo.cronWords("0 9 * * 1") == "schedule 0 9 * * 1")
+    }
+
+    @Test func runInputsAndRerun() throws {
+        let v = try JSONValue.parse(#"""
+        {"id":"r","workflow_id":"w","status":"failed","created":1000,"ended":61000,"cost":0.25,"error":"stage Fix failed",
+         "inputs":{"pr":"89","commit":"6d039f0","title":"T","url":"u","branch":"b"},
+         "stages":[{"id":"fix","name":"Fix","kind":"agent","status":"failed","output":"boom","attempts":2,"started":2000,"ended":3000}]}
+        """#)
+        let r = try #require(RunInfo(v))
+        #expect(r.rerunInputs == ["pr": "89"])
+        #expect(r.inputSummary == "PR #89")
+        #expect(r.duration() == 60)
+        #expect(!r.isActive && r.error == "stage Fix failed")
+        #expect(r.stages[0].output == "boom" && r.stages[0].attempts == 2)
+        #expect(r.startedBy == "started")
+        #expect(Format.duration(45) == "45s" && Format.duration(192) == "3m 12s")
+        #expect(Format.duration(120) == "2m" && Format.duration(3840) == "1h 4m")
+    }
+}
