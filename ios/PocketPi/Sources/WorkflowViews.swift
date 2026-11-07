@@ -1,5 +1,6 @@
 import PocketPiKit
 import SwiftUI
+import UIKit
 
 // Workflows: the list (content column), one workflow with its runs, one run
 // with its stages, and the sheet that starts a run. Runs move on their own,
@@ -58,12 +59,39 @@ struct WorkflowsList: View {
         .listStyle(.plain)
         .refreshable { await model.refresh() }
         .navigationTitle("Workflows")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { newWorkflow }
+        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 await model.refresh()
             }
         }
+    }
+}
+
+extension WorkflowsList {
+    /// pi makes workflows: a new chat in a project, with the request started.
+    /// Like New chat, a menu of projects; a tap uses the last one.
+    var newWorkflow: some View {
+        Menu {
+            ForEach(model.projects.filter(\.exists)) { p in
+                Button(p.name) { begin(p.path) }
+            }
+        } label: {
+            Image(systemName: "plus")
+        } primaryAction: {
+            begin(model.lastCwd)
+        }
+        .accessibilityLabel("New workflow")
+        .accessibilityIdentifier("new-workflow")
+    }
+
+    private func begin(_ cwd: String) {
+        model.lastCwd = cwd
+        model.openRequest = OpenRequest(scope: .project(cwd),
+                                        target: .new(cwd: cwd, id: UUID(), draft: "Create a workflow for this project that "))
     }
 }
 
@@ -191,32 +219,24 @@ struct RunStatusIcon: View {
 struct WorkflowView: View {
     @Environment(AppModel.self) private var model
     let workflowId: String
+    @State private var detail: WorkflowDetail?
     @State private var runs: [RunInfo] = []
     @State private var loaded = false
     @State private var starting = false
     @State private var opened: String?
+    @State private var busy = false
+    /// Improve now was tapped: the reviewer answers in a minute or two.
+    @State private var reviewing = false
+    @State private var confirmDelete = false
+    @State private var reverting: WorkflowDetail.Version?
 
-    private var workflow: WorkflowInfo? { model.workflows.first { $0.id == workflowId } }
+    private var workflow: WorkflowInfo? { detail?.info ?? model.workflows.first { $0.id == workflowId } }
 
     var body: some View {
         Group {
             if let w = workflow {
                 List {
-                    Section {
-                        if !w.description.isEmpty {
-                            Text(w.description).font(.callout)
-                        }
-                        LabeledContent("Project", value: model.projectName(for: w.project))
-                        LabeledContent("Starts on", value: w.triggers.isEmpty ? "Only when you run it" : w.triggers.joined(separator: ", "))
-                        if !w.triggers.isEmpty {
-                            Toggle("On", isOn: Binding(get: { w.enabled }, set: { on in setEnabled(on) }))
-                                .accessibilityIdentifier("workflow-enabled")
-                        }
-                    } footer: {
-                        if !w.triggers.isEmpty {
-                            Text("Off stops it starting by itself. You can still run it.")
-                        }
-                    }
+                    about(w)
                     if !w.errors.isEmpty {
                         Section("Problems") {
                             ForEach(w.errors, id: \.self) { e in
@@ -224,6 +244,8 @@ struct WorkflowView: View {
                             }
                         }
                     }
+                    if let p = detail?.proposal { proposal(p) }
+                    improvements(w)
                     Section("Runs") {
                         ForEach(runs) { run in
                             NavigationLink(value: RunRoute(id: run.id)) {
@@ -235,18 +257,25 @@ struct WorkflowView: View {
                             Text("No runs yet").foregroundStyle(.secondary)
                         }
                     }
+                    if let h = detail?.history, !h.isEmpty { history(h) }
                 }
                 .refreshable { await load() }
                 .navigationTitle(w.name)
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Run", systemImage: "play.fill") { starting = true }
-                            .disabled(!w.manual)
-                            .accessibilityIdentifier("run-workflow")
-                    }
-                }
+                .toolbar { toolbar(w) }
                 .sheet(isPresented: $starting) {
                     StartRunSheet(workflow: w) { id in opened = id }
+                }
+                .confirmationDialog("Delete \(w.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete workflow", role: .destructive) { delete() }
+                } message: {
+                    Text("Its runs and their branches are kept.")
+                }
+                .confirmationDialog("Revert this change?", isPresented: Binding(
+                    get: { reverting != nil }, set: { if !$0 { reverting = nil } }
+                ), titleVisibility: .visible, presenting: reverting) { v in
+                    Button("Revert") { revert(v) }
+                } message: { v in
+                    Text("Restores the workflow as it was before “\(v.reason.isEmpty ? "this edit" : v.reason)”. The current version is kept in history.")
                 }
             } else {
                 ContentUnavailableView("Workflow not found", systemImage: "flowchart",
@@ -259,24 +288,261 @@ struct WorkflowView: View {
         .task {
             while !Task.isCancelled {
                 await load()
-                try? await Task.sleep(for: .seconds(runs.contains(where: \.isActive) ? 3 : 10))
+                let fast = runs.contains(where: \.isActive) || reviewing
+                try? await Task.sleep(for: .seconds(fast ? 3 : 10))
             }
+        }
+    }
+
+    private func about(_ w: WorkflowInfo) -> some View {
+        Section {
+            if !w.description.isEmpty {
+                Text(w.description).font(.callout)
+            }
+            LabeledContent("Project", value: model.projectName(for: w.project))
+            LabeledContent("Starts on", value: w.triggers.isEmpty ? "Only when you run it" : w.triggers.joined(separator: ", "))
+            if !w.triggers.isEmpty {
+                Toggle("On", isOn: Binding(get: { w.enabled }, set: { on in setEnabled(on) }))
+                    .accessibilityIdentifier("workflow-enabled")
+            }
+        } footer: {
+            if !w.triggers.isEmpty {
+                Text("Off stops it starting by itself. You can still run it.")
+            }
+        }
+    }
+
+    /// Self-improvement: how much it may change itself, and Improve now.
+    private func improvements(_ w: WorkflowInfo) -> some View {
+        Section {
+            Picker("Improvements", selection: Binding(get: { w.improve }, set: { setImprove($0) })) {
+                Text("Off").tag("off")
+                Text("Suggest").tag("suggest")
+                Text("Auto").tag("auto")
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("improve-mode")
+            Button {
+                improveNow()
+            } label: {
+                if reviewing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Reviewing the last run…")
+                    }
+                } else {
+                    Label("Improve now", systemImage: "sparkles")
+                }
+            }
+            .disabled(reviewing || busy || w.lastRun == nil)
+        } header: {
+            Text("Improvements")
+        } footer: {
+            Text(Self.improveHelp(w.improve))
+        }
+    }
+
+    static func improveHelp(_ mode: String) -> String {
+        switch mode {
+        case "off": "Never changes itself."
+        case "auto": "After notable runs (failures, retries, every 5th run) a reviewer improves it straight away. Changes to approvals, reviews, shell commands or cost caps still wait for you."
+        default: "After notable runs (failures, retries, every 5th run) a reviewer suggests improvements for you to apply."
+        }
+    }
+
+    private func proposal(_ p: WorkflowDetail.Proposal) -> some View {
+        Section {
+            ForEach(p.changes, id: \.self) { c in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(c.summary).font(.body.weight(.medium))
+                    if !c.why.isEmpty { Text(c.why).font(.callout).foregroundStyle(.secondary) }
+                }
+            }
+            if !p.violations.isEmpty {
+                Label("Needs your OK because it \(p.violations.joined(separator: "; ")).", systemImage: "hand.raised")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            NavigationLink("Show changes") {
+                DiffView(lines: detail?.proposalDiff ?? [])
+            }
+            HStack {
+                Button("Dismiss") { answerProposal(apply: false) }
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("Apply") { answerProposal(apply: true) }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("apply-proposal")
+            }
+            .disabled(busy)
+        } header: {
+            Label("Suggested improvement", systemImage: "sparkles")
+        } footer: {
+            Text("\(p.createdDate.formatted(.relative(presentation: .named))) · \(p.modelLabel)")
+        }
+    }
+
+    private func history(_ h: [WorkflowDetail.Version]) -> some View {
+        Section("History") {
+            ForEach(h) { v in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(v.reason.isEmpty ? "Edited" : v.reason).font(.callout).lineLimit(4)
+                    Text(v.date, format: .relative(presentation: .named)).font(.caption).foregroundStyle(.secondary)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button("Revert", systemImage: "arrow.uturn.backward") { reverting = v }
+                        .tint(.orange)
+                }
+                .contextMenu {
+                    Button("Revert this change", systemImage: "arrow.uturn.backward") { reverting = v }
+                }
+            }
+        }
+    }
+
+    @ToolbarContentBuilder private func toolbar(_ w: WorkflowInfo) -> some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button("Run", systemImage: "play.fill") { starting = true }
+                .disabled(!w.manual)
+                .accessibilityIdentifier("run-workflow")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Button("Edit in chat", systemImage: "bubble.left.and.text.bubble.right") { editInChat(w) }
+                Button("Copy JSON", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = detail?.workflow.prettyText
+                }
+                .disabled(detail == nil)
+                Divider()
+                Button("Delete workflow", systemImage: "trash", role: .destructive) { confirmDelete = true }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("workflow-menu")
         }
     }
 
     private func load() async {
         guard let client = model.client else { return }
-        if let r = try? await client.runs(workflow: workflowId) { runs = r }
+        async let r = client.runs(workflow: workflowId)
+        async let d = client.workflow(id: workflowId)
+        if let r = try? await r { runs = r }
+        if let d = try? await d {
+            // The reviewer is done when a suggestion or a new version appears.
+            if reviewing, d.proposal != detail?.proposal || d.history.first != detail?.history.first { reviewing = false }
+            detail = d
+        }
         loaded = true
     }
 
+    /// pi in a new chat in the workflow's project, with the start of the request.
+    private func editInChat(_ w: WorkflowInfo) {
+        let cwd = w.project.isEmpty ? model.lastCwd : w.project
+        model.openRequest = OpenRequest(scope: .project(cwd),
+                                        target: .new(cwd: cwd, id: UUID(), draft: "Update the workflow \"\(w.id)\": "))
+    }
+
+    private func act(_ what: String, _ f: @escaping (PocketPiClient) async throws -> Void) {
+        guard let client = model.client else { return }
+        busy = true
+        Task {
+            do { try await f(client) } catch {
+                if let m = error.reportable { model.problem = "Couldn't \(what): " + m }
+            }
+            await load()
+            await model.refresh()
+            busy = false
+        }
+    }
+
     private func setEnabled(_ on: Bool) {
+        act(on ? "turn it on" : "turn it off") { try await $0.setEnabled(workflow: workflowId, on) }
+    }
+
+    private func setImprove(_ mode: String) {
+        act("change improvements") { try await $0.setImprove(workflow: workflowId, mode: mode) }
+    }
+
+    private func improveNow() {
+        reviewing = true
+        act("start a review") { try await $0.improveNow(workflow: workflowId) }
+        // The reviewer can also find nothing to change; stop waiting after a while.
+        Task {
+            try? await Task.sleep(for: .seconds(180))
+            reviewing = false
+        }
+    }
+
+    private func answerProposal(apply: Bool) {
+        act(apply ? "apply it" : "dismiss it") { c in
+            if apply { try await c.applyProposal(workflow: workflowId) } else { try await c.dismissProposal(workflow: workflowId) }
+        }
+    }
+
+    private func revert(_ v: WorkflowDetail.Version) {
+        act("revert") { try await $0.revert(workflow: workflowId, version: v.version) }
+    }
+
+    private func delete() {
         guard let client = model.client else { return }
         Task {
-            do { try await client.setEnabled(workflow: workflowId, on) } catch {
-                if let m = error.reportable { model.problem = (on ? "Couldn't turn it on: " : "Couldn't turn it off: ") + m }
+            do {
+                try await client.deleteWorkflow(workflowId)
+                await model.refresh()
+                // Back to the list.
+                model.openRequest = OpenRequest(scope: .workflows, target: nil)
+            } catch {
+                if let m = error.reportable { model.problem = "Couldn't delete it: " + m }
             }
-            await model.refresh()
+        }
+    }
+}
+
+/// A suggested change: old lines red, new lines green, unchanged runs folded.
+struct DiffView: View {
+    let lines: [DiffLine]
+
+    var body: some View {
+        ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    row(line)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .background(Theme.code)
+        .navigationTitle("Changes")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if lines.isEmpty {
+                ContentUnavailableView("No changes", systemImage: "equal")
+            }
+        }
+    }
+
+    @ViewBuilder private func row(_ line: DiffLine) -> some View {
+        switch line.kind {
+        case .skipped:
+            Text("⋯ " + line.text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+        case .same, .added, .removed:
+            HStack(spacing: 6) {
+                Text(line.kind == .added ? "+" : line.kind == .removed ? "−" : " ")
+                    .foregroundStyle(line.kind == .added ? Color.green : line.kind == .removed ? Theme.danger : .secondary)
+                    .accessibilityLabel(line.kind == .added ? "added" : line.kind == .removed ? "removed" : "")
+                Text(line.text)
+            }
+            .font(.caption.monospaced())
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(line.kind == .added ? Color.green.opacity(0.12) : line.kind == .removed ? Theme.danger.opacity(0.12) : .clear)
         }
     }
 }

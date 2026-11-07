@@ -9,10 +9,12 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     private let path: String?
     private let cwd: String
+    /// Text to start a new chat's message box with ("Update the workflow …").
+    private let draft: String?
     @State private var session: ChatSession?
 
-    init(path: String, cwd: String) { self.path = path; self.cwd = cwd }
-    init(newIn cwd: String) { self.path = nil; self.cwd = cwd }
+    init(path: String, cwd: String) { self.path = path; self.cwd = cwd; self.draft = nil }
+    init(newIn cwd: String, draft: String? = nil) { self.path = nil; self.cwd = cwd; self.draft = draft }
 
     var body: some View {
         Group {
@@ -22,6 +24,7 @@ struct ChatView: View {
             guard session == nil, let client = model.client else { return }
             let s = path.map { ChatSession(client: client, path: $0, cwd: cwd) } ?? ChatSession(client: client, newIn: cwd)
             s.onTurnFinished = { [model] in Task { await model.refresh() } }
+            if let draft { s.composer = draft }
             session = s
         }
     }
@@ -579,6 +582,13 @@ private struct Composer: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(LiquidGlass.available ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
+        // A chat started with a draft ("Update the workflow …"): the keyboard
+        // comes up so it's one step to finish the sentence.
+        .task {
+            guard session.path == nil, session.transcript.isEmpty, !session.composer.isEmpty else { return }
+            try? await Task.sleep(for: .milliseconds(500))
+            focused = true
+        }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task {

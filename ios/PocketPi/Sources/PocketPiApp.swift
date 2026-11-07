@@ -92,6 +92,9 @@ final class AppModel {
     private(set) var loading = false
     /// A tapped notification, for the chat list to open.
     var pendingLink: NotificationLink?
+    /// A screen asking the split view to show something else (a workflow's
+    /// Edit in chat opens a new chat in its project).
+    var openRequest: OpenRequest?
 
     init() {
         // UI tests start with a clean slate and an address to type.
@@ -232,4 +235,11 @@ final class AppModel {
         get { UserDefaults.standard.string(forKey: "lastCwd") ?? home ?? "~" }
         set { UserDefaults.standard.set(newValue, forKey: "lastCwd") }
     }
+}
+
+/// Where to go: the list (middle column) and what it shows.
+struct OpenRequest: Equatable {
+    var scope: Scope
+    /// nil: just the list.
+    var target: ChatTarget?
 }

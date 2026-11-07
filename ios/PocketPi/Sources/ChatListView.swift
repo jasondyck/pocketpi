@@ -14,7 +14,8 @@ enum Scope: Hashable {
 enum ChatTarget: Hashable {
     case chat(path: String, cwd: String)
     /// A chat that doesn't exist yet; the id makes each "new chat" distinct.
-    case new(cwd: String, id: UUID)
+    /// `draft` starts its message box (Edit in chat, New workflow).
+    case new(cwd: String, id: UUID, draft: String? = nil)
     /// A workflow run waiting for an approval.
     case approval(runId: String)
     case workflow(id: String)
@@ -50,8 +51,8 @@ struct ChatListView: View {
                 switch target {
                 case .chat(let path, let cwd):
                     ChatView(path: path, cwd: cwd).id(target)
-                case .new(let cwd, _):
-                    ChatView(newIn: cwd).id(target)
+                case .new(let cwd, _, let draft):
+                    ChatView(newIn: cwd, draft: draft).id(target)
                 case .approval(let runId):
                     ApprovalView(runId: runId) {
                         target = nil
@@ -92,7 +93,20 @@ struct ChatListView: View {
                     target = .run(id: id)
                 }
                 column = .detail
+            case .workflow(let id):
+                await model.refresh()
+                scope = .workflows
+                target = .workflow(id: id)
+                column = .detail
             }
+        }
+        // A screen asked to open something elsewhere (Edit in chat).
+        .onChange(of: model.openRequest) { _, req in
+            guard let req else { return }
+            model.openRequest = nil
+            scope = req.scope
+            target = req.target
+            column = req.target == nil ? .content : .detail
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refresh() } }

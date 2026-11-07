@@ -333,3 +333,43 @@ import Testing
         #expect(Format.duration(120) == "2m" && Format.duration(3840) == "1h 4m")
     }
 }
+
+@Suite struct WorkflowDetailTests {
+    @Test func readsProposalAndHistory() throws {
+        let v = try JSONValue.parse(#"""
+        {"workflow":{"id":"w","name":"W","improve":"auto","stages":[{"id":"a","prompt":"old"}]},
+         "errors":[],"runs":[{},{}],
+         "proposal":{"created":1794000000000,"model":"openai-codex/gpt-6.1-sol",
+           "changes":[{"summary":"Sharper prompt","why":"It kept missing X."}],"violations":["changes a shell command"],
+           "workflow":{"id":"w","name":"W","improve":"auto","stages":[{"id":"a","prompt":"new"}]}},
+         "history":[{"version":"1794000000001","at":1794000000001,"reason":"auto-improved after run r"}]}
+        """#)
+        let d = try #require(WorkflowDetail(v))
+        #expect(d.info.improve == "auto" && d.info.runCount == 2)
+        let p = try #require(d.proposal)
+        #expect(p.modelLabel == "gpt-6.1-sol")
+        #expect(p.changes == [.init(summary: "Sharper prompt", why: "It kept missing X.")])
+        #expect(p.violations == ["changes a shell command"])
+        #expect(d.history.map(\.reason) == ["auto-improved after run r"])
+        let diff = d.proposalDiff
+        #expect(diff.contains(DiffLine(.removed, #"      "prompt" : "old""#)))
+        #expect(diff.contains(DiffLine(.added, #"      "prompt" : "new""#)))
+        #expect(WorkflowDetail(try JSONValue.parse(#"{"workflow":{"id":"w"},"proposal":null}"#))?.proposal == nil)
+    }
+
+    @Test func diffFoldsUnchangedRuns() {
+        let a = (1...10).map(String.init)
+        var b = a
+        b[4] = "five"
+        let d = DiffLine.diff(a, b, context: 1)
+        #expect(d == [
+            DiffLine(.skipped, "3 unchanged lines"), DiffLine(.same, "4"), DiffLine(.removed, "5"),
+            DiffLine(.added, "five"), DiffLine(.same, "6"), DiffLine(.skipped, "4 unchanged lines"),
+        ])
+        #expect(DiffLine.diff(a, a).isEmpty)
+    }
+
+    @Test func workflowNotificationLink() {
+        #expect(NotificationLink(url: "/?w=clipt-merge") == .workflow(id: "clipt-merge"))
+    }
+}

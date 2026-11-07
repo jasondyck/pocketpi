@@ -39,6 +39,19 @@ cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-pr.json" <<JSON
            {"id":"decide","type":"shell","name":"Fix needed?","needs":["review"],"run":"echo 'Review passed: nothing to fix.'; exit 79"},
            {"id":"fix","type":"shell","name":"Fix findings","needs":["decide"],"run":"true"}]}
 JSON
+# A suggested improvement for it, for the Improvements screens.
+mkdir -p "$SCRATCH/home/.config/pocketpi/workflows/.proposals"
+python3 - "$SCRATCH/home/.config/pocketpi/workflows" <<'PY'
+import json, sys
+d = sys.argv[1]
+w = json.load(open(f"{d}/clipt-pr.json"))
+w["stages"][1]["run"] = "echo '**Verdict: pass**'; echo; echo 'No blocking issues. CHANGELOG checked.'"
+json.dump({"created": 1794000000000, "run_id": "x", "model": "openai-codex/gpt-6.1-sol",
+           "changes": [{"summary": "Check the CHANGELOG in every review",
+                        "why": "Two of the last five PRs were missing a CHANGELOG line."}],
+           "violations": ["changes a shell command"], "workflow": w},
+          open(f"{d}/.proposals/clipt-pr.json", "w"))
+PY
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
   PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
   POCKETPI_PORT="$PORT" nohup "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &

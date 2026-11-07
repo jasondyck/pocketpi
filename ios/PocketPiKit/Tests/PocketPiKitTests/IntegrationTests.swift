@@ -274,6 +274,31 @@ struct IntegrationTests {
         try await client.setEnabled(workflow: "slow-test", false)
     }
 
+    @Test func improvesAndReverts() async throws {
+        // ios/test-linux.sh writes a suggested improvement for slow-test.
+        var d = try await client.workflow(id: "slow-test")
+        let p = try #require(d.proposal)
+        #expect(p.changes.first?.summary == "Clearer description")
+        #expect(!d.proposalDiff.isEmpty)
+        let before = d.info.description
+        try await client.applyProposal(workflow: "slow-test")
+        d = try await client.workflow(id: "slow-test")
+        #expect(d.proposal == nil)
+        #expect(d.info.description == "Waits, so a run can be cancelled.")
+        let version = try #require(d.history.first)
+        try await client.revert(workflow: "slow-test", version: version.version)
+        #expect(try await client.workflow(id: "slow-test").info.description == before)
+
+        try await client.setImprove(workflow: "slow-test", mode: "auto")
+        #expect(try await client.workflow(id: "slow-test").info.improve == "auto")
+        try await client.setImprove(workflow: "slow-test", mode: "off")
+
+        try await client.deleteWorkflow("delete-me")
+        #expect(try await client.workflows().contains { $0.id == "delete-me" } == false)
+        // Dismissing with nothing suggested is allowed and changes nothing.
+        try await client.dismissProposal(workflow: "slow-test")
+    }
+
     @Test func reopensWhenPiIsGone() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("first")

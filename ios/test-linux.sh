@@ -43,6 +43,20 @@ JSON
  "improve":"off",
  "stages":[{"id":"nap","type":"shell","name":"Nap","needs":[],"run":"sleep {{input.wait}}; echo rested for issue {{input.issue}}"}]}
 JSON
+  # A suggested improvement for slow-test (apply, history, revert) and a
+  # workflow to delete.
+  mkdir -p "$SCRATCH/home/.config/pocketpi/workflows/.proposals"
+  python3 - "$SCRATCH/home/.config/pocketpi/workflows" <<'PY'
+import json, sys
+d = sys.argv[1]
+w = json.load(open(f"{d}/slow-test.json"))
+w["description"] = "Waits, so a run can be cancelled."
+json.dump({"created": 1794000000000, "run_id": "x", "model": "fake/echo-1",
+           "changes": [{"summary": "Clearer description", "why": "Says what it's for."}],
+           "violations": [], "workflow": w}, open(f"{d}/.proposals/slow-test.json", "w"))
+w2 = dict(w, id="delete-me", name="Delete me")
+json.dump(w2, open(f"{d}/delete-me.json", "w"))
+PY
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # A throwaway APNs key, so device registration can be tested. Nothing in the
   # tests makes the server send a notification to Apple.

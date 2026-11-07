@@ -169,6 +169,44 @@ public final class PocketPiClient: Sendable {
         }
     }
 
+    /// One workflow with its suggested improvement and earlier versions.
+    public func workflow(id: String) async throws -> WorkflowDetail {
+        guard let d = WorkflowDetail(try await get("/api/workflows/\(id)", as: JSONValue.self)) else {
+            throw PocketPiError.unexpected("no workflow in the answer")
+        }
+        return d
+    }
+
+    /// Self-improvement: "off", "suggest" or "auto".
+    public func setImprove(workflow: String, mode: String) async throws {
+        _ = try await post("/api/workflows/\(workflow)/improve", ["mode": .string(mode)], as: JSONValue.self)
+    }
+
+    /// Ask the reviewer to look at the last finished run now. It answers later
+    /// (a notification, and the workflow's proposal or history changes).
+    public func improveNow(workflow: String) async throws {
+        _ = try await post("/api/workflows/\(workflow)/reflect", [:], as: JSONValue.self)
+    }
+
+    public func applyProposal(workflow: String) async throws {
+        _ = try await post("/api/workflows/\(workflow)/proposal/apply", [:], as: JSONValue.self)
+    }
+
+    public func dismissProposal(workflow: String) async throws {
+        _ = try await post("/api/workflows/\(workflow)/proposal/dismiss", [:], as: JSONValue.self)
+    }
+
+    /// Go back to the version saved before `version`'s change (the current one
+    /// is kept in history).
+    public func revert(workflow: String, version: String) async throws {
+        _ = try await post("/api/workflows/\(workflow)/revert", ["version": .string(version)], as: JSONValue.self)
+    }
+
+    /// Delete the definition. Its runs and their branches are kept.
+    public func deleteWorkflow(_ id: String) async throws {
+        _ = try await post("/api/workflows/\(id)/delete", [:], as: JSONValue.self)
+    }
+
     /// Stop a running run (its stage's pi or shell is killed).
     public func cancel(run: String) async throws {
         _ = try await post("/api/runs/\(run)/cancel", [:], as: JSONValue.self)
