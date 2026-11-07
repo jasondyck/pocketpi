@@ -73,7 +73,9 @@ final class LaunchTests: XCTestCase {
         app.swipeUp()
         keep(app, "workflow-improve")
         app.swipeDown()
+        // The runs are below the suggestion and Improvements: scroll to them.
         let runRow = app.descendants(matching: .any)["run-row"].firstMatch
+        for _ in 0..<4 where !runRow.isHittable { app.swipeUp() }
         XCTAssertTrue(runRow.waitForExistence(timeout: 10))
         runRow.tap()
         XCTAssertTrue(app.buttons["run-again"].waitForExistence(timeout: 10))
