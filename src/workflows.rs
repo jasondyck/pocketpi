@@ -430,11 +430,11 @@ pub fn schema_doc() -> Value {
         },
         "stage_types": {
             "agent": "pi works in the worktree. prompt is required. Changes are committed automatically after the stage.",
-            "shell": "run is a shell command in the worktree; non-zero exit fails the stage (unless allow_fail). Exit 78 means 'nothing to do': the run stops quietly and is not kept (use it for polling checks)",
+            "shell": "run is a shell command in the worktree; non-zero exit fails the stage (unless allow_fail). Exit 78 means 'nothing to do': the run stops quietly and is not kept (use it for polling checks). Exit 79 means 'done': the stage succeeds, later stages are skipped and the run succeeds (use it to end a branch early, e.g. a review that passed needs no fix stage)",
             "review": "read-only reviewer; sees the run's diff and returns pass/block. prompt adds focus areas. Block = failure.",
             "approval": "pauses until the user approves or rejects in pocketpi; prompt is the message. Reject (with a note) fails the stage."
         },
-        "templates": "{{input.NAME}}, {{stages.ID.output}}, {{stages.ID.summary}}, {{feedback}} (why the last attempt failed, on loop-backs), {{run.id}}, {{run.branch}}, {{run.base}}",
+        "templates": "{{input.NAME}}, {{stages.ID.output}}, {{stages.ID.summary}}, {{feedback}} (why the last attempt failed, on loop-backs), {{run.id}}, {{run.branch}}, {{run.base}}, {{run.base_commit}}",
         "models": "pi model ids. Prefer the user's subscriptions: xai/grok-4.7 (default worker: planning, implementing) and openai-codex/gpt-6.1-sol (reviews, second opinions). On OpenCode Go use only opencode-go/deepseek-v4.1-flash (cheap/fast, mechanical stages) and opencode-go/deepseek-v4-pro (fallback reviewer). Never use Muse Spark/Iceman contributor models (they train on the data). Omit to use pi's default.",
         "example": {
             "id": "fix-and-pr", "name": "Fix and open PR", "project": "/home/user/projects/app", "enabled": false,

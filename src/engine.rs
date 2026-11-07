@@ -22,6 +22,11 @@ const OUTPUT_CAP: usize = 24_000;
 /// quietly and isn't kept in history (for polling workflows).
 pub const NOOP_EXIT: i32 = 78;
 const NOOP_MARK: &str = "\u{0}noop";
+/// A shell stage exiting with this code means "done": the stage succeeds, the
+/// remaining stages are skipped and the run succeeds (a branch that ends early,
+/// e.g. a review that passed and needs no fix). Unlike 78 the run is kept.
+pub const DONE_EXIT: i32 = 79;
+const DONE_MARK: &str = "\u{0}done";
 const DEFAULT_REVIEW_MODEL: &str = "opencode-go/deepseek-v4-pro";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -476,6 +481,19 @@ impl Engine {
                 Err(fail) if fail.starts_with(NOOP_MARK) => {
                     return Err(fail);
                 }
+                Err(fail) if fail.starts_with(DONE_MARK) => {
+                    // Done early: this stage succeeded; the wrapper marks the
+                    // still-pending stages Skipped and the run Succeeded.
+                    let output = fail.trim_start_matches(DONE_MARK).to_string();
+                    self.update(h, |r| {
+                        let s = r.stages.iter_mut().find(|s| s.id == sid).unwrap();
+                        s.status = Status::Succeeded;
+                        s.ended = Some(now());
+                        s.summary = first_line(output.trim().lines().last().unwrap_or("done"), 200);
+                        s.output = cap(&output, OUTPUT_CAP);
+                    });
+                    return Ok(());
+                }
                 Err(fail) if stage.allow_fail && stage.kind == StageKind::Shell => {
                     self.update(h, |r| {
                         let s = r.stages.iter_mut().find(|s| s.id == sid).unwrap();
@@ -543,6 +561,7 @@ impl Engine {
         v.insert("run.id".into(), r.id.clone());
         v.insert("run.branch".into(), r.branch.clone().unwrap_or_default());
         v.insert("run.base".into(), r.base.clone().unwrap_or_default());
+        v.insert("run.base_commit".into(), r.base_commit.clone().unwrap_or_default());
         v.insert("stage.id".into(), stage.id.clone());
         v.insert("feedback".into(), feedback);
         v
@@ -718,6 +737,9 @@ impl Engine {
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         if out.status.code() == Some(NOOP_EXIT) {
             return Err(format!("{NOOP_MARK}{}", text.trim().lines().last().unwrap_or("nothing to do")));
+        }
+        if out.status.code() == Some(DONE_EXIT) {
+            return Err(format!("{DONE_MARK}{text}"));
         }
         if out.status.success() {
             let summary = text.trim().lines().last().unwrap_or("ok").chars().take(200).collect();
