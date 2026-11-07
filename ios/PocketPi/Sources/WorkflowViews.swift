@@ -364,7 +364,7 @@ struct WorkflowView: View {
                     .foregroundStyle(.orange)
             }
             NavigationLink("Show changes") {
-                DiffView(lines: detail?.proposalDiff ?? [])
+                WorkflowDiffView(lines: detail?.proposalDiff ?? [])
             }
             HStack {
                 Button("Dismiss") { answerProposal(apply: false) }
@@ -500,7 +500,7 @@ struct WorkflowView: View {
 }
 
 /// A suggested change: old lines red, new lines green, unchanged runs folded.
-struct DiffView: View {
+struct WorkflowDiffView: View {
     let lines: [DiffLine]
 
     var body: some View {
