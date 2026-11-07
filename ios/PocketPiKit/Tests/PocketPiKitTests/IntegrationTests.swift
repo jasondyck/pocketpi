@@ -204,6 +204,22 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func offersSlashCommands() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        #expect(s.slashMatches.isEmpty)
+        s.composer = "/fix"
+        await s.composerChanged()
+        #expect(s.commands?.count == 3)
+        #expect(s.slashMatches.map(\.name) == ["fix-tests"])
+        #expect(s.slashMatches.first?.description == "Fix failing tests")
+        s.pick(s.slashMatches[0])
+        #expect(s.composer == "/fix-tests ")
+        #expect(s.slashMatches.isEmpty)
+        s.composer = "/"
+        #expect(s.slashMatches.map(\.name) == ["fix-tests", "skill:review", "workflows"])
+        s.leave()
+    }
+
     @Test func answersApprovals() async throws {
         // ios/test-linux.sh writes the "approve-test" workflow: shell, approval, shell.
         for approve in [true, false] {

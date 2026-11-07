@@ -547,6 +547,12 @@ private struct Composer: View {
                     .padding(8)
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
             }
+            if !session.slashMatches.isEmpty {
+                SlashList(commands: session.slashMatches) { c in
+                    session.pick(c)
+                    focused = true
+                }
+            }
             if !images.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {
@@ -588,6 +594,9 @@ private struct Composer: View {
             guard session.path == nil, session.transcript.isEmpty, !session.composer.isEmpty else { return }
             try? await Task.sleep(for: .milliseconds(500))
             focused = true
+        }
+        .onChange(of: session.composer) { _, _ in
+            Task { await session.composerChanged() }
         }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
@@ -634,6 +643,63 @@ private struct Composer: View {
                 images = imgs
                 session.problem = "Not sent: " + error.localizedDescription
             }
+        }
+    }
+}
+
+/// pi's slash commands matching a lone `/word` in the composer; a tap puts
+/// `/name ` in the composer, ready for arguments.
+private struct SlashList: View {
+    let commands: [SlashCommand]
+    let pick: (SlashCommand) -> Void
+
+    var body: some View {
+        // Short lists take their own height; long ones scroll in 240pt.
+        ViewThatFits(in: .vertical) {
+            rows
+            ScrollView { rows }.frame(height: 240)
+        }
+        .frame(maxHeight: 240)
+        .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 16))
+        .modifier(FloatingBar())
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(commands) { c in
+                Button { pick(c) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: icon(c))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("/" + c.name)
+                                .font(.subheadline.monospaced().weight(.semibold))
+                                .foregroundStyle(.primary)
+                            if let d = c.description {
+                                Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("slash-" + c.name)
+            }
+        }
+        .padding(4)
+    }
+
+    private func icon(_ c: SlashCommand) -> String {
+        switch c.source {
+        case "skill": "sparkles"
+        case "prompt": "text.quote"
+        default: "puzzlepiece.extension"
         }
     }
 }

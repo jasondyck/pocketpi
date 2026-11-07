@@ -180,6 +180,12 @@ for line in sys.stdin:
     elif t == "set_thinking_level":
         thinking = cmd.get("level", thinking)
         respond(cmd, {})
+    elif t == "get_commands":
+        respond(cmd, {"commands": [
+            {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt"},
+            {"name": "skill:review", "description": "Review the diff", "source": "skill"},
+            {"name": "workflows", "source": "extension"},
+        ]})
     elif t == "get_available_models":
         respond(cmd, {"models": MODELS})
     elif t == "set_model":

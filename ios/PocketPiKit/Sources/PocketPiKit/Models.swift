@@ -325,3 +325,39 @@ public enum Format {
         return trimmed.split(separator: "/").last.map(String.init) ?? "/"
     }
 }
+
+/// One of pi's slash commands (`get_commands`): an extension command, a
+/// prompt template or a skill. Built-in TUI commands aren't listed; pi only
+/// runs these through `prompt`.
+public struct SlashCommand: Sendable, Hashable, Identifiable {
+    public var name: String
+    public var description: String?
+    /// "extension", "prompt" or "skill".
+    public var source: String?
+    public var id: String { name }
+
+    public init(name: String, description: String? = nil, source: String? = nil) {
+        self.name = name
+        self.description = description
+        self.source = source
+    }
+
+    public init?(_ v: JSONValue) {
+        guard let name = v["name"]?.string, !name.isEmpty else { return nil }
+        self.init(name: name, description: v["description"]?.string.flatMap { $0.isEmpty ? nil : $0 },
+                  source: v["source"]?.string)
+    }
+
+    /// The commands to offer for what's typed: only while the composer is a
+    /// lone `/word` (nothing after it yet), names containing the word, those
+    /// starting with it first, at most 30. Like web/app.js's updateSlash.
+    public static func matches(_ commands: [SlashCommand], for text: String) -> [SlashCommand] {
+        guard text.hasPrefix("/"), !text.contains(where: \.isWhitespace) else { return [] }
+        let q = text.dropFirst().lowercased()
+        let hits = commands.filter { q.isEmpty || $0.name.lowercased().contains(q) }
+        let (starts, rest) = hits.reduce(into: ([SlashCommand](), [SlashCommand]())) { acc, c in
+            if c.name.lowercased().hasPrefix(q) { acc.0.append(c) } else { acc.1.append(c) }
+        }
+        return Array((starts + rest).prefix(30))
+    }
+}

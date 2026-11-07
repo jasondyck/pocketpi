@@ -373,3 +373,30 @@ import Testing
         #expect(NotificationLink(url: "/?w=clipt-merge") == .workflow(id: "clipt-merge"))
     }
 }
+
+@Suite struct SlashCommandTests {
+    let all = [
+        SlashCommand(name: "workflows"),
+        SlashCommand(name: "fix-tests", description: "Fix failing tests", source: "prompt"),
+        SlashCommand(name: "skill:fix", source: "skill"),
+    ]
+
+    @Test func parses() {
+        let c = SlashCommand(["name": "fix-tests", "description": "", "source": "prompt"])
+        #expect(c == SlashCommand(name: "fix-tests", description: nil, source: "prompt"))
+        #expect(SlashCommand(["description": "no name"]) == nil)
+    }
+
+    @Test func offersOnlyForALoneSlashWord() {
+        #expect(SlashCommand.matches(all, for: "/").count == 3)
+        #expect(SlashCommand.matches(all, for: "fix").isEmpty)
+        #expect(SlashCommand.matches(all, for: "/fix-tests now").isEmpty)
+        #expect(SlashCommand.matches(all, for: "/fix\n").isEmpty)
+    }
+
+    @Test func prefixMatchesFirst() {
+        #expect(SlashCommand.matches(all, for: "/FIX").map(\.name) == ["fix-tests", "skill:fix"])
+        #expect(SlashCommand.matches(all, for: "/flow").map(\.name) == ["workflows"])
+        #expect(SlashCommand.matches(all, for: "/zzz").isEmpty)
+    }
+}

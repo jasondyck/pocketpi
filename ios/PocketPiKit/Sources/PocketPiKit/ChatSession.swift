@@ -38,6 +38,9 @@ public final class ChatSession {
 
     /// pi's enabled-model patterns (from its settings, via the server).
     public private(set) var enabledPatterns: [String] = []
+    /// pi's slash commands, fetched the first time `/` is typed (nil until then).
+    public private(set) var commands: [SlashCommand]?
+    @ObservationIgnored private var loadingCommands = false
 
     /// The models picked in pi, in pi's order: the top of the model sheet.
     public var favorites: [ModelInfo] {
@@ -275,11 +278,33 @@ public final class ChatSession {
     public func setModel(_ m: ModelInfo) async {
         do {
             try await command(["type": "set_model", "provider": .string(m.provider), "modelId": .string(m.id)])
+            commands = nil
             if let s = try? await command(["type": "get_state"]) { state = ChatState(s) }
             await loadThinkingLevels()
             await refreshStats()
         } catch { problem = error.reportable }
     }
+
+    /// What to offer under the composer while it holds a lone `/word`.
+    public var slashMatches: [SlashCommand] { SlashCommand.matches(commands ?? [], for: composer) }
+
+    /// Fetch pi's slash commands once the composer starts with `/` (a new
+    /// chat's pi is started for it, as for the model picker).
+    public func composerChanged() async {
+        guard commands == nil, !loadingCommands, composer.hasPrefix("/"),
+              !composer.contains(where: \.isWhitespace) else { return }
+        loadingCommands = true
+        defer { loadingCommands = false }
+        do {
+            try await ensureStarted()
+            commands = try await command(["type": "get_commands"])["commands"]?.array?.compactMap(SlashCommand.init) ?? []
+        } catch {
+            commands = nil // try again on the next keystroke
+        }
+    }
+
+    /// Put a picked command in the composer, ready for its arguments.
+    public func pick(_ c: SlashCommand) { composer = "/\(c.name) " }
 
     public func refreshStats() async {
         if let s = try? await command(["type": "get_session_stats"]) { stats = SessionStats(s) }

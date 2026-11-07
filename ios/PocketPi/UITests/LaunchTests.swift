@@ -141,6 +141,18 @@ final class LaunchTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
         sleep(1)
 
+        // Typing "/" offers pi's slash commands; a tap fills the composer.
+        let composer = app.textViews["composer"].exists ? app.textViews["composer"] : app.textFields["composer"]
+        composer.tap()
+        composer.typeText("/fix")
+        let fixTests = app.descendants(matching: .any)["slash-fix-tests"].firstMatch
+        XCTAssertTrue(fixTests.waitForExistence(timeout: 5))
+        keep(app, "slash")
+        fixTests.tap()
+        XCTAssertEqual(composer.value as? String, "/fix-tests ")
+        XCTAssertFalse(fixTests.exists)
+        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 11))
+
         // The chat's "…" menu (context, thinking, rename, compact).
         app.descendants(matching: .any)["chat-menu"].firstMatch.tap()
         sleep(1)
