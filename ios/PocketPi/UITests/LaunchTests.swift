@@ -134,10 +134,12 @@ final class LaunchTests: XCTestCase {
         XCTAssertFalse(app.segmentedControls.buttons["Chat"].exists)
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
-        // Local is the sheet's last section: it may start below the fold.
-        for _ in 0..<2 where !app.buttons["local-tiny-chat"].waitForExistence(timeout: 2) { app.swipeUp() }
+        // Local is the sheet's last section: up to full height, then to the end.
+        app.swipeUp()
+        sleep(1)
+        for _ in 0..<2 where !app.buttons["local-other-chat"].waitForExistence(timeout: 2) { app.swipeUp() }
         XCTAssertTrue(app.buttons["local-tiny-chat"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["local-other-chat"].exists)
+        XCTAssertTrue(app.buttons["local-other-chat"].waitForExistence(timeout: 5))
         keep(app, "local-models")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
         sleep(1)
