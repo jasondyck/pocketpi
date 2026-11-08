@@ -19,6 +19,7 @@ mod improve;
 mod llama;
 mod pi_admin;
 mod pi_cli;
+mod pi_providers;
 mod ext_ui;
 use ext_ui::ExtUi;
 
@@ -327,6 +328,9 @@ async fn main() {
         .route("/api/pi/auth/{provider}", get(auth_check))
         .route("/api/pi/mcp", get(mcp_list))
         .route("/api/pi/packages", get(package_list))
+        .route("/api/pi/providers", get(pi_providers::list))
+        .route("/api/pi/providers/{id}/key", post(pi_providers::set_key))
+        .route("/api/pi/providers/{id}/remove", post(pi_providers::remove_key))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -392,6 +396,7 @@ macro_rules! manage_page {
 /// `order`, so the order here doesn't matter: add new lines at the end.
 const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("about"),
+    manage_page!("providers"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {
