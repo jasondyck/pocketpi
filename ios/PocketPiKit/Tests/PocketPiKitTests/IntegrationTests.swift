@@ -521,6 +521,85 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func forkFromAMessagePutsItBackInTheComposer() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        for (i, p) in ["first", "again", "again"].enumerated() {
+            try await s.send(p)
+            try await waitFor("the reply to prompt \(i)") {
+                s.transcript.userMessages.count == i + 1 && lastAssistantText(s) == "Echo: \(p)" && s.path != nil && !s.isStreaming
+            }
+        }
+        let old = try #require(s.path)
+        // The second "again": the mapping must pick the right one of the two.
+        let target = try #require(s.transcript.items.first { $0.id == s.transcript.userMessages[1].id })
+        #expect(s.transcript.canFork(target))
+        #expect(await s.fork(at: target))
+        #expect(s.problem == nil)
+        #expect(s.composer == "again")
+        #expect(s.path != nil && s.path != old)
+        #expect(s.transcript.userMessages.map { ForkMap.text(of: $0.message) } == ["first"])
+        let list = try await client.sessions()
+        let forked = try #require(list.first { $0.path == s.path })
+        #expect(forked.parent == old)
+        #expect(forked.forkHint(in: list)?.hasPrefix("Forked from") == true)
+        // The original is untouched.
+        #expect(list.first { $0.path == old }?.messages == 6)
+        // And the chat carries on in the new file.
+        try await s.send("next")
+        try await waitFor("the reply in the fork") { lastAssistantText(s) == "Echo: next" && !s.isStreaming }
+        #expect(try await client.sessions().first { $0.path == s.path }?.messages == 4)
+        s.leave()
+    }
+
+    @Test func forkFromTheFirstMessageStartsANewChat() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("only")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: only" && s.path != nil && !s.isStreaming }
+        let old = try #require(s.path)
+        let first = try #require(s.transcript.items.first)
+        #expect(await s.fork(at: first))
+        #expect(s.composer == "only")
+        #expect(s.transcript.items.isEmpty)
+        // pi picked a file it writes with the next message.
+        #expect(s.path == nil)
+        try await s.send("redo")
+        try await waitFor("the reply in the fork") { lastAssistantText(s) == "Echo: redo" && s.path != nil && !s.isStreaming }
+        #expect(s.path != old)
+        #expect(try await client.sessions().first { $0.path == s.path }?.parent == old)
+        s.leave()
+    }
+
+    @Test func cancelledForkAndCloneLeaveTheChat() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("no-fork please")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: no-fork please" && s.path != nil && !s.isStreaming }
+        let old = s.path
+        let first = try #require(s.transcript.items.first)
+        #expect(await s.fork(at: first) == false)
+        #expect(s.problem != nil)
+        s.problem = nil
+        #expect(await s.clone() == false)
+        #expect(s.problem != nil)
+        #expect(s.path == old)
+        #expect(s.composer.isEmpty)
+        s.leave()
+    }
+
+    @Test func cloneCopiesTheChat() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("copy me")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: copy me" && s.path != nil && !s.isStreaming }
+        let old = try #require(s.path)
+        let before = s.transcript.items.count
+        #expect(await s.clone())
+        #expect(s.path != nil && s.path != old)
+        #expect(s.transcript.items.count == before)
+        let list = try await client.sessions()
+        #expect(list.first { $0.path == s.path }?.parent == old)
+        #expect(list.first { $0.path == s.path }?.messages == list.first { $0.path == old }?.messages)
+        s.leave()
+    }
+
     @Test func controlRoundTrip() async throws {
         let key = try await client.newChat(cwd: projectDir).key
         let tools = try await client.tools(key: key)

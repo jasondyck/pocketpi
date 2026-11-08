@@ -33,6 +33,8 @@ public struct SessionInfo: Codable, Sendable, Hashable, Identifiable {
     /// For a live chat: the config epoch its pi started with. Below the
     /// list's `configEpoch`, the chat needs a restart to pick up changes.
     public var epoch: UInt64? = nil
+    /// The session file this chat was forked or cloned from, if any.
+    public var parent: String? = nil
 
     /// What the chat list shows: the name given with /name or rename, else
     /// the first line of the first prompt.

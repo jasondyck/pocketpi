@@ -246,6 +246,7 @@ public final class ChatSession {
                 status = .reconnecting
             case .sessionFileChanged(let f):
                 path = f
+                await loadSnapshot() // the history changed with the file
             case .extensionRequest(let r):
                 pendingRequest = r
             case .setComposer(let t):
@@ -272,7 +273,7 @@ public final class ChatSession {
             guard seq == snapshotSeq else { return }
             let state = ChatState(s)
             self.state = state
-            if path == nil, state.messageCount > 0, let f = state.sessionFile { path = f }
+            followSessionFile(state)
             transcript.load(messages: m["messages"]?.array ?? [], isStreaming: state.isStreaming)
             if case .failed = status {} else { status = .connected }
         } catch {
@@ -287,6 +288,16 @@ public final class ChatSession {
                 .sorted { ($0.provider, $0.label) < ($1.provider, $1.label) }
             enabledPatterns = (try? await client.enabledModels()) ?? []
         }
+    }
+
+    /// Keep `path` on the file pi writes to. A new chat gets one once its
+    /// first message is saved; after a fork or clone pi moved to another
+    /// file. A fork from the first message leaves pi on a file it hasn't
+    /// written yet (pi saves nothing until there's a message), so the chat
+    /// is a new one until its next send.
+    private func followSessionFile(_ state: ChatState) {
+        guard let f = state.sessionFile, f != path else { return }
+        if state.messageCount > 0 { path = f } else if path != nil { path = nil }
     }
 
     private func loadThinkingLevels() async {
@@ -507,5 +518,58 @@ public final class ChatSession {
 
     public func compact() async {
         do { try await command(["type": "compact"]) } catch { problem = error.reportable }
+    }
+
+    // MARK: - fork and clone
+
+    /// Start over from an earlier message of yours: pi carries on in a new
+    /// session file holding the history before it (the original chat stays as
+    /// it was), and the message comes back into the composer to edit and
+    /// send again. False if nothing happened (pi working, no match, an
+    /// extension said no); `problem` says why.
+    @discardableResult
+    public func fork(at item: Transcript.Item) async -> Bool {
+        guard !isStreaming else { problem = "Wait for pi to finish first."; return false }
+        guard let n = transcript.userMessages.firstIndex(where: { $0.id == item.id }) else { return false }
+        do {
+            let shown = transcript.userMessages.map { ForkMap.text(of: $0.message) }
+            let points = (try await command(["type": "get_fork_messages"])["messages"]?.array ?? []).compactMap(ForkPoint.init)
+            guard let entryId = ForkMap.entryIds(for: shown, in: points)[n] else {
+                problem = "pi can't fork from this message."
+                return false
+            }
+            let r = try await command(["type": "fork", "entryId": .string(entryId)])
+            if r["cancelled"]?.bool == true {
+                problem = "An extension cancelled the fork."
+                return false
+            }
+            await loadSnapshot()
+            composer = r["text"]?.string ?? shown[n]
+            onTurnFinished?()
+            return true
+        } catch {
+            problem = error.reportable
+            return false
+        }
+    }
+
+    /// Copy this chat into a new one (pi's `clone`) and carry on there; the
+    /// original stays as it was.
+    @discardableResult
+    public func clone() async -> Bool {
+        guard !isStreaming else { problem = "Wait for pi to finish first."; return false }
+        do {
+            let r = try await command(["type": "clone"])
+            if r["cancelled"]?.bool == true {
+                problem = "An extension cancelled the copy."
+                return false
+            }
+            await loadSnapshot()
+            onTurnFinished?()
+            return true
+        } catch {
+            problem = error.reportable
+            return false
+        }
     }
 }

@@ -448,3 +448,52 @@ import Testing
         #expect(r.stages[1].activity == nil)
     }
 }
+
+@Suite struct ForkMapTests {
+    func p(_ id: String, _ text: String) -> ForkPoint { ForkPoint(entryId: id, text: text) }
+
+    @Test func matchesOneToOne() {
+        #expect(ForkMap.entryIds(for: ["a", "b"], in: [p("1", "a"), p("2", "b")]) == ["1", "2"])
+    }
+
+    @Test func repeatedPromptsGetTheirOwnEntries() {
+        let pts = [p("1", "go on"), p("2", "x"), p("3", "go on")]
+        #expect(ForkMap.entryIds(for: ["go on", "x", "go on"], in: pts) == ["1", "2", "3"])
+    }
+
+    @Test func skipsWhatOnlyOneSideHas() {
+        // pi still lists prompts compacted away; the screen has image-only
+        // messages (empty text) pi doesn't list.
+        let pts = [p("0", "old"), p("1", "a"), p("2", "b")]
+        #expect(ForkMap.entryIds(for: ["a", "", "b"], in: pts) == ["1", nil, "2"])
+        // A message pi doesn't know leaves the earlier ones matched.
+        #expect(ForkMap.entryIds(for: ["a", "zzz", "b"], in: pts) == ["1", nil, "2"])
+        #expect(ForkMap.entryIds(for: ["a"], in: []) == [nil])
+    }
+
+    @Test func textIsJoinedLikePi() throws {
+        let m = ChatMessage(try JSONValue.parse(#"{"role":"user","content":[{"type":"text","text":"a"},{"type":"image","data":"x","mimeType":"image/png"},{"type":"text","text":"b"}]}"#))
+        #expect(ForkMap.text(of: m) == "ab")
+    }
+
+    @Test func canForkUserMessagesWithText() {
+        var t = Transcript()
+        t.load(messages: [
+            ["role": "user", "content": "hi"],
+            ["role": "assistant", "content": [["type": "text", "text": "hello"]], "stopReason": "stop"],
+            ["role": "user", "content": [["type": "image", "data": "x", "mimeType": "image/png"]]],
+        ], isStreaming: false)
+        #expect(t.userMessages.count == 2)
+        #expect(t.canFork(t.items[0]))
+        #expect(!t.canFork(t.items[1]))
+        #expect(!t.canFork(t.items[2]))
+        t.load(messages: [["role": "user", "content": "hi"]], isStreaming: true)
+        #expect(!t.canFork(t.items[0]))
+    }
+
+    @Test func forkHint() throws {
+        let json = #"[{"path":"/a","id":"a","cwd":"/","title":"First","modified":1,"messages":2,"live":false,"streaming":false},{"path":"/b","id":"b","cwd":"/","title":"x","modified":2,"messages":1,"live":false,"streaming":false,"parent":"/a"},{"path":"/c","id":"c","cwd":"/","title":"y","modified":3,"messages":1,"live":false,"streaming":false,"parent":"/gone"}]"#
+        let all = try JSONDecoder().decode([SessionInfo].self, from: Data(json.utf8))
+        #expect(all.map { $0.forkHint(in: all) } == [nil, "Forked from First", "Forked"])
+    }
+}
