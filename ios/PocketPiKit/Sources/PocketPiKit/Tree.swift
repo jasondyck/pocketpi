@@ -9,7 +9,7 @@ import FoundationNetworking
 // logic is in web/tree.js.
 
 /// One line of the tree as shown.
-public struct TreeRow: Sendable, Equatable, Identifiable {
+public struct TreeRow: Sendable, Hashable, Identifiable {
     public enum Kind: String, Sendable {
         /// A prompt of yours; going there puts it back in the message box.
         case user
