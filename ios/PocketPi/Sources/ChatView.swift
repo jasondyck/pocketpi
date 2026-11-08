@@ -60,7 +60,8 @@ private struct ChatScreen: View {
                     ForEach(rows) { row in
                         switch row {
                         case .item(let item):
-                            TranscriptItemView(item: item, transcript: session.transcript, home: model.home)
+                            TranscriptItemView(item: item, transcript: session.transcript, home: model.home,
+                                               onFork: { item in Task { await session.fork(at: item) } })
                         case .text(_, let message):
                             AssistantMessageView(message: message, live: false, transcript: session.transcript, home: model.home)
                         case .activity(_, let steps, let live):
@@ -159,6 +160,10 @@ private struct ChatScreen: View {
                 .disabled(session.key == nil && session.path == nil)
             Button("Compact context", systemImage: "arrow.down.right.and.arrow.up.left") {
                 Task { await session.compact() }
+            }
+            .disabled(session.isStreaming || session.path == nil)
+            Button("Clone chat", systemImage: "plus.square.on.square") {
+                Task { await session.clone() }
             }
             .disabled(session.isStreaming || session.path == nil)
         }

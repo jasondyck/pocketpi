@@ -88,6 +88,8 @@ public final class ChatSession {
     @ObservationIgnored private var firstEventWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var opening: Task<Void, Error>?
     @ObservationIgnored private var snapshotSeq = 0
+    /// The newest snapshot that landed (or failed).
+    @ObservationIgnored private var appliedSeq = 0
     @ObservationIgnored private var left = false
 
     /// An existing chat.
@@ -244,8 +246,10 @@ public final class ChatSession {
             case .restarting:
                 // The key lives on; the stream ends and streamEnded reconnects.
                 status = .reconnecting
-            case .sessionFileChanged(let f):
-                path = f
+            case .sessionFileChanged:
+                // The history changed with the file; the snapshot follows the
+                // file (or not, while pi hasn't written it yet).
+                await loadSnapshot()
             case .extensionRequest(let r):
                 show(r)
             case .setComposer(let t):
@@ -272,10 +276,12 @@ public final class ChatSession {
             guard seq == snapshotSeq else { return }
             let state = ChatState(s)
             self.state = state
-            if path == nil, state.messageCount > 0, let f = state.sessionFile { path = f }
+            followSessionFile(state)
             transcript.load(messages: m["messages"]?.array ?? [], isStreaming: state.isStreaming)
+            appliedSeq = seq
             if case .failed = status {} else { status = .connected }
         } catch {
+            if seq == snapshotSeq { appliedSeq = seq }
             status = .failed(error.localizedDescription)
             return
         }
@@ -286,6 +292,27 @@ public final class ChatSession {
                 .compactMap(ModelInfo.init)
                 .sorted { ($0.provider, $0.label) < ($1.provider, $1.label) }
             enabledPatterns = (try? await client.enabledModels()) ?? []
+        }
+    }
+
+    /// Keep `path` on the file pi writes to. A new chat gets one once its
+    /// first message is saved; after a fork or clone pi moved to another
+    /// file. A fork from the first message leaves pi on a file it hasn't
+    /// written yet (pi saves nothing until there's a message), so the chat
+    /// is a new one until its next send.
+    private func followSessionFile(_ state: ChatState) {
+        guard let f = state.sessionFile, f != path else { return }
+        if state.messageCount > 0 { path = f } else if path != nil { path = nil }
+    }
+
+    /// Reload after pi moved to another file, and wait until the screen
+    /// shows it: the server's pocketpi_session event starts a snapshot too,
+    /// which can overtake (and so drop) this one.
+    private func reloadAfterSwitch() async {
+        await loadSnapshot()
+        let end = Date().addingTimeInterval(5)
+        while appliedSeq < snapshotSeq, Date() < end {
+            try? await Task.sleep(for: .milliseconds(20))
         }
     }
 
@@ -529,5 +556,58 @@ public final class ChatSession {
 
     public func compact() async {
         do { try await command(["type": "compact"]) } catch { problem = error.reportable }
+    }
+
+    // MARK: - fork and clone
+
+    /// Start over from an earlier message of yours: pi carries on in a new
+    /// session file holding the history before it (the original chat stays as
+    /// it was), and the message comes back into the composer to edit and
+    /// send again. False if nothing happened (pi working, no match, an
+    /// extension said no); `problem` says why.
+    @discardableResult
+    public func fork(at item: Transcript.Item) async -> Bool {
+        guard !isStreaming else { problem = "Wait for pi to finish first."; return false }
+        guard let n = transcript.userMessages.firstIndex(where: { $0.id == item.id }) else { return false }
+        do {
+            let shown = transcript.userMessages.map { ForkMap.text(of: $0.message) }
+            let points = (try await command(["type": "get_fork_messages"])["messages"]?.array ?? []).compactMap(ForkPoint.init)
+            guard let entryId = ForkMap.entryIds(for: shown, in: points)[n] else {
+                problem = "pi can't fork from this message."
+                return false
+            }
+            let r = try await command(["type": "fork", "entryId": .string(entryId)])
+            if r["cancelled"]?.bool == true {
+                problem = "An extension cancelled the fork."
+                return false
+            }
+            await reloadAfterSwitch()
+            composer = r["text"]?.string ?? shown[n]
+            onTurnFinished?()
+            return true
+        } catch {
+            problem = error.reportable
+            return false
+        }
+    }
+
+    /// Copy this chat into a new one (pi's `clone`) and carry on there; the
+    /// original stays as it was.
+    @discardableResult
+    public func clone() async -> Bool {
+        guard !isStreaming else { problem = "Wait for pi to finish first."; return false }
+        do {
+            let r = try await command(["type": "clone"])
+            if r["cancelled"]?.bool == true {
+                problem = "An extension cancelled the copy."
+                return false
+            }
+            await reloadAfterSwitch()
+            onTurnFinished?()
+            return true
+        } catch {
+            problem = error.reportable
+            return false
+        }
     }
 }

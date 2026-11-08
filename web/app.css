@@ -563,3 +563,14 @@ pre.sheet-pre { margin: 0; padding: 10px 12px; border-radius: 12px; background: 
 .hist-row .o-main { flex: 1; min-width: 0; }
 .hist-row .o-t { font-size: 13.5px; overflow-wrap: anywhere; }
 .hist-row .o-s { font-size: 11.5px; color: var(--muted); }
+
+/* fork and clone: a user message's actions show on tap (hover with a mouse) */
+.msg.user { flex-direction: column; align-items: flex-end; }
+.msg.user .bubble { cursor: pointer; }
+.user-actions { margin: 4px -9px 0 0; display: none; }
+.msg.user.show-actions .user-actions { display: flex; }
+@media (hover: hover) { .msg.user:hover .user-actions { display: flex; } }
+body.streaming .user-actions .fork { opacity: .4; pointer-events: none; }
+.sess .m.fork-hint { display: flex; align-items: center; gap: 4px; }
+.sess .m.fork-hint svg { width: 12px; height: 12px; flex: none; }
+.sess .m.fork-hint span { overflow: hidden; text-overflow: ellipsis; }

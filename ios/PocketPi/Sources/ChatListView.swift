@@ -458,6 +458,10 @@ struct SessionRow: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(session.displayTitle).lineLimit(2)
+                if let hint = session.forkHint(in: model.sessions + model.archived) {
+                    Label(hint, systemImage: "arrow.triangle.branch")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 HStack(spacing: 6) {
                     if session.streaming {
                         Circle().fill(Theme.signal).frame(width: 7, height: 7)

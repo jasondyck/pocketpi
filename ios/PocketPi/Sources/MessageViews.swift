@@ -6,11 +6,13 @@ struct TranscriptItemView: View {
     let item: Transcript.Item
     let transcript: Transcript
     let home: String?
+    /// "Fork from here" on a user message (nil: not offered).
+    var onFork: ((Transcript.Item) -> Void)? = nil
 
     var body: some View {
         switch item.kind {
         case .user(let m):
-            UserBubble(message: m)
+            UserBubble(message: m, onFork: onFork.flatMap { f in transcript.canFork(item) ? { f(item) } : nil })
         case .assistant(let m, let live):
             AssistantMessageView(message: m, live: live, transcript: transcript, home: home)
         case .compaction(let summary, let tokensBefore):
@@ -42,6 +44,8 @@ struct TranscriptItemView: View {
 
 private struct UserBubble: View {
     let message: ChatMessage
+    /// Set when pi can fork from this message (it has text, pi is idle).
+    let onFork: (() -> Void)?
     var body: some View {
         HStack {
             Spacer(minLength: 48)
@@ -59,6 +63,15 @@ private struct UserBubble: View {
                         .padding(.vertical, 9)
                         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18))
                 }
+            }
+        }
+        .contextMenu {
+            let text = message.plainText
+            if !text.isEmpty {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+            }
+            if let onFork {
+                Button("Fork from here", systemImage: "arrow.triangle.branch", action: onFork)
             }
         }
     }

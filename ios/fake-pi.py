@@ -14,7 +14,11 @@ Also the commands pocketpi allows since the pi-parity work: fork, clone,
 get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never
 run), abort_bash, get_last_assistant_text and the global setters; and, when
 started with `-e .../pocketpi-control.ts`, the extension's /pp-tools, which
-answers like the real one with an `entry_appended` custom entry.
+answers like the real one with an `entry_appended` custom entry. fork and
+clone move to a new compact-JSON file with `parentSession` like pi does (a
+fork from the first message picks a file but writes it only with the next
+message); a prompt containing "no-fork" makes them answer `cancelled`, as an
+extension's session_before_fork would.
 
     POCKETPI_PI=ios/fake-pi.py pocketpi
 """
@@ -67,22 +71,35 @@ def compact(rec):
     return json.dumps(rec, separators=(",", ":")) + "\n"
 
 
-def new_file(parent=None):
+# A file pi has picked but not written yet (a fork from the first message):
+# like real pi, nothing is saved until there's a message.
+pending_header = None
+
+
+def new_file(parent=None, write=True):
+    global pending_header
     os.makedirs(session_dir, exist_ok=True)
     sid = str(uuid.uuid4())
     path = os.path.join(session_dir, f"{int(time.time() * 1000)}_{sid}.jsonl")
     header = {"type": "session", "id": sid, "cwd": os.getcwd(), "version": 3}
     if parent:
         header["parentSession"] = parent
-    with open(path, "w") as f:
-        f.write(compact(header))
+    if write:
+        with open(path, "w") as f:
+            f.write(compact(header))
+    else:
+        pending_header = (path, header)
     return path
 
 
 def save(rec):
-    global session_file
+    global session_file, pending_header
     if not session_file:
         session_file = new_file()
+    if pending_header and pending_header[0] == session_file:
+        with open(session_file, "w") as f:
+            f.write(compact(pending_header[1]))
+        pending_header = None
     with open(session_file, "a") as f:
         f.write(compact(rec))
 
@@ -102,15 +119,30 @@ def text_of(msg):
     return " ".join(b.get("text", "") for b in c or [] if b.get("type") == "text")
 
 
+def fork_text(msg):
+    """pi's contentText(content, ""): text blocks joined with nothing."""
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    return "".join(b.get("text", "") for b in c or [] if b.get("type") == "text")
+
+
+def unsaved():
+    return not session_file or not os.path.exists(session_file)
+
+
 def branch_to(keep, parent_file):
-    """fork/clone: carry on in a new session file holding `keep`."""
+    """fork/clone: carry on in a new session file holding `keep`, with the
+    old file as its parentSession. With nothing to keep (a fork from the
+    first message) the file isn't written until the next message, as in pi."""
     global session_file, messages, entries
-    path = new_file(parent_file)
-    with open(path, "a") as f:
-        prev = None
-        for eid, msg in keep:
-            f.write(compact({"type": "message", "id": eid, "parentId": prev, "message": msg}))
-            prev = eid
+    path = new_file(parent_file, write=bool(keep))
+    if keep:
+        with open(path, "a") as f:
+            prev = None
+            for eid, msg in keep:
+                f.write(compact({"type": "message", "id": eid, "parentId": prev, "message": msg}))
+                prev = eid
     session_file = path
     entries = list(keep)
     messages = [m for _, m in keep]
@@ -331,18 +363,32 @@ for line in sys.stdin:
             commands.append({"name": "pp-tools", "description": "pocketpi: list this chat's tools", "source": "extension"})
         respond(cmd, {"commands": commands})
     elif t == "get_fork_messages":
-        respond(cmd, {"messages": [{"entryId": eid, "text": text_of(m)} for eid, m in entries if m.get("role") == "user"]})
+        respond(cmd, {"messages": [{"entryId": eid, "text": fork_text(m)} for eid, m in entries
+                                   if m.get("role") == "user" and fork_text(m)]})
+    # An extension's session_before_fork can cancel; here a prompt saying
+    # "no-fork" stands in for one (the forked message, or any for clone).
     elif t == "fork":
         idx = next((i for i, (eid, m) in enumerate(entries) if eid == cmd.get("entryId") and m.get("role") == "user"), None)
         if idx is None:
-            respond(cmd, ok=False, error="entry not found")
+            respond(cmd, ok=False, error="Invalid entry ID for forking")
+        elif "no-fork" in fork_text(entries[idx][1]):
+            respond(cmd, {"cancelled": True})
+        elif unsaved():
+            respond(cmd, ok=False, error="This session has not been saved yet. Send a message before cloning or forking it.")
         else:
-            text = text_of(entries[idx][1])
+            text = fork_text(entries[idx][1])
             branch_to(entries[:idx], session_file)
             respond(cmd, {"text": text, "cancelled": False})
     elif t == "clone":
-        branch_to(entries, session_file)
-        respond(cmd, {"cancelled": False})
+        if not entries:
+            respond(cmd, ok=False, error="Cannot clone session: no current entry selected")
+        elif any("no-fork" in fork_text(m) for _, m in entries if m.get("role") == "user"):
+            respond(cmd, {"cancelled": True})
+        elif unsaved():
+            respond(cmd, ok=False, error="This session has not been saved yet. Send a message before cloning or forking it.")
+        else:
+            branch_to(entries, session_file)
+            respond(cmd, {"cancelled": False})
     elif t == "get_entries":
         recs = [{"type": "message", "id": eid, "parentId": entries[i - 1][0] if i else None, "message": m}
                 for i, (eid, m) in enumerate(entries)]
