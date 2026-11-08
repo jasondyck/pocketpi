@@ -104,9 +104,11 @@ public struct PolicyDocument: Sendable, Equatable {
     /// the file uses them (the stage policy does).
     public static let mainSurfaces = ["bash", "path", "external_directory"]
     public var surfaces: [String] {
-        let extra = ["path_read", "path_write", "external_directory_read", "external_directory_write"]
-            .filter { data["permission"]?[$0] != nil }
-        return Self.mainSurfaces + extra
+        let p = data["permission"]
+        let extra = ["path_read", "path_write", "external_directory_read", "external_directory_write"].filter { p?[$0] != nil }
+        // A bare surface the directional ones replace is left out unless set.
+        let main = Self.mainSurfaces.filter { m in p?[m] != nil || !extra.contains { $0.hasPrefix(m + "_") } }
+        return main + extra
     }
 
     /// A surface's rules; a plain action (`"bash": "allow"`) reads as `* -> action`.
@@ -239,6 +241,28 @@ public enum Safety {
             dir = slash == dir.startIndex ? "/" : String(dir[..<slash])
         }
         return defaultTrust == "always"
+    }
+}
+
+extension ExtensionRequest {
+    /// A dialog title with more than one line (a permission prompt's
+    /// "tool    : bash" lines) as a one-line title and the details, with the
+    /// column padding taken out: ("Permission Required", "tool: bash\n...").
+    public static func splitTitle(_ raw: String) -> (title: String, details: String?) {
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let title = lines.first?.trimmingCharacters(in: .whitespaces) ?? raw
+        let rest = lines.dropFirst().map { line -> String in
+            guard let r = line.range(of: #" +: "#, options: .regularExpression) else { return line }
+            return line.replacingCharacters(in: r, with: ": ")
+        }
+        let details = rest.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title.isEmpty ? "pi needs input" : title, details.isEmpty ? nil : details)
+    }
+
+    /// The details and the request's own message, as one message.
+    static func joinedMessage(_ details: String?, _ message: String?) -> String? {
+        let m = [details, message].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        return m.isEmpty ? nil : m
     }
 }
 

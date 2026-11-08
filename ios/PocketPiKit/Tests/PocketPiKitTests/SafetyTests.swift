@@ -20,6 +20,8 @@ import Testing
         #expect(d.rules(for: "external_directory") == [PolicyRule(pattern: "*", action: .ask)])
         #expect(d.rules(for: "path").isEmpty)
         #expect(d.surfaces == ["bash", "path", "external_directory", "external_directory_write"])
+        let stage = try doc(#"{"exists": true, "data": {"permission": {"external_directory_read": "allow", "external_directory_write": {"*": "deny"}}}}"#)
+        #expect(stage.surfaces == ["bash", "path", "external_directory_read", "external_directory_write"])
         #expect(d.summary(for: "bash") == "allow by default · 1 ask · 1 deny")
         #expect(d.summary(for: "path") == "not set (uses the default)")
         #expect(Safety.timeoutText(d.promptTimeoutMs) == "Unanswered prompts are denied after 10 min")
@@ -97,5 +99,18 @@ import Testing
         }
         #expect(r.id == "d1")
         #expect(r.options == ["Yes", "No"])
+        // The prompt's detail lines become the message (a sheet title is one line).
+        #expect(r.title == "Permission Required")
+        #expect(r.message == "tool: bash")
+    }
+
+    @Test func splitsMultiLineDialogTitles() {
+        let s = ExtensionRequest.splitTitle("Permission Required\ntool    : bash\nrule    : rm *\ncommand : rm -rf junk")
+        #expect(s.title == "Permission Required")
+        #expect(s.details == "tool: bash\nrule: rm *\ncommand: rm -rf junk")
+        #expect(ExtensionRequest.splitTitle("Allow it?") == ("Allow it?", nil))
+        #expect(ExtensionRequest.splitTitle("") == ("pi needs input", nil))
+        #expect(ExtensionRequest.joinedMessage("a", "b") == "a\n\nb")
+        #expect(ExtensionRequest.joinedMessage(nil, nil) == nil)
     }
 }

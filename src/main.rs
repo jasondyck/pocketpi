@@ -396,6 +396,7 @@ macro_rules! manage_page {
 /// `order`, so the order here doesn't matter: add new lines at the end.
 const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("about"),
+    manage_page!("safety"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {

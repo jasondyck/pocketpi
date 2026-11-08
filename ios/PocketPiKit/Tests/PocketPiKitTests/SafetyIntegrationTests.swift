@@ -88,6 +88,21 @@ extension IntegrationTests {
         if let k = s.key { try? await client.close(key: k) }
     }
 
+    @Test func safetyPageModel() async throws {
+        try await client.saveProject(path: safetyProjectDir)
+        let m = SafetyModel(client: client)
+        await m.load()
+        #expect(m.loaded && m.problem == nil)
+        let row = try #require(m.projects.first { $0.path == safetyProjectDir })
+        #expect(!row.trusted, "the scratch project isn't in trust.json")
+        await m.setMode(.strict, for: row.path)
+        await m.load()
+        #expect(m.projects.first { $0.path == safetyProjectDir }?.mode == .strict)
+        await m.setMode(.standard, for: row.path)
+        #expect(m.projects.first { $0.path == safetyProjectDir }?.mode == .standard)
+        try await client.saveProject(path: safetyProjectDir, name: "")
+    }
+
     @Test func safetyPoliciesRoundTrip() async throws {
         // Install (fake-pi adds it to settings.json) and the recommended policy.
         let job = try await client.installPermissionSystem()
