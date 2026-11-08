@@ -22,6 +22,7 @@ mod pi_cli;
 mod pi_providers;
 mod ext_ui;
 mod pi_resources;
+mod pi_packages;
 mod dialogs;
 mod safety;
 use ext_ui::ExtUi;
@@ -340,6 +341,7 @@ async fn main() {
         .route("/api/pi/providers/{id}/key", post(pi_providers::set_key))
         .route("/api/pi/providers/{id}/remove", post(pi_providers::remove_key))
         .merge(pi_resources::router())
+        .merge(pi_packages::router())
         .route("/api/safety", get(safety::info))
         .route("/api/safety/recommended", post(safety::use_recommended))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
@@ -412,6 +414,8 @@ const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("trust"),
     manage_page!("resources"),
     manage_page!("safety"),
+    manage_page!("packages"),
+    manage_page!("mcp"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {
