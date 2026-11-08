@@ -16,8 +16,12 @@ get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never run: 
 bash_execution_update, slowly when the command says "slow", exit 1 when it
 says "fail", truncated when it says "long"), abort_bash,
 get_last_assistant_text and the global setters; and, when
-started with `-e .../pocketpi-control.ts`, the extension's /pp-tools, which
-answers like the real one with an `entry_appended` custom entry. fork and
+started with `-e .../pocketpi-control.ts`, the extension's /pp-tools,
+/pp-goto and /pp-label, which answer like the real ones with an
+`entry_appended` custom entry. The session is a real tree (entries with
+parentId, a leaf): /pp-goto moves the leaf like pi's navigateTree (to a user
+message's parent, putting its text back; with summarize, a branch_summary
+entry), so get_tree has branches, labels and pi's hidden entries. fork and
 clone move to a new compact-JSON file with `parentSession` like pi does (a
 fork from the first message picks a file but writes it only with the next
 message); a prompt containing "no-fork" makes them answer `cancelled`, as an
@@ -157,8 +161,14 @@ session_file = args[args.index("--session") + 1] if "--session" in args else Non
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
 # pocketpi loads its companion extension into normal chats with -e.
 control = any(a.endswith("pocketpi-control.ts") for a in args)
+# Every entry of the session (not the header) in append order, like pi's
+# tree; `leaf` is the current position. `entries` (message entries on the
+# path to the leaf, as (id, message)) and `messages` (what get_messages
+# answers) are derived from them by rebuild().
+records = []
+leaf = None
+labels = {}
 messages = []
-# Message entries as (id, message): the tree pi keeps, always linear here.
 entries = []
 name = None
 streaming = False
@@ -166,15 +176,71 @@ settings = {"steeringMode": "one-at-a-time", "followUpMode": "one-at-a-time", "a
 TOOLS = ["read", "bash", "edit", "write", "grep"]
 active_tools = ["read", "bash", "edit", "write"]
 
+def now_iso():
+    t = time.time()
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int(t * 1000) % 1000:03d}Z"
+
+
+def by_id(eid):
+    return next((r for r in records if r.get("id") == eid), None)
+
+
+def path_records():
+    """The entries from the root to the leaf."""
+    out_, eid, seen = [], leaf, set()
+    while eid and eid not in seen:
+        seen.add(eid)
+        r = by_id(eid)
+        if not r:
+            break
+        out_.append(r)
+        eid = r.get("parentId")
+    return out_[::-1]
+
+
+def rebuild():
+    global entries, messages
+    entries, messages = [], []
+    for r in path_records():
+        if r["type"] == "message":
+            entries.append((r["id"], r["message"]))
+            messages.append(r["message"])
+        elif r["type"] == "branch_summary":
+            messages.append({"role": "branchSummary", "summary": r["summary"], "fromId": r.get("fromId"),
+                             "timestamp": int(time.time() * 1000)})
+
+
+def append_record(rec):
+    """Append an entry as a child of the leaf and make it the leaf."""
+    global leaf
+    rec = {"type": rec["type"], "id": rec.get("id") or uuid.uuid4().hex[:8], "parentId": leaf,
+           "timestamp": now_iso(), **{k: v for k, v in rec.items() if k not in ("type", "id")}}
+    records.append(rec)
+    leaf = rec["id"]
+    if rec["type"] == "label":
+        if rec.get("label"):
+            labels[rec["targetId"]] = rec["label"]
+        else:
+            labels.pop(rec["targetId"], None)
+    rebuild()
+    return rec
+
+
 if session_file:
     with open(session_file) as f:
         for line in f:
             rec = json.loads(line)
-            if rec.get("type") == "message":
-                messages.append(rec["message"])
-                entries.append((rec.get("id") or uuid.uuid4().hex[:8], rec["message"]))
-            elif rec.get("type") == "session_info":
+            if rec.get("type") == "session_info":
                 name = rec.get("name")
+            elif rec.get("type") != "session" and rec.get("id"):
+                records.append(rec)
+                leaf = rec["id"]
+                if rec.get("type") == "label":
+                    if rec.get("label"):
+                        labels[rec["targetId"]] = rec["label"]
+                    else:
+                        labels.pop(rec["targetId"], None)
+    rebuild()
 
 
 def compact(rec):
@@ -216,11 +282,7 @@ def save(rec):
 
 
 def add(msg):
-    messages.append(msg)
-    eid = uuid.uuid4().hex[:8]
-    parent = entries[-1][0] if entries else None
-    entries.append((eid, msg))
-    save({"type": "message", "id": eid, "parentId": parent, "message": msg})
+    save(append_record({"type": "message", "message": msg}))
 
 
 def text_of(msg):
@@ -243,20 +305,76 @@ def unsaved():
 
 
 def branch_to(keep, parent_file):
-    """fork/clone: carry on in a new session file holding `keep`, with the
-    old file as its parentSession. With nothing to keep (a fork from the
-    first message) the file isn't written until the next message, as in pi."""
-    global session_file, messages, entries
+    """fork/clone: carry on in a new session file holding `keep` (entries on
+    a path, root first), with the old file as its parentSession. With
+    nothing to keep (a fork from the first message) the file isn't written
+    until the next message, as in pi."""
+    global session_file, records, leaf, labels
     path = new_file(parent_file, write=bool(keep))
+    records, prev = [], None
+    for r in keep:
+        records.append({**r, "parentId": prev})
+        prev = r["id"]
     if keep:
         with open(path, "a") as f:
-            prev = None
-            for eid, msg in keep:
-                f.write(compact({"type": "message", "id": eid, "parentId": prev, "message": msg}))
-                prev = eid
+            for r in records:
+                f.write(compact(r))
     session_file = path
-    entries = list(keep)
-    messages = [m for _, m in keep]
+    leaf = prev
+    labels = {k: v for k, v in labels.items() if any(r["id"] == k for r in records)}
+    rebuild()
+
+
+def goto(a):
+    """/pp-goto: pi's navigateTree. A user message's text goes back to the
+    editor and the leaf moves to its parent; anything else becomes the leaf.
+    With summarize, a branch_summary entry (of the entries being left) is
+    put at the new position. "no-goto" in the target's text cancels, as an
+    extension's session_before_tree would."""
+    global leaf
+    eid = (a or {}).get("entryId")
+    if not eid:
+        raise ValueError("entryId is required")
+    target = by_id(eid)
+    if not target:
+        raise ValueError(f"Entry {eid} not found")
+    msg = target.get("message") or {}
+    if "no-goto" in fork_text(msg):
+        return {"cancelled": True}
+    if eid == leaf:
+        return {"cancelled": False, "editorText": None, "leafId": leaf}
+    user = target["type"] == "message" and msg.get("role") == "user"
+    new_leaf = target.get("parentId") if user else eid
+    if a.get("summarize"):
+        left = len(path_records())
+        old = leaf
+        leaf = new_leaf
+        summary = f"Summary of the branch left behind ({left} entries)."
+        if a.get("instructions"):
+            summary += f" Focus: {a['instructions']}"
+        save(append_record({"type": "branch_summary", "fromId": old, "summary": summary,
+                            "usage": {"input": 100, "output": 20, "totalTokens": 120,
+                                      "cost": {"total": 0.0005}}}))
+    else:
+        leaf = new_leaf
+        rebuild()
+    return {"cancelled": False, "editorText": fork_text(msg) if user else None, "leafId": leaf}
+
+
+def set_label(a):
+    eid = (a or {}).get("entryId")
+    if not eid:
+        raise ValueError("entryId is required")
+    if not by_id(eid):
+        raise ValueError(f"Entry {eid} not found")
+    label = (a.get("label") or "").strip() or None
+    rec = {"type": "label", "targetId": eid}
+    if label:
+        rec["label"] = label
+    rec = append_record(rec)
+    if session_file:
+        save(rec)
+    return {"entryId": eid, "label": label}
 
 
 def control_command(line):
@@ -267,6 +385,10 @@ def control_command(line):
     req_id, _, raw = rest.strip().partition(" ")
     try:
         a = json.loads(raw) if raw.strip() else None
+        if head == "/pp-goto":
+            raise Done(goto(a))
+        if head == "/pp-label":
+            raise Done(set_label(a))
         if head != "/pp-tools":
             raise ValueError(f"unknown command {head}")
         if a and isinstance(a.get("active"), list):
@@ -278,14 +400,21 @@ def control_command(line):
                            "path": f"builtin:{t}", "active": t in active_tools} for t in TOOLS],
                 "active": active_tools}
         reply = {"reqId": req_id, "ok": True, "data": data}
+    except Done as d:
+        reply = {"reqId": req_id, "ok": True, "data": d.data}
     except Exception as e:  # the extension reports every failure
         reply = {"reqId": req_id, "ok": False, "error": str(e)}
-    entry = {"type": "custom", "customType": "pocketpi-control", "data": reply, "id": uuid.uuid4().hex[:8],
-             "parentId": entries[-1][0] if entries else None}
-    # Like pi: never creates a session file on its own.
+    # Like pi: the reply is an entry after the leaf (and becomes the leaf),
+    # but never creates a session file on its own.
+    entry = append_record({"type": "custom", "customType": "pocketpi-control", "data": reply})
     if session_file:
         save(entry)
     out({"type": "entry_appended", "entry": entry})
+
+
+class Done(Exception):
+    def __init__(self, data):
+        self.data = data
 
 
 def queue_update():
@@ -311,7 +440,9 @@ def stream_assistant(blocks, stop_reason, error=None):
         elif kind == "toolCall":
             out({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_start", "contentIndex": i, "id": b["id"], "toolName": b["name"]}})
             out({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_end", "contentIndex": i, "toolCall": b}})
-    msg = {"role": "assistant", "content": blocks, "stopReason": stop_reason}
+    msg = {"role": "assistant", "content": blocks, "stopReason": stop_reason, "provider": model["provider"],
+           "model": model["id"], "usage": {"input": 40, "output": 10, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 50,
+                                           "cost": {"total": 0.0003 if model["provider"] == "fake" else 0.001}}}
     if error:
         msg["errorMessage"] = error
     add(msg)
@@ -561,25 +692,29 @@ for line in sys.stdin:
              "sourceInfo": info("/fake/pocketpi-workflows.ts", "temporary", "cli")},
         ]
         if control:
-            commands.append({"name": "pp-tools", "description": "pocketpi: list this chat's tools", "source": "extension",
-                             "sourceInfo": info("/fake/pocketpi-control.ts", "temporary", "cli")})
+            for c in ("pp-tools", "pp-goto", "pp-label"):
+                commands.append({"name": c, "description": "pocketpi: " + c, "source": "extension",
+                                 "sourceInfo": info("/fake/pocketpi-control.ts", "temporary", "cli")})
         respond(cmd, {"commands": commands})
     elif t == "get_fork_messages":
-        respond(cmd, {"messages": [{"entryId": eid, "text": fork_text(m)} for eid, m in entries
-                                   if m.get("role") == "user" and fork_text(m)]})
+        # Like pi: every user message in the file, abandoned branches too.
+        respond(cmd, {"messages": [{"entryId": r["id"], "text": fork_text(r["message"])} for r in records
+                                   if r["type"] == "message" and r["message"].get("role") == "user"
+                                   and fork_text(r["message"])]})
     # An extension's session_before_fork can cancel; here a prompt saying
     # "no-fork" stands in for one (the forked message, or any for clone).
     elif t == "fork":
-        idx = next((i for i, (eid, m) in enumerate(entries) if eid == cmd.get("entryId") and m.get("role") == "user"), None)
-        if idx is None:
+        target = by_id(cmd.get("entryId") or "")
+        if not target or target["type"] != "message" or target["message"].get("role") != "user":
             respond(cmd, ok=False, error="Invalid entry ID for forking")
-        elif "no-fork" in fork_text(entries[idx][1]):
+        elif "no-fork" in fork_text(target["message"]):
             respond(cmd, {"cancelled": True})
         elif unsaved():
             respond(cmd, ok=False, error="This session has not been saved yet. Send a message before cloning or forking it.")
         else:
-            text = fork_text(entries[idx][1])
-            branch_to(entries[:idx], session_file)
+            text = fork_text(target["message"])
+            leaf = target.get("parentId")
+            branch_to(path_records(), session_file)
             respond(cmd, {"text": text, "cancelled": False})
     elif t == "clone":
         if not entries:
@@ -589,22 +724,24 @@ for line in sys.stdin:
         elif unsaved():
             respond(cmd, ok=False, error="This session has not been saved yet. Send a message before cloning or forking it.")
         else:
-            branch_to(entries, session_file)
+            branch_to(path_records(), session_file)
             respond(cmd, {"cancelled": False})
     elif t == "get_entries":
-        recs = [{"type": "message", "id": eid, "parentId": entries[i - 1][0] if i else None, "message": m}
-                for i, (eid, m) in enumerate(entries)]
+        recs = list(records)
         ids = [r["id"] for r in recs]
         if cmd.get("since") in ids:
             recs = recs[ids.index(cmd["since"]) + 1:]
-        respond(cmd, {"entries": recs})
+        respond(cmd, {"entries": recs, "leafId": leaf})
     elif t == "get_tree":
+        nodes = {r["id"]: {"entry": r, "children": []} for r in records}
+        for r in records:
+            if r["id"] in labels:
+                nodes[r["id"]]["label"] = labels[r["id"]]
         tree = []
-        for i in reversed(range(len(entries))):
-            eid, m = entries[i]
-            tree = [{"entry": {"type": "message", "id": eid, "parentId": entries[i - 1][0] if i else None, "message": m},
-                     "children": tree}]
-        respond(cmd, {"tree": tree})
+        for r in records:
+            parent = nodes.get(r.get("parentId"))
+            (parent["children"] if parent else tree).append(nodes[r["id"]])
+        respond(cmd, {"tree": tree, "leafId": leaf})
     elif t == "get_last_assistant_text":
         last = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
         respond(cmd, {"text": text_of(last) if last else None})
