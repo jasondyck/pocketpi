@@ -81,6 +81,18 @@ import Testing
         let spec = PiSettings.spec("retry.maxRetries")!
         #expect(PiSettings.patch(spec, 5) == PiConfigPatch(set: ["retry.maxRetries": 5]))
         #expect(PiSettings.patch(spec, nil) == PiConfigPatch(unset: ["retry.maxRetries"]))
+        let steer = PiSettings.spec("steeringMode")!
+        #expect(PiSettings.patch(steer, selection: "all") == PiConfigPatch(set: ["steeringMode": "all"]))
+        #expect(PiSettings.patch(steer, selection: "") == PiConfigPatch(unset: ["steeringMode"]))
+    }
+
+    @Test func controlsShowUnsetAsDefault() throws {
+        let data = try json(#"{"steeringMode":"all","retry":{"maxRetries":5}}"#)
+        #expect(PiSettings.selection(data, PiSettings.spec("steeringMode")!) == "all")
+        #expect(PiSettings.selection(data, PiSettings.spec("followUpMode")!) == "")
+        #expect(PiSettings.numberText(data, PiSettings.spec("retry.maxRetries")!) == "5")
+        #expect(PiSettings.numberText(data, PiSettings.spec("compaction.reserveTokens")!) == "")
+        #expect(PiSettings.NumberProblem.tooBig(100).localizedDescription == "At most 100")
     }
 
     @Test func parsesNumbers() {

@@ -209,20 +209,32 @@ public enum PiSettings {
         return m
     }
 
+    /// One model's entry in a per-model object (`modelThinkingLevels`,
+    /// `compaction.modelOverrides`): the model and its value as text.
+    public struct ModelEntry: Identifiable, Sendable, Equatable {
+        public var model: String
+        public var value: String
+        public var id: String { model }
+        /// For `modelThinkingLevels`: the level.
+        public var level: String { value }
+        /// For `compaction.modelOverrides`: "reserve 1000 · keep 2000".
+        public var summary: String { value }
+    }
+
     /// `modelThinkingLevels`, sorted by model.
-    public static func modelThinking(_ data: JSONValue) -> [(model: String, level: String)] {
-        (data["modelThinkingLevels"]?.object ?? [:]).compactMap { k, v in v.string.map { (k, $0) } }
+    public static func modelThinking(_ data: JSONValue) -> [ModelEntry] {
+        (data["modelThinkingLevels"]?.object ?? [:]).compactMap { k, v in v.string.map { ModelEntry(model: k, value: $0) } }
             .sorted { $0.model < $1.model }
     }
 
-    /// `compaction.modelOverrides` as "model: reserve 1000 · keep 2000" lines.
-    public static func compactionOverrides(_ data: JSONValue) -> [(model: String, summary: String)] {
+    /// `compaction.modelOverrides`, summarised, sorted by model.
+    public static func compactionOverrides(_ data: JSONValue) -> [ModelEntry] {
         (data["compaction"]?["modelOverrides"]?.object ?? [:]).map { k, v in
             var parts: [String] = []
             if let r = v["reserveTokens"]?.int { parts.append("reserve \(r)") }
             if let r = v["keepRecentTokens"]?.int { parts.append("keep \(r)") }
             if let e = v["enabled"]?.bool { parts.append(e ? "on" : "off") }
-            return (k, parts.isEmpty ? "custom" : parts.joined(separator: " · "))
+            return ModelEntry(model: k, value: parts.isEmpty ? "custom" : parts.joined(separator: " · "))
         }.sorted { $0.model < $1.model }
     }
 
@@ -234,7 +246,33 @@ public enum PiSettings {
         return PiConfigPatch(set: [spec.key: value])
     }
 
-    public enum NumberProblem: Error, Equatable { case notANumber, tooSmall(Int), tooBig(Int) }
+    public enum NumberProblem: Error, Equatable, LocalizedError {
+        case notANumber, tooSmall(Int), tooBig(Int)
+        public var errorDescription: String? {
+            switch self {
+            case .notANumber: "Enter a whole number"
+            case .tooSmall(let n): "At least \(n)"
+            case .tooBig(let n): "At most \(n)"
+            }
+        }
+    }
+
+    /// A choice control's selection: "" while the file doesn't set it (pi's default).
+    public static func selection(_ data: JSONValue, _ spec: PiSettingSpec) -> String {
+        isSet(data, spec) ? string(data, spec) : ""
+    }
+
+    /// The patch for a choice control's new selection ("" = back to the default).
+    public static func patch(_ spec: PiSettingSpec, selection: String) -> PiConfigPatch {
+        patch(spec, selection.isEmpty ? nil : .string(selection))
+    }
+
+    /// A number field's text as it should show: empty while unset (the
+    /// default shows as the placeholder).
+    public static func numberText(_ data: JSONValue, _ spec: PiSettingSpec) -> String {
+        guard isSet(data, spec), let n = value(data, at: spec.key)?.int else { return "" }
+        return String(n)
+    }
 
     /// A number field's text: nil for empty (pi's default), else a whole
     /// number within the spec's range.
