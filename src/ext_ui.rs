@@ -11,6 +11,8 @@ pub struct ExtUi {
     /// The latest request per slot (`status:<key>`, `widget:<key>`,
     /// `title`), in the order the slots were first set.
     slots: Vec<(String, Value)>,
+    /// Dialogs (confirm / select / input / editor) waiting for an answer.
+    pub dialogs: crate::dialogs::Dialogs,
 }
 
 impl ExtUi {

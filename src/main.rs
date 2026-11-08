@@ -20,6 +20,8 @@ mod llama;
 mod pi_admin;
 mod pi_cli;
 mod ext_ui;
+mod dialogs;
+mod safety;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -327,6 +329,8 @@ async fn main() {
         .route("/api/pi/auth/{provider}", get(auth_check))
         .route("/api/pi/mcp", get(mcp_list))
         .route("/api/pi/packages", get(package_list))
+        .route("/api/safety", get(safety::info))
+        .route("/api/safety/recommended", post(safety::use_recommended))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -519,6 +523,9 @@ async fn spawn_live(
         cmd.arg("-e").arg(app.control_ext.as_ref().unwrap());
     }
     cmd.args(extra);
+    if kind == Kind::Stage {
+        safety::stage_command(app, cwd, &mut cmd);
+    }
     cmd.current_dir(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -598,7 +605,11 @@ async fn spawn_live(
             let Ok(line) = std::str::from_utf8(&buf) else { continue };
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
             let ty = v.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+            let dialog = (ty == "extension_ui_request" && live2.kind != Kind::Stage).then(|| v.clone());
             handle_record(&live2, line, v);
+            if let Some(d) = dialog {
+                dialogs::opened(&app2, &live2, d);
+            }
             match ty.as_str() {
                 "agent_start" => {
                     let mut t = live2.turn_started.lock().unwrap();
@@ -607,6 +618,7 @@ async fn spawn_live(
                     }
                 }
                 "agent_settled" => {
+                    live2.ext_ui.lock().unwrap().dialogs.clear();
                     let took = live2.turn_started.lock().unwrap().take().map(|t| t.elapsed());
                     // Long reply finished and nobody has the chat open: tell the phone.
                     if took.is_some_and(|d| d > Duration::from_secs(45)) && live2.tx.receiver_count() == 0 {
@@ -741,6 +753,11 @@ async fn send_command(
         let name = format!("{}-{ms}.html", live.key);
         cmd["outputPath"] = json!(app.exports_dir.join(name));
     }
+    if ty == "extension_ui_response" {
+        if let Some(id) = cmd.get("id").and_then(Value::as_str) {
+            live.ext_ui.lock().unwrap().dialogs.answered(id);
+        }
+    }
     let epoch_before = app.admin.epoch();
     let mut resp = rpc(&live, cmd).await?;
     let ok = resp.get("success") != Some(&Value::Bool(false));
@@ -807,6 +824,8 @@ async fn events(State(app): State<Arc<AppState>>, Path(key): Path<String>) -> Ap
         "stale": epoch < config_epoch,
         "kind": live.kind,
         "ui": live.ext_ui.lock().unwrap().replay(),
+        // Dialogs still waiting for an answer (a notification opened the chat).
+        "dialogs": live.ext_ui.lock().unwrap().dialogs.pending(Instant::now()),
     })
     .to_string();
     drop(live);
