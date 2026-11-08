@@ -78,13 +78,18 @@ pub fn session_file_in(roots: &[PathBuf], path: &str) -> Option<PathBuf> {
         .then_some(p)
 }
 
+/// Makes room in the exports folder and picks the next export's path.
+pub fn prepare(dir: &Path, key: &str) -> PathBuf {
+    let _ = std::fs::create_dir_all(dir);
+    prune(dir, KEEP_FOR, KEEP_MAX);
+    new_export_path(dir, key)
+}
+
 /// `POST /api/s/{key}/export`: pi writes the chat as HTML into the exports
 /// folder; answers `{name, url}` to fetch it from.
 pub async fn export(State(app): State<Arc<AppState>>, UrlPath(key): UrlPath<String>) -> AppResult<Json<Value>> {
     let live = get_live_ready(&app, &key).await?;
-    std::fs::create_dir_all(&app.exports_dir).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    prune(&app.exports_dir, KEEP_FOR, KEEP_MAX);
-    let path = new_export_path(&app.exports_dir, &live.key);
+    let path = prepare(&app.exports_dir, &live.key);
     let resp = rpc(&live, json!({"type": "export_html", "outputPath": path})).await?;
     if resp.get("success") == Some(&Value::Bool(false)) {
         let msg = resp.get("error").and_then(Value::as_str).unwrap_or("export failed");

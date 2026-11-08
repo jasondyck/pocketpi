@@ -779,8 +779,7 @@ async fn send_command(
     }
     // pi writes the export wherever it's told: only ever into our folder.
     if ty == "export_html" {
-        let _ = std::fs::create_dir_all(&app.exports_dir);
-        cmd["outputPath"] = json!(exports::new_export_path(&app.exports_dir, &live.key));
+        cmd["outputPath"] = json!(exports::prepare(&app.exports_dir, &live.key));
     }
     if ty == "extension_ui_response" {
         if let Some(id) = cmd.get("id").and_then(Value::as_str) {

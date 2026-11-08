@@ -12,7 +12,8 @@ setStatus / setWidget / setTitle when it says "widgets", session names, abort. S
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
 Also the commands pocketpi allows since the pi-parity work: fork, clone,
-get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never run: streamed line by line as
+get_fork_messages, get_tree, get_entries, export_html (a small page at
+outputPath), compact (customInstructions echoed in the summary), bash (echoed, never run: streamed line by line as
 bash_execution_update, slowly when the command says "slow", exit 1 when it
 says "fail", truncated when it says "long"), abort_bash,
 get_last_assistant_text and the global setters; and, when
@@ -613,6 +614,23 @@ for line in sys.stdin:
         with open(path, "w") as f:
             f.write("<html><body>" + "".join(f"<p>{text_of(m)}</p>" for m in messages) + "</body></html>")
         respond(cmd, {"path": path})
+    elif t == "compact":
+        # Like pi: compaction_start / compaction_end around it, a compaction
+        # entry in the file, the summary in the answer. customInstructions
+        # shows up in the summary so tests can see it arrived.
+        if not entries:
+            respond(cmd, ok=False, error="Nothing to compact")
+            continue
+        focus = (cmd.get("customInstructions") or "").strip()
+        out({"type": "compaction_start", "reason": "manual"})
+        result = {"summary": f"Summary of {len(messages)} messages" + (f" (focus: {focus})" if focus else ""),
+                  "firstKeptEntryId": entries[-1][0], "tokensBefore": 4000, "estimatedTokensAfter": 800,
+                  "usage": {"input": 4000, "output": 300, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 4300,
+                            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0.002}}}
+        save({"type": "compaction", "id": uuid.uuid4().hex[:8], "parentId": entries[-1][0],
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()), **result})
+        out({"type": "compaction_end", "reason": "manual", "result": result, "aborted": False, "willRetry": False})
+        respond(cmd, result)
     elif t == "bash":
         threading.Thread(target=bash, args=(cmd,), daemon=True).start()
     elif t == "abort_bash":

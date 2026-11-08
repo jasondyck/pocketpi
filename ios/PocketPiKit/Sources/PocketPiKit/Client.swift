@@ -97,7 +97,7 @@ public final class PocketPiClient: Sendable {
         return r
     }
 
-    private func send(_ r: URLRequest) async throws -> Data {
+    func send(_ r: URLRequest) async throws -> Data {
         let (data, resp) = try await session.data(for: r)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
