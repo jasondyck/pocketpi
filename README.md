@@ -43,7 +43,7 @@ next to its `config_epoch`, and `{"type":"config_changed"}` on `/api/runs/events
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `GET /api/pi/config/{file}` | `file` = `settings`, `auth`, `models`, `mcp`, `trust`; `?cwd=<project>` for the project's `.pi/settings.json` / `.pi/mcp.json` | `{file, scope, path, exists, data, epoch}` |
+| `GET /api/pi/config/{file}` | `file` = `settings`, `auth`, `models`, `mcp`, `trust`, `permissions` (@gotgenes/pi-permission-system's policy), `stage-policy` (pocketpi's `~/.config/pocketpi/safety/stage-policy.json`); `?cwd=<project>` for the project's `.pi/settings.json` / `.pi/mcp.json` / `.pi/extensions/pi-permission-system/config.json` | `{file, scope, path, exists, data, epoch}`; the two policies also `rules: {surface: [[pattern, action], ...]}` in file order |
 | `POST /api/pi/config/{file}` | `{"set": {"a.b": value}, "unset": ["c"]}` (dotted paths, `\.` for a literal dot), same `?cwd=` | the file as it is now, same shape |
 | `GET /api/pi/status` | | `{config_epoch, control, live: [{key, file, cwd, kind, streaming, epoch, stale}]}` |
 | `POST /api/pi/reload` | `{"all": false}` | restarts idle chats behind the epoch (or all idle with `all`): `{restarted, busy, failed, config_epoch}` |
@@ -55,6 +55,8 @@ next to its `config_epoch`, and `{"type":"config_changed"}` on `/api/runs/events
 | `GET /api/pi/providers[?refresh=1]`, `POST /api/pi/providers/{id}/key` `{"key"}`, `POST /api/pi/providers/{id}/remove` | | every provider pi knows with `pi auth check`'s verdict (6 at a time, cached 30 s), its auth.json type/hasKey and env vars, plus the default and fallback models; key writes take literal keys only (no `!command`) and answer the re-checked row, never the key (`src/pi_providers.rs`) |
 | `GET /api/pi/trust` | | each project's trust as pi resolves it (`src/pi_resources.rs`): `{path, default, entries, projects: [{path, canonical, decision, from, explicit, trusted, needsTrust, protected}]}`; change it with `POST /api/pi/config/trust` (key = canonical path, `.` escaped) |
 | `GET /api/pi/resources[?cwd=]` | | extensions, skills and prompts pi would load, with `scope` (global/project/package/builtin/temporary), `enabled`, `loads`, `skipped`, `toggle`; packages from `pi list`; a live chat's `get_commands` marks `live` |
+| `GET /api/safety` | | the pinned permission package, the proposed policies (`extensions/safety/`), where the stage policy is and whether it's active |
+| `POST /api/safety/recommended` | `{"file": "permissions"\|"stage-policy"}` | writes the proposed policy's keys over that file (others stay), same shape as a config read |
 | `GET /api/manage/pages` | | the web Settings pages, `{pages: ["about", …]}`, each served at `/manage/<id>.js` (docs/pi-parity-plan.md §7) |
 
 Writes go to a `.tmp` file renamed over the original, the previous version is
@@ -82,6 +84,22 @@ The RPC allowlist also has `fork`, `clone`, `get_fork_messages`, `get_tree`,
 epoch). After a fork or clone the server asks pi for its new session file and
 broadcasts `{"type":"pocketpi_session","file":...}`. `cycle_model`,
 `new_session` and `switch_session` are never allowed.
+
+## Safety (`src/safety.rs`, `src/dialogs.rs`)
+
+Settings › Safety installs [@gotgenes/pi-permission-system](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
+(pinned) with the proposed chat policy (`extensions/safety/chat-policy.json`),
+edits its rule lists, sets each project to Off / Ask / Strict, and gives
+workflow stages their own policy (`extensions/safety/stage-policy.json`,
+copied to `~/.config/pocketpi/safety/stage-policy.json`). The chat policy is
+pi's own file, so the terminal's pi uses it too. Stages read theirs through
+an overlay agent dir, `~/.pi/agent.pocketpi-stage` (symlinks to the real one
+except that file); docs/pi-parity-plan.md §6 says why. When a chat's pi asks
+something (a permission prompt or any other dialog) and nobody has the chat
+open, or it's still unanswered after 20 s, pocketpi sends a notification that
+opens the chat with the question showing. Policy writes need no restart: the
+extension rereads its file. Check the proposed files against the package's
+schema with `node scripts/check-safety-policies.mjs <permissions.schema.json>`.
 
 ## Tests
 

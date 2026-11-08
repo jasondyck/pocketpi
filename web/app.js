@@ -675,7 +675,7 @@ function renderQueue(steering = [], followUp = []) {
 
 function onEvent(ev) {
   switch (ev.type) {
-    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); return loadSnapshot();
+    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); (ev.dialogs || []).forEach(extensionUI); return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
     case "pocketpi_session": loadSnapshot(); break;
     case "pocketpi_exit": {
@@ -1210,7 +1210,10 @@ function extensionUI(ev) {
   if (!["confirm", "select", "input", "editor"].includes(m)) return;
   pendingUI = ev.id;
   openSheet((b) => {
-    b.append(el("div", "sheet-title", esc(ev.title || "pi needs input")));
+    // A multi-line title (permission prompts: "tool : bash" lines) is a heading plus details.
+    const [head, ...more] = String(ev.title || "pi needs input").split("\n");
+    b.append(el("div", "sheet-title", esc(head)));
+    if (more.join("").trim()) b.append(el("div", "sheet-msg", esc(more.join("\n").replace(/ +: /g, ": ").trim())));
     if (ev.message) b.append(el("div", "sheet-msg", esc(ev.message)));
     dialogCountdown(b, ev);
     const finish = (payload) => { const id = pendingUI; pendingUI = null; document.body.classList.remove("sheet-open"); if (id) respondUI(id, payload); };

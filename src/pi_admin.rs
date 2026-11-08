@@ -10,6 +10,16 @@
 //! | `auth`     | `auth.json`             | –                       |
 //! | `models`   | `models.json`           | –                       |
 //! | `trust`    | `trust.json`            | –                       |
+//! | `permissions` | `extensions/pi-permission-system/config.json` | same, under `.pi/` |
+//! | `stage-policy` | pocketpi's own `~/.config/pocketpi/safety/stage-policy.json` | – |
+//!
+//! `permissions` is @gotgenes/pi-permission-system's policy and
+//! `stage-policy` the one workflow stages run under (src/safety.rs). Their
+//! rule maps are ordered (last match wins), which a client's JSON object may
+//! not keep: reads add `rules` (each object-valued surface as `[[pattern,
+//! action], ...]`) and a write may set `permission.<surface>` to such a list.
+//! Neither bumps the epoch: the extension rereads its policy when the file
+//! changes, and stages read theirs when they start.
 //!
 //! Writes are patches, never whole files: `{set: {"a.b": value}, unset: ["c"]}`
 //! changes only the named paths, so keys pocketpi doesn't know about (new pi
@@ -52,6 +62,8 @@ pub enum File {
     Models,
     Mcp,
     Trust,
+    Permissions,
+    StagePolicy,
 }
 
 impl File {
@@ -62,6 +74,8 @@ impl File {
             "models" => File::Models,
             "mcp" => File::Mcp,
             "trust" => File::Trust,
+            "permissions" => File::Permissions,
+            "stage-policy" => File::StagePolicy,
             _ => return None,
         })
     }
@@ -73,12 +87,24 @@ impl File {
             File::Models => "models.json",
             File::Mcp => "mcp.json",
             File::Trust => "trust.json",
+            File::Permissions => "extensions/pi-permission-system/config.json",
+            File::StagePolicy => "stage-policy.json",
         }
     }
 
-    /// Only settings and MCP servers have a per-project file.
+    /// Settings, MCP servers and the permission policy have a per-project file.
     pub fn has_project_scope(self) -> bool {
-        matches!(self, File::Settings | File::Mcp)
+        matches!(self, File::Settings | File::Mcp | File::Permissions)
+    }
+
+    /// A permission policy (ordered rule maps).
+    pub fn is_policy(self) -> bool {
+        matches!(self, File::Permissions | File::StagePolicy)
+    }
+
+    /// Whether running pis need a restart to see a change.
+    fn bumps_epoch(self) -> bool {
+        !self.is_policy()
     }
 
     /// Credentials stay private on disk too, like pi creates them.
@@ -102,6 +128,9 @@ pub struct Patch {
 
 pub struct Admin {
     pub agent_dir: PathBuf,
+    /// pocketpi's own config folder (`$XDG_CONFIG_HOME/pocketpi`), for the
+    /// stage policy.
+    pub pocketpi_dir: PathBuf,
     lock: Mutex<()>,
     epoch: AtomicU64,
 }
@@ -126,7 +155,10 @@ impl std::fmt::Display for AdminError {
 
 impl Admin {
     pub fn new(agent_dir: PathBuf) -> Admin {
-        Admin { agent_dir, lock: Mutex::new(()), epoch: AtomicU64::new(0) }
+        let config = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
+        Admin { agent_dir, pocketpi_dir: config.join("pocketpi"), lock: Mutex::new(()), epoch: AtomicU64::new(0) }
     }
 
     /// Bumped by every successful config write (here or by a pi CLI job).
@@ -141,6 +173,7 @@ impl Admin {
     /// Where `file` lives: the global one, or the project's when `cwd` is given.
     pub fn path(&self, file: File, cwd: Option<&str>) -> Result<PathBuf, AdminError> {
         match cwd.filter(|c| !c.is_empty()) {
+            None if file == File::StagePolicy => Ok(self.pocketpi_dir.join("safety").join(file.file_name())),
             None => Ok(self.agent_dir.join(file.file_name())),
             Some(_) if !file.has_project_scope() => {
                 Err(AdminError::Bad(format!("{} has no project file", file.file_name())))
@@ -170,14 +203,18 @@ impl Admin {
             File::Models | File::Mcp => redact_secrets(doc),
             _ => doc,
         };
-        json!({
+        let mut v = json!({
             "file": file_label(file),
             "scope": if cwd.is_some_and(|c| !c.is_empty()) { "project" } else { "global" },
             "path": path,
             "exists": exists,
-            "data": data,
             "epoch": self.epoch(),
-        })
+        });
+        if file.is_policy() {
+            v["rules"] = ordered_rules(&data);
+        }
+        v["data"] = data;
+        v
     }
 
     /// Apply `patch` and return the new (redacted) view. An empty patch is a
@@ -189,9 +226,16 @@ impl Admin {
         if patch.set.is_empty() && patch.unset.is_empty() {
             return Ok(self.view(file, cwd, &path, doc, exists));
         }
-        apply(&mut doc, patch)?;
+        if file.is_policy() {
+            let patch = policy_patch(patch)?;
+            apply(&mut doc, &patch)?;
+        } else {
+            apply(&mut doc, patch)?;
+        }
         write(&path, &doc, file.default_mode()).map_err(|e| AdminError::Io(format!("{}: {e}", path.display())))?;
-        self.bump();
+        if file.bumps_epoch() {
+            self.bump();
+        }
         Ok(self.view(file, cwd, &path, doc, true))
     }
 }
@@ -203,7 +247,95 @@ fn file_label(f: File) -> &'static str {
         File::Models => "models",
         File::Mcp => "mcp",
         File::Trust => "trust",
+        File::Permissions => "permissions",
+        File::StagePolicy => "stage-policy",
     }
+}
+
+const ACTIONS: [&str; 3] = ["allow", "ask", "deny"];
+
+/// A rule's action: "allow" / "ask" / "deny", or `{action: "deny", reason}`.
+fn valid_action(v: &Value) -> bool {
+    match v {
+        Value::String(s) => ACTIONS.contains(&s.as_str()),
+        Value::Object(o) => {
+            o.get("action").and_then(Value::as_str) == Some("deny")
+                && o.get("reason").is_none_or(Value::is_string)
+                && o.keys().all(|k| k == "action" || k == "reason")
+        }
+        _ => false,
+    }
+}
+
+/// A surface's value as a client may send it: an action, an object of
+/// pattern -> action, or the ordered form `[[pattern, action], ...]`, which
+/// becomes an object in that order. Anything else is refused, so a typo
+/// can't reach the file (the extension would fall back to asking for
+/// everything).
+fn surface_value(surface: &str, v: &Value) -> Result<Value, AdminError> {
+    let bad = |what: &str| AdminError::Bad(format!("permission.{surface}: {what}"));
+    match v {
+        Value::Array(pairs) => {
+            let mut o = Map::new();
+            for p in pairs {
+                let (Some(pat), Some(act)) = (p.get(0).and_then(Value::as_str), p.get(1)) else {
+                    return Err(bad("each rule is [pattern, action]"));
+                };
+                if p.as_array().map(Vec::len) != Some(2) || pat.is_empty() {
+                    return Err(bad("each rule is [pattern, action]"));
+                }
+                if !valid_action(act) {
+                    return Err(bad(&format!("{pat}: the action must be allow, ask or deny")));
+                }
+                // A repeated pattern keeps its last action at its last place.
+                o.shift_remove(pat);
+                o.insert(pat.to_string(), act.clone());
+            }
+            Ok(Value::Object(o))
+        }
+        Value::Object(o) => match o.iter().find(|(_, a)| !valid_action(a)) {
+            Some((pat, _)) => Err(bad(&format!("{pat}: the action must be allow, ask or deny"))),
+            None => Ok(v.clone()),
+        },
+        v if valid_action(v) => Ok(v.clone()),
+        _ => Err(bad("the action must be allow, ask or deny")),
+    }
+}
+
+/// Checks and converts what a policy write sets under `permission`.
+fn policy_patch(patch: &Patch) -> Result<Patch, AdminError> {
+    let mut out = Patch { set: Map::new(), unset: patch.unset.clone() };
+    for (p, v) in &patch.set {
+        let parts = split_path(p)?;
+        let v = match parts.as_slice() {
+            [perm, surface] if perm == "permission" => surface_value(surface, v)?,
+            [perm] if perm == "permission" => {
+                let o = v.as_object().ok_or_else(|| AdminError::Bad("permission must be an object".into()))?;
+                let mut m = Map::new();
+                for (surface, sv) in o {
+                    m.insert(surface.clone(), surface_value(surface, sv)?);
+                }
+                Value::Object(m)
+            }
+            _ => v.clone(),
+        };
+        out.set.insert(p.clone(), v);
+    }
+    Ok(out)
+}
+
+/// Each object-valued surface of `permission` as `[[pattern, action], ...]`,
+/// in file order.
+pub fn ordered_rules(doc: &Value) -> Value {
+    let mut out = Map::new();
+    if let Some(perm) = doc.get("permission").and_then(Value::as_object) {
+        for (surface, v) in perm {
+            if let Some(o) = v.as_object() {
+                out.insert(surface.clone(), Value::Array(o.iter().map(|(k, a)| json!([k, a])).collect()));
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// Reads a JSON object; a missing or empty file is `{}`.
@@ -257,7 +389,7 @@ fn remove_at(v: &mut Value, parts: &[String]) {
     let Some(o) = v.as_object_mut() else { return };
     match parts {
         [last] => {
-            o.remove(last.as_str());
+            o.shift_remove(last.as_str());
         }
         [first, rest @ ..] => {
             if let Some(next) = o.get_mut(first.as_str()) {
@@ -621,5 +753,61 @@ mod tests {
         assert!(std::fs::symlink_metadata(dir.join("agent/settings.json")).unwrap().file_type().is_symlink());
         assert!(std::fs::read_to_string(dir.join("real.json")).unwrap().contains("\"a\": 1"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn policies_keep_rule_order_and_never_bump_the_epoch() {
+        let dir = scratch();
+        let mut admin = Admin::new(dir.join("agent"));
+        admin.pocketpi_dir = dir.join("pocketpi");
+        let path = dir.join("agent/extensions/pi-permission-system/config.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"$schema":"x","permission":{"*":"allow","bash":{"*":"allow","rm *":"ask"}}}"#).unwrap();
+        let v = admin.read(File::Permissions, None).unwrap();
+        assert_eq!(v["rules"]["bash"], json!([["*", "allow"], ["rm *", "ask"]]));
+        // The ordered form keeps its order, even where sorting wouldn't.
+        let rules = json!([["*", "allow"], ["~/.ssh/*", {"action": "deny", "reason": "keys"}], ["$HOME/x", "ask"], ["a", "ask"], ["a", "deny"]]);
+        let v = admin
+            .patch(File::Permissions, None, &patch(json!({"set": {"permission.path": rules, "promptTimeoutMs": 600000}})))
+            .unwrap();
+        assert_eq!(
+            v["rules"]["path"],
+            json!([["*", "allow"], ["~/.ssh/*", {"action": "deny", "reason": "keys"}], ["$HOME/x", "ask"], ["a", "deny"]])
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.find(r#""*": "allow""#).unwrap() < text.find("$HOME/x").unwrap(), "{text}");
+        assert!(text.starts_with("{\n  \"$schema\""), "unknown keys stay, in place: {text}");
+        assert_eq!(admin.epoch(), 0);
+        // Bad actions never reach the file.
+        for bad in [
+            json!({"permission.bash": [["rm *", "maybe"]]}),
+            json!({"permission.bash": [["rm *"]]}),
+            json!({"permission.bash": {"x": {"action": "allow"}}}),
+            json!({"permission": {"bash": 3}}),
+        ] {
+            assert!(matches!(admin.patch(File::Permissions, None, &patch(json!({"set": bad}))), Err(AdminError::Bad(_))));
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        // The stage policy is pocketpi's own file, global only.
+        let v = admin
+            .patch(File::StagePolicy, None, &patch(json!({"set": {"permission.bash": [["*", "allow"], ["git push *", "deny"]]}})))
+            .unwrap();
+        assert_eq!(v["path"], json!(dir.join("pocketpi/safety/stage-policy.json")));
+        assert_eq!(v["rules"]["bash"][1][0], "git push *");
+        assert!(admin.path(File::StagePolicy, Some(dir.to_str().unwrap())).is_err());
+        // The project's policy is where the extension looks for it.
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        admin.patch(File::Permissions, Some(proj.to_str().unwrap()), &patch(json!({"set": {"yoloMode": true}}))).unwrap();
+        assert!(std::fs::canonicalize(&proj).unwrap().join(".pi/extensions/pi-permission-system/config.json").exists());
+        assert_eq!(admin.epoch(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unset_keeps_the_order_of_the_rest() {
+        let mut doc = json!({"a": 1, "b": 2, "c": 3});
+        apply(&mut doc, &patch(json!({"unset": ["a"]}))).unwrap();
+        assert_eq!(serde_json::to_string(&doc).unwrap(), r#"{"b":2,"c":3}"#);
     }
 }

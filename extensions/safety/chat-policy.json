@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/gotgenes/pi-packages/main/packages/pi-permission-system/schemas/permissions.schema.json",
+  "permissionReviewLog": true,
+  "yoloMode": false,
+  "promptTimeoutMs": 600000,
+  "forwardingTimeoutMs": 660000,
+  "permission": {
+    "*": "allow",
+    "path": {
+      "*": "allow",
+      "~/.ssh": { "action": "deny", "reason": "SSH keys are off limits" },
+      "~/.ssh/*": { "action": "deny", "reason": "SSH keys are off limits" },
+      "~/.aws": { "action": "deny", "reason": "AWS credentials are off limits" },
+      "~/.aws/*": { "action": "deny", "reason": "AWS credentials are off limits" },
+      "~/.gnupg/*": { "action": "deny", "reason": "GPG keys are off limits" },
+      "~/.config/gh/hosts.yml": { "action": "deny", "reason": "GitHub CLI tokens are off limits" },
+      "~/.pi/agent/auth.json": { "action": "deny", "reason": "pi's credentials are off limits" },
+      "~/.config/pocketpi/apns/*": { "action": "deny", "reason": "pocketpi's push key is off limits" },
+      "*.env": { "action": "deny", "reason": ".env files hold secrets; use .env.example" },
+      "*.env.*": { "action": "deny", "reason": ".env files hold secrets; use .env.example" },
+      "*.env.example": "allow"
+    },
+    "external_directory": {
+      "*": "ask",
+      "/tmp/*": "allow",
+      "~/.cargo/registry/*": "allow",
+      "~/.cargo/git/*": "allow",
+      "~/.rustup/*": "allow",
+      "~/.npm/*": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "rm *": "ask",
+      "rmdir *": "ask",
+      "shred *": "ask",
+      "dd *": "ask",
+      "git push -f*": "ask",
+      "git push * -f*": "ask",
+      "git push *--force*": "ask",
+      "git push * +*": "ask",
+      "git reset --hard*": "ask",
+      "git reset * --hard*": "ask",
+      "git clean *": "ask",
+      "git branch -D *": "ask",
+      "git checkout -- *": "ask",
+      "git stash drop*": "ask",
+      "git stash clear*": "ask",
+      "npm publish*": "ask",
+      "cargo publish*": "ask",
+      "sh": "ask",
+      "bash": "ask",
+      "zsh": "ask",
+      "sh -s*": "ask",
+      "bash -s*": "ask",
+      "sudo *": { "action": "deny", "reason": "no root from pi; run it yourself" },
+      "doas *": { "action": "deny", "reason": "no root from pi; run it yourself" },
+      "su": { "action": "deny", "reason": "no root from pi; run it yourself" },
+      "su *": { "action": "deny", "reason": "no root from pi; run it yourself" },
+      "pkexec *": { "action": "deny", "reason": "no root from pi; run it yourself" },
+      "mkfs*": { "action": "deny", "reason": "formatting disks is never pi's job" }
+    }
+  }
+}

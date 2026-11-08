@@ -32,6 +32,11 @@ reaches the chat list and registers its token on every launch (sandbox for
 debug builds, production for TestFlight; the server retries the other service
 on BadDeviceToken). Tapping a chat notification opens that chat.
 
+A chat whose pi is waiting for an answer (a permission prompt from
+@gotgenes/pi-permission-system, any extension dialog) also notifies, when the
+chat isn't open anywhere or the question sits unanswered for 20 s; the chat
+opens with the question showing.
+
 Check the key against Apple without a phone:
 `cargo test apns_credentials -- --ignored --nocapture` (expects BadDeviceToken).
 

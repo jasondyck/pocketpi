@@ -188,7 +188,8 @@ public struct Transcript: Sendable, Equatable {
         switch ev["type"]?.string ?? "" {
         case "pocketpi_hello":
             extensionUI.reset(replaying: ev["ui"]?.array ?? [])
-            return [.reloadSnapshot]
+            // Dialogs still waiting (a notification opened the chat): show them.
+            return [.reloadSnapshot] + (ev["dialogs"]?.array ?? []).flatMap { extensionRequest($0, now: now) }
         case "pocketpi_resync":
             return [.reloadSnapshot]
         case "pocketpi_exit":
@@ -351,9 +352,11 @@ public struct Transcript: Sendable, Equatable {
         default:
             guard let m = ExtensionRequest.Method(rawValue: method), let id = ev["id"]?.string else { return [] }
             let timeout = ev["timeout"]?.double.flatMap { $0 > 0 ? $0 / 1000 : nil }
+            let (title, details) = ExtensionRequest.splitTitle(ev["title"]?.string ?? "pi needs input")
             return [.extensionRequest(ExtensionRequest(
-                id: id, method: m, title: ev["title"]?.string ?? "pi needs input",
-                message: ev["message"]?.string, options: (ev["options"]?.array ?? []).compactMap(\.string),
+                id: id, method: m, title: title,
+                message: ExtensionRequest.joinedMessage(details, ev["message"]?.string),
+                options: (ev["options"]?.array ?? []).compactMap(\.string),
                 prefill: ev["prefill"]?.string, placeholder: ev["placeholder"]?.string,
                 timeout: timeout, deadline: timeout.map { now.addingTimeInterval($0) }))]
         }

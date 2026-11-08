@@ -6,7 +6,8 @@ It speaks enough of pi's RPC protocol for pocketpi and PocketPiKit: the state
 and message commands, prompts that stream back an echo (thinking, text, and a
 tool call when the prompt says "tool", a workflow_run call for the run id in
 ~/.fake-pi-run when it says "deploy"), an extension confirm dialog when the
-prompt says "ask" (with a 1.5 s timeout when it says "timeout"),
+prompt says "ask" (with a 1.5 s timeout when it says "timeout"), a
+permission prompt like @gotgenes/pi-permission-system's when it says "permission",
 setStatus / setWidget / setTitle when it says "widgets", session names, abort. Sessions are written in pi's format
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
@@ -124,6 +125,22 @@ if args == ["list"]:
                 print(f"  {src}")
                 if full:
                     print(f"    {full}")
+    sys.exit(0)
+if args[:1] in (["install"], ["remove"]) and len(args) >= 2 and "-l" not in args:
+    # `pi install|remove <source>`: only the global settings' packages list.
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    path = os.path.join(agent, "settings.json")
+    try:
+        cfg = json.load(open(path))
+    except (OSError, ValueError):
+        cfg = {}
+    pkgs = [p for p in cfg.get("packages", []) if p != args[1]]
+    if args[0] == "install":
+        pkgs.append(args[1])
+    cfg["packages"] = pkgs
+    os.makedirs(agent, exist_ok=True)
+    json.dump(cfg, open(path, "w"), indent=2)
+    print(f"{'Installed' if args[0] == 'install' else 'Removed'} {args[1]}")
     sys.exit(0)
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
@@ -327,6 +344,17 @@ def run(prompt, cmd_id):
             answered.wait_for(lambda: rid in answers, timeout=20)
             a = answers.pop(rid, {})
         reply += " · confirmed" if a.get("confirmed") else " · declined"
+    if "permission" in prompt:
+        # As @gotgenes/pi-permission-system asks over RPC (no timeout field:
+        # its own promptTimeoutMs denies an unanswered one).
+        rid = f"perm-{cmd_id}"
+        out({"type": "extension_ui_request", "id": rid, "method": "select",
+             "title": "Permission Required\ntool    : bash\nrule    : rm *\ncommand : rm -rf junk",
+             "options": ["Yes", 'Yes, allow bash "rm *" for this session', "No", "No, provide reason"]})
+        with answered:
+            answered.wait_for(lambda: rid in answers, timeout=60)
+            a = answers.pop(rid, {})
+        reply += " · allowed" if str(a.get("value", "")).startswith("Yes") else " · denied"
     if "widgets" in prompt:
         ext_ui(prompt, cmd_id)
     if "timeout" in prompt:
