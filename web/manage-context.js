@@ -161,7 +161,7 @@
           if (!f.editable) notes.push(`pocketpi shows ${f.name} but doesn't edit it. An AGENTS.md in the same folder is read instead of it.`);
           if (f.kind === "system") notes.push("SYSTEM.md replaces pi's whole system prompt, tool instructions included. APPEND_SYSTEM.md is usually what you want.");
           if (f.scope === "project" && f.kind !== "context") notes.push("Only read once pi trusts the project.");
-          notes.push("Saving keeps the previous version as a .pocketpi.bak backup. Open chats see it after a restart.");
+          if (f.editable) notes.push("Saving keeps the previous version as a .pocketpi.bak backup. Open chats see it after a restart.");
           w.append(el("div", "cx-edit-note", esc(notes.join(" "))));
           b.append(w);
         });

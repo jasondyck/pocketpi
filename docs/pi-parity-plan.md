@@ -569,6 +569,7 @@ again.
 | 10 | `settings` (general, models, global toggles) | W2-settings |
 | 20 | `providers` | W2-providers |
 | 30 | `trust` | W2-trust-resources |
+| 35 | `context` (AGENTS.md, SYSTEM.md, APPEND_SYSTEM.md) | W3-tools-context |
 | 40 | `resources` | W2-trust-resources |
 | 50 | `safety` | S3 |
 | 1000 | `about` | W2-shell |
