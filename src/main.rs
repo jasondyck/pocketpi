@@ -275,6 +275,7 @@ async fn main() {
         .route("/app.js", get(|| async { static_file("app.js") }))
         .route("/app.css", get(|| async { static_file("app.css") }))
         .route("/manage.js", get(|| async { static_file("manage.js") }))
+        .route("/tree.js", get(|| async { static_file("tree.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -434,6 +435,7 @@ fn static_file(name: &str) -> Response {
         "app.js" => (include_bytes!("../web/app.js"), "text/javascript; charset=utf-8"),
         "app.css" => (include_bytes!("../web/app.css"), "text/css; charset=utf-8"),
         "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
+        "tree.js" => (include_bytes!("../web/tree.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
