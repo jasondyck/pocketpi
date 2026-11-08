@@ -38,14 +38,14 @@ ppManage.register({
       if (s?.type === "api_key" && s.hasKey) return "API key saved in pi";
       if (p.envSet?.length) return `From $${p.envSet[0]}`;
       if (p.status === "ready" && p.authType) return p.authType === "oauth" ? "Signed in" : "API key";
-      if (s) return `Saved in pi (${s.type})`;
+      if (s) return p.status === "unknown" ? "Saved in pi; the CLI can't check it" : "Saved in pi";
       if (p.apiKey && p.env?.length) return `Add a key, or set ${p.env[0]}`;
       if (p.apiKey) return "Add an API key";
       return p.oauth ? "Sign in from a terminal" : "Set up from a terminal";
     }
     function reasonText(p) {
       const r = p.reason;
-      if (!r) return "";
+      if (!r || r === "credentials_not_configured") return "";
       return { credentials_not_configured: "No credentials", provider_not_found: "pi's CLI can't check this provider", invalid_state: "The saved sign-in doesn't work any more (expired or revoked)" }[r] || r.replace(/_/g, " ");
     }
 
@@ -156,14 +156,15 @@ ppManage.register({
 
         if (p.oauth || !p.apiKey) {
           b.append(ctx.el("div", "sheet-section", p.oauth ? "Sign in" : "Set up"));
+          const signedIn = p.stored?.type === "oauth";
           b.append(ctx.el("div", "pv-p", esc(p.oauth
-            ? `${p.subscription ? "Subscription sign-ins" : "Sign-ins"} need pi's terminal UI. On the computer pocketpi runs on, start pi and run:`
+            ? `${signedIn ? "To sign in again" : p.subscription ? "Subscription sign-ins need pi's terminal UI. To sign in" : "Sign-ins need pi's terminal UI. To sign in"}, start pi on the computer pocketpi runs on and run:`
             : "This provider is set up from pi's terminal UI. On the computer pocketpi runs on, start pi and run:")));
           const cmdRow = ctx.el("div", "pv-cmd", `<code>${esc(p.login)}</code>`);
           const copy = ctx.el("button", "copy", `${ctx.ICON.copy}<span>Copy</span>`);
           copy.onclick = () => (window.copyText ? window.copyText(p.login, copy) : navigator.clipboard?.writeText(p.login));
           cmdRow.append(copy); b.append(cmdRow);
-          if (p.stored?.type === "oauth") b.append(ctx.el("div", "pv-p", `To sign out: <code>/logout ${esc(p.id)}</code>`));
+          if (signedIn) b.append(ctx.el("div", "pv-p", `To sign out: <code>/logout ${esc(p.id)}</code>`));
         }
       });
     }
