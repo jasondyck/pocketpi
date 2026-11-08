@@ -158,7 +158,9 @@ final class LaunchTests: XCTestCase {
         let about = app.descendants(matching: .any)["settings-page-about"].firstMatch
         XCTAssertTrue(about.waitForExistence(timeout: 5))
         keep(app, "settings")
+        // The list can still be settling as pages load: tap again if it didn't open.
         about.tap()
+        for _ in 0..<2 where !app.navigationBars["About"].waitForExistence(timeout: 3) { about.tap() }
         XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
         sleep(1)
         keep(app, "settings-about")
