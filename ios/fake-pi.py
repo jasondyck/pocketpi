@@ -9,6 +9,12 @@ tool call when the prompt says "tool", a workflow_run call for the run id in
 prompt says "ask", session names, abort. Sessions are written in pi's format
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
+Also the commands pocketpi allows since the pi-parity work: fork, clone,
+get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never
+run), abort_bash, get_last_assistant_text and the global setters; and, when
+started with `-e .../pocketpi-control.ts`, the extension's /pp-tools, which
+answers like the real one with an `entry_appended` custom entry.
+
     POCKETPI_PI=ios/fake-pi.py pocketpi
 """
 import json
@@ -33,9 +39,16 @@ def out(obj):
 args = sys.argv[1:]
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
+# pocketpi loads its companion extension into normal chats with -e.
+control = any(a.endswith("pocketpi-control.ts") for a in args)
 messages = []
+# Message entries as (id, message): the tree pi keeps, always linear here.
+entries = []
 name = None
 streaming = False
+settings = {"steeringMode": "one-at-a-time", "followUpMode": "one-at-a-time", "autoCompaction": True, "autoRetry": True}
+TOOLS = ["read", "bash", "edit", "write", "grep"]
+active_tools = ["read", "bash", "edit", "write"]
 
 if session_file:
     with open(session_file) as f:
@@ -43,25 +56,92 @@ if session_file:
             rec = json.loads(line)
             if rec.get("type") == "message":
                 messages.append(rec["message"])
+                entries.append((rec.get("id") or uuid.uuid4().hex[:8], rec["message"]))
             elif rec.get("type") == "session_info":
                 name = rec.get("name")
+
+
+def compact(rec):
+    # Compact, "type" first: pocketpi's session scanner matches substrings.
+    return json.dumps(rec, separators=(",", ":")) + "\n"
+
+
+def new_file(parent=None):
+    os.makedirs(session_dir, exist_ok=True)
+    sid = str(uuid.uuid4())
+    path = os.path.join(session_dir, f"{int(time.time() * 1000)}_{sid}.jsonl")
+    header = {"type": "session", "id": sid, "cwd": os.getcwd(), "version": 3}
+    if parent:
+        header["parentSession"] = parent
+    with open(path, "w") as f:
+        f.write(compact(header))
+    return path
 
 
 def save(rec):
     global session_file
     if not session_file:
-        os.makedirs(session_dir, exist_ok=True)
-        sid = str(uuid.uuid4())
-        session_file = os.path.join(session_dir, f"{int(time.time() * 1000)}_{sid}.jsonl")
-        with open(session_file, "w") as f:
-            f.write(json.dumps({"type": "session", "id": sid, "cwd": os.getcwd(), "version": 3}, separators=(",", ":")) + "\n")
+        session_file = new_file()
     with open(session_file, "a") as f:
-        f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        f.write(compact(rec))
 
 
 def add(msg):
     messages.append(msg)
-    save({"type": "message", "message": msg})
+    eid = uuid.uuid4().hex[:8]
+    parent = entries[-1][0] if entries else None
+    entries.append((eid, msg))
+    save({"type": "message", "id": eid, "parentId": parent, "message": msg})
+
+
+def text_of(msg):
+    c = msg.get("content")
+    if isinstance(c, str):
+        return c
+    return " ".join(b.get("text", "") for b in c or [] if b.get("type") == "text")
+
+
+def branch_to(keep, parent_file):
+    """fork/clone: carry on in a new session file holding `keep`."""
+    global session_file, messages, entries
+    path = new_file(parent_file)
+    with open(path, "a") as f:
+        prev = None
+        for eid, msg in keep:
+            f.write(compact({"type": "message", "id": eid, "parentId": prev, "message": msg}))
+            prev = eid
+    session_file = path
+    entries = list(keep)
+    messages = [m for _, m in keep]
+
+
+def control_command(line):
+    """/pp-<name> <reqId> [json], answered with a hidden custom entry the
+    way extensions/pocketpi-control.ts does it in real pi."""
+    global active_tools
+    head, _, rest = line.partition(" ")
+    req_id, _, raw = rest.strip().partition(" ")
+    try:
+        a = json.loads(raw) if raw.strip() else None
+        if head != "/pp-tools":
+            raise ValueError(f"unknown command {head}")
+        if a and isinstance(a.get("active"), list):
+            unknown = [str(n) for n in a["active"] if n not in TOOLS]
+            if unknown:
+                raise ValueError("unknown tools: " + ", ".join(unknown))
+            active_tools = list(a["active"])
+        data = {"tools": [{"name": t, "description": f"The {t} tool", "exposure": "direct", "source": "builtin",
+                           "path": f"builtin:{t}", "active": t in active_tools} for t in TOOLS],
+                "active": active_tools}
+        reply = {"reqId": req_id, "ok": True, "data": data}
+    except Exception as e:  # the extension reports every failure
+        reply = {"reqId": req_id, "ok": False, "error": str(e)}
+    entry = {"type": "custom", "customType": "pocketpi-control", "data": reply, "id": uuid.uuid4().hex[:8],
+             "parentId": entries[-1][0] if entries else None}
+    # Like pi: never creates a session file on its own.
+    if session_file:
+        save(entry)
+    out({"type": "entry_appended", "entry": entry})
 
 
 def stream_assistant(blocks, stop_reason):
@@ -167,6 +247,9 @@ def state():
         "thinkingLevel": thinking if model["reasoning"] else "off",
         "messageCount": len(messages),
         "model": model,
+        "steeringMode": settings["steeringMode"],
+        "followUpMode": settings["followUpMode"],
+        "autoCompactionEnabled": settings["autoCompaction"],
     }
 
 
@@ -185,7 +268,10 @@ for line in sys.stdin:
     except ValueError:
         continue
     t = cmd.get("type")
-    if t == "prompt":
+    if t == "prompt" and control and cmd.get("message", "").startswith("/pp-"):
+        control_command(cmd["message"])
+        respond(cmd, {"disposition": "handled"})
+    elif t == "prompt":
         if streaming and cmd.get("streamingBehavior") != "steer":
             respond(cmd, ok=False, error="already streaming")
             continue
@@ -204,11 +290,59 @@ for line in sys.stdin:
         thinking = cmd.get("level", thinking)
         respond(cmd, {})
     elif t == "get_commands":
-        respond(cmd, {"commands": [
+        commands = [
             {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt"},
             {"name": "skill:review", "description": "Review the diff", "source": "skill"},
             {"name": "workflows", "source": "extension"},
-        ]})
+        ]
+        if control:
+            commands.append({"name": "pp-tools", "description": "pocketpi: list this chat's tools", "source": "extension"})
+        respond(cmd, {"commands": commands})
+    elif t == "get_fork_messages":
+        respond(cmd, {"messages": [{"entryId": eid, "text": text_of(m)} for eid, m in entries if m.get("role") == "user"]})
+    elif t == "fork":
+        idx = next((i for i, (eid, m) in enumerate(entries) if eid == cmd.get("entryId") and m.get("role") == "user"), None)
+        if idx is None:
+            respond(cmd, ok=False, error="entry not found")
+        else:
+            text = text_of(entries[idx][1])
+            branch_to(entries[:idx], session_file)
+            respond(cmd, {"text": text, "cancelled": False})
+    elif t == "clone":
+        branch_to(entries, session_file)
+        respond(cmd, {"cancelled": False})
+    elif t == "get_entries":
+        recs = [{"type": "message", "id": eid, "parentId": entries[i - 1][0] if i else None, "message": m}
+                for i, (eid, m) in enumerate(entries)]
+        ids = [r["id"] for r in recs]
+        if cmd.get("since") in ids:
+            recs = recs[ids.index(cmd["since"]) + 1:]
+        respond(cmd, {"entries": recs})
+    elif t == "get_tree":
+        tree = []
+        for i in reversed(range(len(entries))):
+            eid, m = entries[i]
+            tree = [{"entry": {"type": "message", "id": eid, "parentId": entries[i - 1][0] if i else None, "message": m},
+                     "children": tree}]
+        respond(cmd, {"tree": tree})
+    elif t == "get_last_assistant_text":
+        last = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+        respond(cmd, {"text": text_of(last) if last else None})
+    elif t == "export_html":
+        path = cmd.get("outputPath") or os.path.join(os.getcwd(), "session.html")
+        with open(path, "w") as f:
+            f.write("<html><body>" + "".join(f"<p>{text_of(m)}</p>" for m in messages) + "</body></html>")
+        respond(cmd, {"path": path})
+    elif t == "bash":
+        output = f"fake: {cmd.get('command', '')}\n"
+        out({"type": "bash_execution_update", "id": cmd.get("id"), "output": output})
+        respond(cmd, {"output": output, "exitCode": 0, "cancelled": False, "truncated": False})
+    elif t in ("set_steering_mode", "set_follow_up_mode"):
+        settings["steeringMode" if t == "set_steering_mode" else "followUpMode"] = cmd.get("mode")
+        respond(cmd, {})
+    elif t in ("set_auto_compaction", "set_auto_retry"):
+        settings["autoCompaction" if t == "set_auto_compaction" else "autoRetry"] = bool(cmd.get("enabled"))
+        respond(cmd, {})
     elif t == "get_available_models":
         respond(cmd, {"models": MODELS + LLAMA})
     elif t == "set_model":

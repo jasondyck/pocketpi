@@ -30,6 +30,9 @@ public struct SessionInfo: Codable, Sendable, Hashable, Identifiable {
     public var messages: Int
     public var live: Bool
     public var streaming: Bool
+    /// For a live chat: the config epoch its pi started with. Below the
+    /// list's `configEpoch`, the chat needs a restart to pick up changes.
+    public var epoch: UInt64? = nil
 
     /// What the chat list shows: the name given with /name or rename, else
     /// the first line of the first prompt.
@@ -43,6 +46,13 @@ public struct SessionInfo: Codable, Sendable, Hashable, Identifiable {
 
 public struct SessionsResponse: Codable, Sendable {
     public var sessions: [SessionInfo]
+    /// Bumped by every change to pi's config files (nil from older servers).
+    public var configEpoch: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case sessions
+        case configEpoch = "config_epoch"
+    }
 }
 
 /// The answer to /api/new and /api/open: `key` addresses the live pi process
