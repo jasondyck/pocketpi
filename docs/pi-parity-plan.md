@@ -237,3 +237,23 @@ Two agents: "web catches up to iOS" and "iOS catches up to web", using the gap l
 - **Whether the `pocketpi-control` reply channel works isn't confirmed yet.** If `entry_appended` doesn't fire for a custom entry made inside a command, fall back to the extension POSTing to pocketpi over HTTP, as `pocketpi-workflows.ts` already does.
 - **OAuth through a pty** is fragile, so it's held back to Wave 4 as a spike.
 - **iOS SwiftUI can't be compiled on Linux**, so view errors only show up in the macOS CI run. Keep views thin.
+
+## 5. Safety wave (S): use existing packages, build only the glue
+
+Below is what four packages do once pocketpi has stripped the TUI away. It comes from reading their source on 2026-11-08 (`npm pack --ignore-scripts`, not executed), so it still needs checking under `pi --mode rpc`:
+
+| Package | Over RPC | With no answer / `cancelled` | Notes |
+|---|---|---|---|
+| `@gotgenes/pi-permission-system` v42 | ✅ When `mode !== "tui"` it switches from its inline TUI prompt to plain `ui.select`/`ui.input` (`permission-prompt-component.ts` `chooseDecisionSurface`). Those are dialogs pocketpi already renders | Denies. Has a `promptTimeoutMs` | Allow/ask/deny rules for tools, bash patterns, paths, external dirs, MCP and skills. Most used of the four (~48K/mo) |
+| `pi-permission-modes` v2.7 | ✅ Uses `ui.select`/`ui.confirm` | Denies when there's no UI | Default/Plan/Build/YOLO modes. Bash runs in bwrap (bwrap, socat and rg are installed here). Network allowlist |
+| `pi-sandbox` v0.8 | 🟡 Bash still runs in bwrap, but access prompts use a widget plus raw key input. When `mode !== "tui"` they return "aborted" | Denies anything outside the static policy | Use as a fixed sandbox only, with `~/.pi/agent/sandbox.json` set up ahead of time. You can't approve exceptions from the phone |
+| `pi-bouncer` v0.7 | ✅ `ui.select`/`ui.input` | — | Smaller. Model-judge mode |
+
+Nothing needs to be built for the policy engine or the bash sandbox. pocketpi supplies the glue:
+
+- **S1:** Install and check `@gotgenes/pi-permission-system`, plus either `pi-sandbox` or `pi-permission-modes` for bwrap, in a scratch agent dir under `--mode rpc`. Record which `extension_ui_request` each one sends, and confirm that cancel and timeout both deny. Pick one combination. Workflow stages already answer `cancelled:true`, so they deny by default. Give them a separate rules file (via `PI_CODING_AGENT_DIR` or project config) with an allowlist suited to unattended worktree runs.
+- **S2:** Push a notification for a **pending dialog** (any `extension_ui_request` confirm, select, input or editor) when no client is watching or the phone is locked. Tapping it deep-links to the chat. Show a countdown when the dialog has a `timeout`. This overlaps with G4.
+- **S3:** Add a safety page to Settings (the `pi_admin` editor) for the chosen packages' config files: global and project rules, sandbox allowlist, mode. Include a clear "Off / Ask / Strict" summary per project.
+- **S4 (optional, the strongest layer, not offered by any package):** run each pi process inside bubblewrap, wrapped where `spawn_pi_with` starts it. The project or worktree is writable, `~/.pi/agent` is mounted, and `~/.ssh` and the rest of `$HOME` are hidden. Turn it on per project in `projects.json`. Workflow runs never get push or `gh` credentials; the server does the push and PR step itself.
+
+It goes after Wave 0, because it needs `pi_admin` and restart-to-apply, and runs alongside Wave 2.
