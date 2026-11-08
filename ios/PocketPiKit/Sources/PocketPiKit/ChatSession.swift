@@ -38,6 +38,11 @@ public final class ChatSession {
 
     /// pi's enabled-model patterns (from its settings, via the server).
     public private(set) var enabledPatterns: [String] = []
+    /// Runs pi started in this chat that are still going, for the
+    /// "work in progress" line above the composer.
+    public private(set) var activeRuns: [RunInfo] = []
+    @ObservationIgnored private var endedRuns: Set<String> = []
+
     /// pi's slash commands, fetched the first time `/` is typed (nil until then).
     public private(set) var commands: [SlashCommand]?
     @ObservationIgnored private var loadingCommands = false
@@ -283,6 +288,23 @@ public final class ChatSession {
             await loadThinkingLevels()
             await refreshStats()
         } catch { problem = error.reportable }
+    }
+
+    /// Fetch the runs pi started here that haven't ended. True while any
+    /// is still going (the screen keeps polling until then).
+    @discardableResult
+    public func refreshRuns() async -> Bool {
+        var active: [RunInfo] = []
+        for id in transcript.startedRuns where !endedRuns.contains(id) {
+            guard let r = try? await client.run(id: id) else {
+                // Keep showing what we had if the server didn't answer.
+                if let old = activeRuns.first(where: { $0.id == id }) { active.append(old) }
+                continue
+            }
+            if r.isActive { active.append(r) } else { endedRuns.insert(id) }
+        }
+        if active != activeRuns { activeRuns = active }
+        return !active.isEmpty
     }
 
     /// What to offer under the composer while it holds a lone `/word`.

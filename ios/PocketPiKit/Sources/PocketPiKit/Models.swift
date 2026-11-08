@@ -145,6 +145,12 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
     /// Still going: running, or paused at an approval.
     public var isActive: Bool { ["pending", "running", "waiting"].contains(status) }
 
+    /// The stage it's on: the one waiting for a person, else the one
+    /// running, else nil (queued, or between stages).
+    public var currentStage: Stage? {
+        stages.first { $0.status == "waiting" } ?? stages.first { $0.status == "running" }
+    }
+
     /// The inputs to start the same run again: the ones a person would set.
     /// The PR's commit is left out so the server picks the PR's current head,
     /// and so is what a sensor or schedule adds for its own bookkeeping.

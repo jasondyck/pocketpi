@@ -400,3 +400,33 @@ import Testing
         #expect(SlashCommand.matches(all, for: "/zzz").isEmpty)
     }
 }
+
+@Suite struct ChatRunsTests {
+    @Test func findsRunsPiStarted() {
+        var t = Transcript()
+        let call: JSONValue = ["role": "assistant", "content": [
+            ["type": "toolCall", "id": "c1", "name": "workflow_run", "arguments": ["id": "clipt-fix-pr"]],
+            ["type": "toolCall", "id": "c2", "name": "bash", "arguments": ["command": "ls"]],
+        ]]
+        t.load(messages: [
+            ["role": "user", "content": [["type": "text", "text": "fix it"]]],
+            call,
+            ["role": "toolResult", "toolCallId": "c1", "toolName": "workflow_run",
+             "content": [["type": "text", "text": "Started run 20261107-175912-dcd."]],
+             "details": ["run_id": "20261107-175912-dcd", "workflow_id": "clipt-fix-pr"]],
+            ["role": "toolResult", "toolCallId": "c2", "toolName": "bash",
+             "content": [["type": "text", "text": "a"]], "details": [:]],
+        ], isStreaming: false)
+        #expect(t.startedRuns == ["20261107-175912-dcd"])
+    }
+
+    @Test func currentStage() throws {
+        func run(_ statuses: [String]) throws -> RunInfo {
+            try #require(RunInfo(["id": "r", "workflow_id": "w", "status": "running", "stages": .array(
+                statuses.enumerated().map { ["id": .string("s\($0.offset)"), "status": .string($0.element)] })]))
+        }
+        #expect(try run(["succeeded", "running", "pending"]).currentStage?.id == "s1")
+        #expect(try run(["running", "waiting"]).currentStage?.id == "s1")
+        #expect(try run(["succeeded", "pending"]).currentStage == nil)
+    }
+}

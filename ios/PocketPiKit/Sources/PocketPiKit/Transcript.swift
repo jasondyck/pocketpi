@@ -74,6 +74,12 @@ public struct Transcript: Sendable, Equatable {
 
     public var isEmpty: Bool { items.isEmpty }
 
+    /// Workflow runs pi started in this chat, oldest first: the workflow_run
+    /// tool's result carries `details.run_id` (ids start with a timestamp).
+    public var startedRuns: [String] {
+        toolResults.values.compactMap { $0.details?["run_id"]?.string }.sorted()
+    }
+
     /// The first user prompt's first line, for a chat that has no name yet.
     public var firstPrompt: String? {
         for item in items {

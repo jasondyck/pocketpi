@@ -40,6 +40,7 @@ private struct ChatScreen: View {
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var renaming = false
     @State private var newName = ""
+    @State private var openedRun: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -111,7 +112,20 @@ private struct ChatScreen: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Composer(session: session)
+            VStack(spacing: 0) {
+                if !session.activeRuns.isEmpty {
+                    ActiveRuns(runs: session.activeRuns) { openedRun = $0 }
+                }
+                Composer(session: session)
+            }
+            .animation(.default, value: session.activeRuns.map(\.id))
+        }
+        .navigationDestination(item: $openedRun) { RunView(runId: $0) }
+        // Workflow runs pi started here: poll while any is going.
+        .task(id: session.transcript.startedRuns) {
+            while !Task.isCancelled, await session.refreshRuns() {
+                try? await Task.sleep(for: .seconds(4))
+            }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             StatusBanner(status: session.status)
@@ -201,6 +215,65 @@ private struct EmptyChat: View {
             Text("\(project) · \(cwd)").font(.footnote.monospaced())
         }
         .padding(.top, 80)
+    }
+}
+
+/// Workflow runs pi started in this chat that are still going: pi's turn
+/// is over, but work goes on. A tap opens the run.
+private struct ActiveRuns: View {
+    let runs: [RunInfo]
+    let open: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(runs) { run in
+                Button { open(run.id) } label: {
+                    HStack(spacing: 10) {
+                        if run.status == "waiting" {
+                            RunStatusIcon(status: "waiting")
+                        } else {
+                            ProgressView().controlSize(.small).tint(Theme.signalText)
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(run.workflowName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text(detail(run)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(LiquidGlass.available ? Color.clear : Theme.surface, in: Capsule())
+                .modifier(FloatingCapsule())
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("active-run")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func detail(_ run: RunInfo) -> String {
+        if run.status == "waiting" { return "Waiting for you" + (run.currentStage.map { " · \($0.name)" } ?? "") }
+        if let s = run.currentStage {
+            let n = (run.stages.firstIndex { $0.id == s.id } ?? 0) + 1
+            return "\(s.name) · step \(n) of \(run.stages.count)"
+        }
+        return run.status == "pending" ? "Queued" : "Running"
+    }
+}
+
+private struct FloatingCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if LiquidGlass.available {
+            content.glass(in: Capsule(), interactive: true)
+        } else {
+            content
+        }
     }
 }
 
