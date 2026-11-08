@@ -126,11 +126,10 @@ final class AppModel {
     var mode: AppMode = AppMode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .work {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
     }
-    /// Each tab has a chat filling the screen (iPhone): the Work/Chat
-    /// switch steps aside while the showing tab does.
-    var workChatOpen = false
-    var chatTabOpen = false
-    var chatOpen: Bool { mode == .work ? workChatOpen : chatTabOpen }
+    /// Chat screens on screen (each counts itself in and out): while one
+    /// fills an iPhone, the Work/Chat switch steps aside.
+    var chatScreens = 0
+    var chatOpen: Bool { chatScreens > 0 }
     /// Where each tab was left, for when it's shown again.
     var workPlace = WorkPlace()
     var chatPath: [ChatRoute] = []

@@ -85,9 +85,7 @@ struct ChatTab: View {
         } message: {
             Text(model.problem ?? "")
         }
-        .onAppear { model.chatTabOpen = !model.chatPath.isEmpty }
         .onChange(of: model.chatPath) { _, p in
-            model.chatTabOpen = !p.isEmpty
             // Back on the list: a chat that was just started now has a row.
             if p.isEmpty { Task { await model.refresh() } }
         }

@@ -126,6 +126,8 @@ final class LaunchTests: XCTestCase {
         XCTAssertFalse(app.segmentedControls.buttons["Chat"].exists)
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
+        // Local is the sheet's last section: it may start below the fold.
+        for _ in 0..<2 where !app.buttons["local-tiny-chat"].waitForExistence(timeout: 2) { app.swipeUp() }
         XCTAssertTrue(app.buttons["local-tiny-chat"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["local-other-chat"].exists)
         keep(app, "local-models")

@@ -164,7 +164,11 @@ private struct ChatScreen: View {
             await session.start()
             await session.prepare() // a new chat: pi now, so the model picker works
         }
-        .onDisappear { session.leave() }
+        .onDisappear {
+            session.leave()
+            model.chatScreens = max(0, model.chatScreens - 1)
+        }
+        .onAppear { model.chatScreens += 1 }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await session.start() } }
         }
@@ -449,9 +453,6 @@ private struct ModelSheet: View {
                         }
                     }
                 }
-                if let router = session.llama, router.available {
-                    LocalModels(session: session, router: router) { dismiss() }
-                }
                 if reasoning {
                     Section {
                         NavigationLink {
@@ -469,6 +470,9 @@ private struct ModelSheet: View {
                                 .navigationBarTitleDisplayMode(.inline)
                         }
                     }
+                }
+                if let router = session.llama, router.available {
+                    LocalModels(session: session, router: router) { dismiss() }
                 }
             }
             .navigationTitle("Select model")

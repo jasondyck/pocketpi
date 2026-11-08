@@ -138,9 +138,7 @@ struct ChatListView: View {
         // iPhone: backing out of a chat closes it, so it doesn't reopen.
         .onChange(of: column) { _, c in
             if c != .detail { target = nil }
-            model.workChatOpen = c == .detail && target != nil
         }
-        .onChange(of: target) { _, t in model.workChatOpen = column == .detail && t != nil }
         .onChange(of: place) { _, p in model.workPlace = p }
     }
 }
