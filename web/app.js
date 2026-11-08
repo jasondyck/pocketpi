@@ -675,7 +675,7 @@ function renderQueue(steering = [], followUp = []) {
 
 function onEvent(ev) {
   switch (ev.type) {
-    case "pocketpi_hello": resetExtUI(ev.ui); return loadSnapshot();
+    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
     case "pocketpi_session": loadSnapshot(); break;
     case "pocketpi_exit": {
@@ -722,7 +722,7 @@ async function afterRun() {
 function setPath(p) {
   S.path = p;
   const url = new URL(location.href);
-  url.searchParams.delete("w"); url.searchParams.delete("r");
+  url.searchParams.delete("w"); url.searchParams.delete("r"); url.searchParams.delete("m");
   if (p) url.searchParams.set("s", p); else url.searchParams.delete("s");
   history.replaceState(null, "", url);
   if (p) localStorage.setItem("pp.last", p);
@@ -1147,6 +1147,7 @@ async function openChatSheet() {
       closeSheet(); setStreaming(true); setWorking("Compacting context");
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
+    window.ppManage?.sheetEntry(b);
     b.append(opt(ICON.power, "Stop pi process", "Frees memory; reopening the chat restarts it", async () => {
       closeSheet(); try { await api(`/api/s/${S.key}/close`, {}); toast("Stopped"); } catch (e) { toast(e.message, true); }
     }, " danger"));
@@ -1183,6 +1184,7 @@ function openNewChatSettings() {
     b.append(el("div", "sheet-title", "New chat"), el("div", "sheet-sub", "Model and thinking can be changed after the chat starts. pi's defaults from settings.json apply."));
     b.append(opt(ICON.folder, "Project", esc(projectName(newChatCwd())), () => openProjectPicker()));
     notificationOption(b);
+    window.ppManage?.sheetEntry(b);
   });
 }
 function renameChat() {
@@ -1365,6 +1367,7 @@ $("project-menu").onclick = () => {
     b.append(opt(ICON.hide, sp.pinned ? "Unpin and hide" : "Hide project", "Chats stay on disk; adding the folder again brings it back", async () => {
       await api("/api/projects/hide", { path: sp.path }); closeSheet(); selectProject(""); loadProjects();
     }, " danger"));
+    window.ppManage?.sheetEntry(b);
   });
 };
 function renameProject(sp) {
@@ -1567,6 +1570,7 @@ function showView(v) {
   if (!chat) { $("empty").hidden = true; $("working").hidden = true; $("jump").hidden = true; banner(null); }
   else { $("messages").hidden = false; updateEmpty(); }
   $("model-chip").hidden = !chat;
+  window.ppManage?.viewChanged(v);
 }
 
 async function loadWorkflows() {
@@ -1607,7 +1611,7 @@ function newWorkflowChat(text) {
 
 function setUrl(key, val) {
   const url = new URL(location.href);
-  ["s", "w", "r"].forEach((k) => url.searchParams.delete(k));
+  ["s", "w", "r", "m"].forEach((k) => url.searchParams.delete(k));
   if (val) url.searchParams.set(key, val);
   history.replaceState(null, "", url);
 }
@@ -1870,6 +1874,7 @@ function connectRuns() {
       const r = ev.result || "";
       toast(r.startsWith("applied") ? "Workflow improved" : r.startsWith("proposed") ? "Improvement suggested" : r.startsWith("failed") ? `Couldn't reflect: ${r.slice(8)}` : "No improvements found", r.startsWith("failed"));
       if (S.view === "workflow" && S.wf?.workflow.id === ev.workflow_id) openWorkflow(ev.workflow_id);
+    } else if (ev.type === "config_changed") { window.ppManage?.configChanged(ev);
     } else if (ev.type === "workflows_changed") {
       loadWorkflows();
       if (S.view === "workflow" && S.wf) openWorkflow(S.wf.workflow.id);
@@ -2187,6 +2192,7 @@ setInterval(() => document.visibilityState === "visible" && checkBuild(), 4000);
   if (q.get("r")) openRun(q.get("r"));
   else if (q.get("w")) openWorkflow(q.get("w"));
   else if (q.get("s")) await openSession(q.get("s"));
+  else if (q.has("m")) window.ppManage?.open(q.get("m"));
   else newChat();
   autosize(); updateSend();
 })();
