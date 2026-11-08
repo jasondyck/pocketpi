@@ -328,7 +328,7 @@ struct WriteBody {
 /// Checks a write and does it. Separate from the route for the tests.
 pub fn write_slot(slot: &Slot, path: &Path, content: Option<&str>, delete: bool) -> Result<(), (StatusCode, String)> {
     if !slot.editable {
-        return Err(crate::err(StatusCode::FORBIDDEN, format!("{} is read only here", slot.name)));
+        return Err(crate::err(StatusCode::CONFLICT, format!("{} is read only here", slot.name)));
     }
     if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()) {
         return Err(crate::err(StatusCode::CONFLICT, format!("{} is a folder", path.display())));
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(write_slot(agents, &p, Some(&big), false).unwrap_err().0, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(write_slot(agents, &p, Some("a\0b"), false).unwrap_err().0, StatusCode::BAD_REQUEST);
         let claude = find_slot(Scope::Project, "CLAUDE.md").unwrap();
-        assert_eq!(write_slot(claude, &d.join("CLAUDE.md"), Some("x"), false).unwrap_err().0, StatusCode::FORBIDDEN);
+        assert_eq!(write_slot(claude, &d.join("CLAUDE.md"), Some("x"), false).unwrap_err().0, StatusCode::CONFLICT);
         assert!(!d.join("CLAUDE.md").exists());
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "three");
         // Project SYSTEM.md goes in .pi/, which is made.

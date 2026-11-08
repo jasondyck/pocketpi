@@ -36,7 +36,7 @@ struct CwdQuery {
 fn raw_file(name: &str) -> crate::AppResult<pi_admin::File> {
     match pi_admin::File::parse(name) {
         Some(f) if f.raw_editable() => Ok(f),
-        Some(_) => Err(crate::err(StatusCode::FORBIDDEN, format!("{name} can't be edited as text"))),
+        Some(_) => Err(crate::err(StatusCode::CONFLICT, format!("{name} can't be edited as text"))),
         None => Err(crate::err(StatusCode::NOT_FOUND, format!("unknown config file: {name}"))),
     }
 }
