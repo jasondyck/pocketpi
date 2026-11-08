@@ -371,6 +371,116 @@ It goes after Wave 0, because it needs `pi_admin` and restart-to-apply, and runs
 - **Drop `pi-sandbox`:** nothing in it can be approved from the phone, and its defaults allow reads of `~/.ssh` and writes outside the project.
 - **Workflow stages:** dialogs are auto-cancelled, so every "ask" becomes a deny. Stages need their own gotgenes config (allow the usual build commands, deny the dangerous list), loaded through a stage-specific agent dir or a project config. S3 builds the UI for this.
 
+### S2 / S3 and the stage policy (built on `pp/safety`)
+
+**How gotgenes finds its config** (read from its v42 source): the global
+policy is `getAgentDir()/extensions/pi-permission-system/config.json`
+(`getAgentDir()` is `$PI_CODING_AGENT_DIR` or `~/.pi/agent`); no env var or
+flag names the file itself. On top of it, later wins: the project's
+`<cwd>/.pi/extensions/pi-permission-system/config.json` (only when pi trusts
+the project), then per-agent frontmatter in `<agent dir>/agents/<name>.md` and
+`<cwd>/.pi/agents/<name>.md`, picked by an `<active_agent name="…">` tag in the
+system prompt. Rule maps shallow-merge (a key in both keeps the global's
+position), so the upper layers can only patch the global policy, not replace
+it.
+
+**Mechanism chosen: an overlay agent dir for stages** (`src/safety.rs`). When
+`~/.config/pocketpi/safety/stage-policy.json` exists, a stage's pi is started
+with `PI_CODING_AGENT_DIR=~/.pi/agent.pocketpi-stage`, a folder next to the
+real agent dir in which every entry is a symlink to the real one, except
+`extensions/` (a real folder of symlinks) whose `pi-permission-system/` holds
+`config.json` → the stage policy and its own `logs/`. It is rebuilt (cheaply,
+under a lock) at each stage start, so new packages, extensions and logins
+show up. Why this one:
+
+- It is the only way to give stages an **independent** policy. A project or
+  agent layer merges over the chat policy, so an "ask" there stays an ask
+  (= deny in a stage) unless every key is overridden; the project layer also
+  needs project trust for each worktree and would be committed into the
+  worktree; the agent layer needs a file in the person's `agents/` folder
+  (which subagent packages list) and a system-prompt tag, and its YAML
+  frontmatter can't hold quoted patterns reliably.
+- Stages still see the person's auth, settings, models, packages, trust and
+  MCP config: pi writes through the symlinks (`writeFileSync` follows them;
+  checked for `auth.json`/`settings.json`). pi's own files that don't exist
+  yet (`auth.json`, `trust.json`, …) are linked dangling, so pi creates them
+  in the real dir.
+- Being a sibling of the real dir keeps relative paths in `settings.json`
+  (`packages`, `extensions`) resolving to the same places (pi resolves them
+  lexically from the agent dir).
+- Session files go to the real sessions folder (`--session-dir` with pi's
+  per-cwd folder, unless `PI_CODING_AGENT_SESSION_DIR` is set), so stage
+  chats are listed and reopened like before.
+- Without the stage policy file nothing changes (stages use the chat policy
+  and asks are denied).
+
+Limits: `proper-lockfile` locks (`auth.json.lock`) are per path, so a chat and
+a stage refreshing the same OAuth token at the same moment aren't serialised.
+The policy is a speed bump, not a sandbox: a stage can still reach git
+credentials (S4 bubblewrap is the real boundary).
+
+Checked with real pi 1.5.0 and gotgenes 42 in a scratch `HOME` (no model
+needed): a workflow stage logged `config.loaded {yoloMode: true, debugLog: true}`
+from the stage policy into the overlay's `logs/`, a chat pi loaded the chat
+policy (`yoloMode: false`) from the real dir, neither logged a validation
+warning, and the stage's session file landed in the real sessions folder.
+
+**Proposed policies** (`extensions/safety/`, embedded in the server, written
+only when the person taps "Install with recommended policy" / "Use the
+recommended … policy"; `node scripts/check-safety-policies.mjs <schema>`
+checks them against the package's `schemas/permissions.schema.json`):
+
+- `chat-policy.json`: allow by default; `bash` asks for `rm`, `rmdir`,
+  `shred`, `dd`, forced pushes (`-f`, `--force*`, `+ref`), `git reset --hard`,
+  `git clean`, `git branch -D`, `git checkout --`, `git stash drop/clear`,
+  `npm/cargo publish`, and a bare `sh`/`bash`/`zsh` (what `curl … | sh` runs;
+  gotgenes matches each command of a pipe separately); denies `sudo`, `doas`,
+  `su`, `pkexec`, `mkfs`. `path` hard-denies `~/.ssh`, `~/.aws`, `~/.gnupg`,
+  `~/.config/gh/hosts.yml`, `~/.pi/agent/auth.json`,
+  `~/.config/pocketpi/apns/*`, `*.env` and `*.env.*` (but allows
+  `*.env.example`). `external_directory` asks, except `/tmp`,
+  `~/.cargo/registry`, `~/.cargo/git`, `~/.rustup`, `~/.npm`.
+  `promptTimeoutMs` 10 min (`forwardingTimeoutMs` 11 min, it must be
+  larger). gotgenes already floors `bash -c`, `eval`, `sudo`, `env cmd`,
+  `xargs`, `find -exec` to "ask".
+- `stage-policy.json`: the same hard denies; `yoloMode: true` so nothing
+  asks (gotgenes' wrapper floors would otherwise deny `env X=1 cmd`,
+  `xargs`, `find -exec` in a stage), with explicit denies for `git push`
+  (also inside `sh -c`/`bash -c`/`eval`), `gh pr create/merge`, `gh release`,
+  `gh repo`, publishing, piping into a shell, root, `mkfs`; reads outside the
+  worktree are allowed, writes outside it are denied except `/tmp` and the
+  package caches.
+
+**S2 (pending dialogs)**, `src/dialogs.rs`: a chat's (not a stage's) confirm /
+select / input / editor dialog is remembered per pi; if no client has the
+chat's event stream open it notifies at once (web push + APNs, deep link
+`/?s=<session file>`, tag `dialog-<key>`), otherwise after 20 s unanswered.
+Once per dialog id; forgotten when a client answers, when its own `timeout`
+passes, at `agent_settled`, or when the pi exits; a dialog that closes itself
+within 10 s isn't notified. A gotgenes prompt reads as "Permission Required ·
+<project>" / "pi wants to run: rm -rf junk" (or read/write/edit a path, "(outside
+the project)"). The same notice goes on the runs stream as
+`{"type":"dialog_pending", key, id, title, body, url}`, and
+`pocketpi_hello` carries the open dialogs as `dialogs`, which both clients
+show, so the chat a notification opens has the question up. Both clients now
+show a multi-line dialog title as a heading plus the detail lines (gotgenes
+puts everything in the title).
+
+**S3 (Settings › Safety, order 50)**: installed or not (settings `packages`),
+"Install with recommended policy" (the pinned `pi install` job, then the
+chat policy through `pi_admin`), the chat policy's `bash`, `path` and
+`external_directory` lists (and the directional ones when a file uses them),
+each project's Off / Ask / Strict, and the stage policy. pi_admin knows two
+more files: `permissions` (global and `?cwd=`) and `stage-policy`. Their rule
+maps come back as ordered `rules` and go in as `[[pattern, action], …]`
+(serde_json now keeps key order everywhere); bad actions are refused; writes
+don't bump the config epoch because gotgenes rereads its policy when the file
+changes. Project modes write only their own keys: **Off** = `yoloMode: true`
+(asks become allows, explicit denies still deny), **Strict** = `bash."*"`,
+`write`, `edit` set to ask (the global's named allows and denies still win
+for their patterns), **Ask** = neither. Each project row says when pi doesn't
+trust the project, since gotgenes then ignores its file.
+
 ## 7. Settings hub contract
 
 W2-shell built an empty Settings hub so the Wave 2 agents can each add pages
