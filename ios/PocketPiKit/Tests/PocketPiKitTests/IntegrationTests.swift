@@ -251,6 +251,11 @@ struct IntegrationTests {
         }
         #expect(named?.displayTitle == "Sourdough")
         #expect(try await !client.sessions().contains { $0.path == s.path })
+        // Archived: in the Chat tab's archive, not Work's.
+        try await client.archiveSession(path: s.path!)
+        #expect(try await client.chats(archived: true).sessions.contains { $0.path == s.path })
+        #expect(try await !client.chats().sessions.contains { $0.path == s.path })
+        #expect(try await !client.archivedSessions().contains { $0.path == s.path })
     }
 
     @Test func deletesOnlyArchivedChats() async throws {
