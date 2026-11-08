@@ -35,7 +35,7 @@ Check the key against Apple without a phone:
 
 | Path | What |
 |---|---|
-| `PocketPiKit/` | SwiftPM package with everything except views: `JSONValue`, models, `PocketPiClient` (HTTP + SSE), `Transcript` (pi events → chat, a port of `web/app.js`'s `onEvent`), `ChatSession` (connect, reconnect, snapshot, send, steer, stop, dialogs), `MarkdownBlock`. Builds and tests on Linux. |
+| `PocketPiKit/` | SwiftPM package with everything except views: `JSONValue`, models, `PocketPiClient` (HTTP + SSE), `Transcript` (pi events → chat, a port of `web/app.js`'s `onEvent`), `ChatSession` (connect, reconnect, snapshot, send, steer, follow-up, `!cmd` shell commands, stop retrying, stop, dialogs), `MarkdownBlock`. Builds and tests on Linux. |
 | `PocketPi/` | The SwiftUI app. `project.yml` is the XcodeGen spec; the `.xcodeproj` is generated, never committed. |
 | `fake-pi.py` | Stands in for `pi --mode rpc` (echo replies, a tool call, an extension dialog, abort) so the client is tested against a real pocketpi with no model. |
 | `test-linux.sh` | Builds pocketpi, starts a scratch instance with fake-pi, runs the Kit's tests in the `swift:6.4` container. |

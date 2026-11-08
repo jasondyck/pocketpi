@@ -382,11 +382,7 @@ function renderOther(m) {
     d.innerHTML = `<summary>${m.role === "compactionSummary" ? `Earlier conversation summarized${m.tokensBefore ? ` · ${fmtTokens(m.tokensBefore)} tokens` : ""}` : "Branch summary"}</summary><div class="md">${md(m.summary || "")}</div>`;
     return d;
   }
-  if (m.role === "bashExecution") {
-    const card = makeCard({ name: "bash", arguments: { command: m.command } });
-    card.setResult({ content: [{ type: "text", text: m.output || "" }] }, m.exitCode !== 0 && m.exitCode != null);
-    const w = el("div", "msg"); placeBlock(w, card.el); return w;
-  }
+  if (m.role === "bashExecution") return renderBash(m).wrap;
   if (m.role === "custom" && m.display) { const w = el("div", "msg asst"); w.append(el("div", "md", md(textOf(m.content)))); return w; }
   return null;
 }
@@ -403,6 +399,7 @@ function renderAll() {
     else if (m.role === "toolResult") applyToolResult(m);
     else { const n = renderOther(m); if (n) box.append(n); }
   }
+  if (S.bash) box.append(S.bash.wrap); // still running: not in pi's messages yet
   collapseTurns();
   updateEmpty();
   scrollBottom(true);
@@ -583,6 +580,7 @@ function setStreaming(on) {
   document.body.classList.toggle("streaming", on);
   $("working").hidden = !on;
   if (on) $("working-text").textContent = "Working";
+  else showRetry(null);
   updateSend();
 }
 function renderQueue(steering = [], followUp = []) {
@@ -603,7 +601,7 @@ function onEvent(ev) {
       if (tail) banner(`pi stopped.<pre>${esc(tail)}</pre>`, true);
       break;
     }
-    case "agent_start": clearSuggestions(); setStreaming(true); break;
+    case "agent_start": clearSuggestions(); setStreaming(true); settleForeignBash(); break;
     case "agent_settled": setStreaming(false); afterRun(); break;
     case "message_start": onMessageStart(ev.message); break;
     case "message_update": onMessageUpdate(ev); break;
@@ -617,11 +615,12 @@ function onEvent(ev) {
       if (ev.result) { $("messages").append(el("div", "note", `Context compacted · ${fmtTokens(ev.result.tokensBefore)} → ${fmtTokens(ev.result.estimatedTokensAfter)}`)); refreshStats(); }
       else if (ev.errorMessage) toast("Compaction failed: " + ev.errorMessage, true);
       break;
-    case "auto_retry_start": setWorking(`Retrying ${ev.attempt}/${ev.maxAttempts} · ${ev.errorMessage || ""}`); break;
-    case "auto_retry_end": if (!ev.success) $("messages").append(el("div", "msg", `<div class="errbox">${esc(ev.finalError || "Retries failed")}</div>`)); break;
+    case "auto_retry_start": setWorking(`Retrying ${ev.attempt}/${ev.maxAttempts} · ${ev.errorMessage || ""}`); showRetry(ev); break;
+    case "auto_retry_end": showRetry(null); if (!ev.success) $("messages").append(el("div", "msg", `<div class="errbox">${esc(ev.finalError || "Retries failed")}</div>`)); break;
     case "thinking_level_changed": if (S.state) S.state.thinkingLevel = ev.level; updateChips(); break;
     case "session_info_changed": if (S.state) S.state.sessionName = ev.name; updateHeader(); break;
     case "extension_ui_request": extensionUI(ev); break;
+    case "bash_execution_update": onBashUpdate(ev); break;
     case "extension_error": toast(`Extension error: ${ev.error}`, true); break;
   }
 }
@@ -740,35 +739,38 @@ function updateSend() {
   const has = input.value.trim() || S.attachments.length;
   const btn = $("send");
   btn.classList.toggle("stop", S.streaming && !has);
-  btn.disabled = !has && !S.streaming;
+  btn.disabled = (!has && !S.streaming) || (has && !canSendNow());
   btn.setAttribute("aria-label", S.streaming && !has ? "Stop" : S.streaming ? "Steer" : "Send");
+  updateComposerHint();
   $("use-ghost").hidden = !(S.ghost && !input.value && !S.streaming);
   input.placeholder = S.ghost && !S.streaming ? S.ghost : S.streaming ? "Steer pi while it works…" : S.key || S.path ? "Reply to pi" : `Message pi in ${projectName(newChatCwd())}`;
 }
 input.addEventListener("input", () => { autosize(); updateSend(); updateSlash(); });
 input.addEventListener("keydown", (e) => {
+  // Alt+Enter queues after the turn, as in pi's terminal UI.
+  if (e.key === "Enter" && e.altKey && !e.isComposing) { e.preventDefault(); send("followUp"); return; }
   if (e.key === "Enter" && !e.shiftKey && fine && !e.isComposing) { e.preventDefault(); send(); }
   if (e.key === "Escape" && S.streaming) stop();
   if (e.key === "Tab" && !e.shiftKey && S.ghost && !input.value) { e.preventDefault(); acceptGhost(); }
 });
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
 
-async function send() {
+// While pi works a message steers it (the default); "followUp" waits for
+// the whole turn to end. `!cmd` / `!!cmd` run a shell command instead.
+async function send(delivery = "steer") {
   const text = input.value.trim();
   const imgs = S.attachments;
   if (!text && !imgs.length) { if (S.streaming) stop(); return; }
+  const sh = !imgs.length && shellIntent(text);
+  if (sh) return runShell(sh);
   $("send").disabled = true;
   clearSuggestions();
   try {
-    if (!S.key && S.path) await reopen();
-    if (!S.key) {
-      const r = await api("/api/new", { cwd: newChatCwd() });
-      S.key = r.key; S.cwd = r.cwd; S.msgs = [];
-      await connect();
-    }
-    const c = { type: "prompt", message: text };
+    await ensureSession();
+    const queue = S.streaming && delivery === "followUp";
+    const c = { type: queue ? "follow_up" : "prompt", message: text };
     if (imgs.length) c.images = imgs.map((a) => ({ type: "image", data: a.data, mimeType: a.mime }));
-    if (S.streaming) c.streamingBehavior = "steer";
+    if (S.streaming && !queue) c.streamingBehavior = "steer";
     input.value = ""; S.attachments = []; renderAttachments(); autosize(); $("slash").hidden = true;
     S.stick = true;
     const r = await cmd(c);
@@ -778,6 +780,153 @@ async function send() {
     autosize(); toast(e.message, true);
   } finally { updateSend(); }
 }
+async function ensureSession() {
+  if (!S.key && S.path) await reopen();
+  if (!S.key) {
+    const r = await api("/api/new", { cwd: newChatCwd() });
+    S.key = r.key; S.cwd = r.cwd; S.msgs = [];
+    await connect();
+  }
+}
+
+// ---------------------------------------------------------------- composer: shell commands, queue menu, retry
+// `!cmd` runs through pi (RPC bash) and its output goes to the model with
+// the next prompt; `!!cmd` stays out of the context. Only while pi is idle.
+function shellIntent(text) {
+  const m = /^(!!?)\s*([\s\S]*\S)\s*$/.exec(text.trim());
+  return m ? { command: m[2], exclude: m[1] === "!!" } : null;
+}
+function canSendNow() {
+  if (S.bash) return false;
+  return !(S.streaming && shellIntent(input.value));
+}
+function updateComposerHint() {
+  const h = $("composer-hint"); if (!h) return;
+  const sh = !S.attachments.length && shellIntent(input.value);
+  const text = S.bash ? (input.value.trim() ? "A shell command is running" : "")
+    : !sh ? "" : S.streaming ? "Shell commands run once pi has finished"
+    : sh.exclude ? "Shell · output kept out of pi's context" : "Shell · output goes to pi with your next message";
+  h.textContent = text; h.hidden = !text;
+}
+// One shell card: from a bashExecution message, or live. The same look
+// either way, so a reload doesn't change it.
+function renderBash(run) {
+  const card = makeCard({ name: "bash", arguments: { command: run.command } });
+  const wrap = el("div", "msg shell"); placeBlock(wrap, card.el);
+  const q = (sel) => card.el.querySelector(sel);
+  const b = { wrap, card, run: { output: "", ...run } };
+  card.renderBody = () => {
+    const body = q(".tbody"); body.innerHTML = "";
+    const r = b.run;
+    const sec = (label, node) => { const s = el("div", "tsec"); s.append(el("div", "tlabel", esc(label)), node); body.append(s); };
+    sec("Command", truncBlock(r.command || "", 4000));
+    if (r.output || !r.running) sec(r.running ? "Output so far" : "Output", truncBlock(r.output || "(no output)", 6000, true));
+    if (r.truncated) body.append(el("div", "tsec trim-note", `Output truncated${r.fullOutputPath ? ` · full output in ${esc(r.fullOutputPath)}` : ""}`));
+    if (r.running) {
+      const stopBtn = el("button", "shell-stop", "Stop");
+      stopBtn.type = "button";
+      stopBtn.onclick = (e) => { e.preventDefault(); stopBtn.disabled = true; cmd({ type: "abort_bash" }).catch((er) => toast(er.message, true)); };
+      const s = el("div", "tsec"); s.append(stopBtn); body.append(s);
+    }
+  };
+  b.update = () => {
+    const r = b.run;
+    q(".tname").textContent = r.exclude ? "!!" : "!";
+    q(".targ").textContent = r.command || "shell command";
+    const err = !r.running && !r.cancelled && r.exitCode != null && r.exitCode !== 0;
+    card.setState(r.running ? "run" : err ? "err" : "ok");
+    q(".tmeta").textContent = [r.cancelled ? "cancelled" : err ? `exit ${r.exitCode}` : "", r.exclude ? "not in context" : ""].filter(Boolean).join(" · ");
+    if (r.running) card.el.open = true;
+    if (card.el.open) card.renderBody();
+  };
+  b.run.exclude = !!(run.exclude ?? run.excludeFromContext);
+  b.update();
+  return b;
+}
+// pi's final word (the bash response or the message): its output replaces
+// what streamed, since that's what pi keeps.
+function finishBash(b, r) {
+  Object.assign(b.run, { output: r.output ?? b.run.output, exitCode: r.exitCode ?? null, cancelled: !!r.cancelled, truncated: !!r.truncated, fullOutputPath: r.fullOutputPath || null, running: false });
+  b.update();
+}
+async function runShell({ command, exclude }) {
+  if (S.streaming) { toast("Shell commands run once pi has finished", true); return; }
+  if (S.bash) return;
+  clearSuggestions();
+  input.value = ""; autosize(); $("slash").hidden = true;
+  let b;
+  try {
+    await ensureSession();
+    b = renderBash({ command, exclude, running: true });
+    S.bash = b; S.stick = true;
+    $("messages").append(b.wrap); updateEmpty(); scrollBottom(true); updateSend();
+    const r = await cmd({ type: "bash", command, excludeFromContext: exclude });
+    finishBash(b, r || {});
+    S.msgs.push({ role: "bashExecution", command, ...r, ...(exclude ? { excludeFromContext: true } : {}) });
+  } catch (e) {
+    if (b) { b.run.output += (b.run.output && !b.run.output.endsWith("\n") ? "\n" : "") + e.message; finishBash(b, { exitCode: -1 }); }
+    else { if (!input.value) input.value = (exclude ? "!!" : "!") + command; autosize(); }
+    toast(e.message, true);
+  } finally {
+    if (S.bash === b) S.bash = null;
+    updateSend(); scrollBottom();
+  }
+}
+function onBashUpdate(ev) {
+  // Another client's command: a card of its own, settled when pi next starts.
+  if (!S.bash) { S.bash = renderBash({ command: "", running: true }); S.bash.foreign = true; $("messages").append(S.bash.wrap); updateEmpty(); }
+  S.bash.run.output += ev.delta ?? ev.output ?? "";
+  S.bash.update(); scrollBottom();
+}
+function settleForeignBash() {
+  if (S.bash?.foreign) { finishBash(S.bash, {}); S.bash = null; }
+}
+
+// Long-press (touch) or right-click on send while pi works: steer now, or
+// queue the message until the whole turn ends.
+const sendMenu = el("div", "send-menu"); sendMenu.hidden = true; sendMenu.id = "send-menu";
+sendMenu.innerHTML = `<button type="button" data-d="steer"><b>Steer now</b><span>after the current tool calls</span></button><button type="button" data-d="followUp"><b>Queue after turn</b><span>once pi has finished</span></button>`;
+$("composer").append(sendMenu);
+sendMenu.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; e.preventDefault(); sendMenu.hidden = true; send(b.dataset.d); });
+document.addEventListener("pointerdown", (e) => { if (!sendMenu.hidden && !sendMenu.contains(e.target)) sendMenu.hidden = true; }, true);
+function openSendMenu() {
+  const has = input.value.trim() || S.attachments.length;
+  if (!S.streaming || !has || (!S.attachments.length && shellIntent(input.value))) return false;
+  sendMenu.hidden = false; return true;
+}
+(function sendLongPress() {
+  const btn = $("send"); let timer = null, opened = false;
+  btn.addEventListener("contextmenu", (e) => { if (openSendMenu()) e.preventDefault(); });
+  btn.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    opened = false; clearTimeout(timer);
+    timer = setTimeout(() => { opened = openSendMenu(); if (opened && navigator.vibrate) navigator.vibrate(10); }, 450);
+  });
+  const cancel = () => clearTimeout(timer);
+  btn.addEventListener("pointerup", cancel); btn.addEventListener("pointerleave", cancel); btn.addEventListener("pointercancel", cancel);
+  // The tap that ends a long press opens the menu instead of sending.
+  btn.addEventListener("click", (e) => { if (opened) { e.preventDefault(); e.stopPropagation(); opened = false; } }, true);
+})();
+
+// pi waiting to try the model again: a countdown and "Stop retrying".
+let retryTimer = null;
+function showRetry(ev) {
+  const box = $("retry"); if (!box) return;
+  clearInterval(retryTimer); retryTimer = null;
+  if (!ev) { box.hidden = true; box.innerHTML = ""; return; }
+  const due = Date.now() + (ev.delayMs || 0);
+  box.innerHTML = `<div class="retry-text"><b></b><span>${esc(ev.errorMessage || "")}</span></div><button type="button">Stop retrying</button>`;
+  const line = box.querySelector("b");
+  const tick = () => {
+    const n = Math.max(0, Math.ceil((due - Date.now()) / 1000));
+    line.textContent = `${n > 0 ? `Retrying in ${n}s` : "Retrying"} · attempt ${ev.attempt || 1}${ev.maxAttempts ? ` of ${ev.maxAttempts}` : ""}`;
+    if (!n) { clearInterval(retryTimer); retryTimer = null; }
+  };
+  tick(); retryTimer = setInterval(tick, 250);
+  box.querySelector("button").onclick = (e) => { e.target.disabled = true; cmd({ type: "abort_retry" }).catch((er) => toast(er.message, true)); };
+  box.hidden = false;
+}
+
 async function stop() {
   try {
     const q = await cmd({ type: "clear_queue" });
