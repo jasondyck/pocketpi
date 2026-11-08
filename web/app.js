@@ -389,7 +389,8 @@ function renderUser(m) {
 // one before it the closest earlier one with its text, and so on. Repeated
 // prompts ("go on") get their own entries, and what only one side has
 // (compacted history; image-only messages) is skipped. Same as PocketPiKit's
-// ForkMap.
+// ForkMap. After moving around the tree (tree.js) the fork points are first
+// narrowed to the current branch, so a prompt repeated on another isn't picked.
 function forkText(content) {
   if (typeof content === "string") return content;
   return (content || []).filter((p) => p.type === "text").map((p) => p.text).join("");
@@ -425,7 +426,7 @@ async function forkFrom(m) {
   if (n < 0) return;
   try {
     const shown = users.map((x) => forkText(x.content));
-    const points = (await cmd({ type: "get_fork_messages" })).messages || [];
+    const points = window.ppTree ? await ppTree.activeForkPoints() : (await cmd({ type: "get_fork_messages" })).messages || [];
     const entryId = forkEntryIds(shown, points)[n];
     if (!entryId) return toast("pi can't fork from this message.", true);
     const r = await cmd({ type: "fork", entryId });
@@ -1134,6 +1135,7 @@ async function openChatSheet() {
     b.append(el("div", "sheet-section", "Chat"));
     b.append(opt(ICON.rename, "Rename", null, () => renameChat()));
     if (S.path && !S.streaming) b.append(opt(ICON.clone, "Clone chat", "Copy this chat and carry on in the copy", () => cloneChat()));
+    window.ppTree?.sheetEntry(b);
     const sugOn = suggestionsOn();
     const sug = opt(ICON.spark, "Suggested replies", sugOn ? "On · quick answers when pi asks you something" : "Off", () => {
       localStorage.setItem("pp.suggest", sugOn ? "0" : "1"); closeSheet();

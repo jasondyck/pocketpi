@@ -104,7 +104,9 @@ const GLOBAL_SETTERS: &[&str] = &["set_auto_compaction", "set_auto_retry", "set_
 
 /// `pocketpi-control` commands a client may run through `/api/s/{key}/control`
 /// (each is the extension's `/pp-<name>`).
-const CONTROL_COMMANDS: &[&str] = &["tools"];
+/// `goto` moves the chat to another point of its session tree (pi's /tree),
+/// `label` sets or clears an entry's label.
+const CONTROL_COMMANDS: &[&str] = &["tools", "goto", "label"];
 
 /// The `customType` of pocketpi-control's reply entries.
 const CONTROL_REPLY: &str = "pocketpi-control";
@@ -273,6 +275,7 @@ async fn main() {
         .route("/app.js", get(|| async { static_file("app.js") }))
         .route("/app.css", get(|| async { static_file("app.css") }))
         .route("/manage.js", get(|| async { static_file("manage.js") }))
+        .route("/tree.js", get(|| async { static_file("tree.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -327,6 +330,7 @@ async fn main() {
         .route("/api/s/{key}/close", post(close_session))
         .route("/api/s/{key}/restart", post(restart_session))
         .route("/api/s/{key}/control", post(control))
+        .route("/api/s/{key}/header", get(session_header))
         .route("/api/pi/status", get(pi_status))
         .route("/api/pi/reload", post(reload_pis))
         .route("/api/pi/config/{file}", get(read_config).post(patch_config))
@@ -431,6 +435,7 @@ fn static_file(name: &str) -> Response {
         "app.js" => (include_bytes!("../web/app.js"), "text/javascript; charset=utf-8"),
         "app.css" => (include_bytes!("../web/app.css"), "text/css; charset=utf-8"),
         "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
+        "tree.js" => (include_bytes!("../web/tree.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
@@ -1046,7 +1051,8 @@ async fn control(State(app): State<Arc<AppState>>, Path(key): Path<String>, Json
     let (tx, rx) = oneshot::channel();
     live.pending.lock().unwrap().insert(req_id.clone(), tx);
     let mut message = format!("/{name} {req_id}");
-    if let Some(args) = req.args.filter(|a| !a.is_null()) {
+    let args = req.args.filter(|a| !a.is_null());
+    if let Some(args) = &args {
         message.push(' ');
         message.push_str(&args.to_string());
     }
@@ -1063,7 +1069,10 @@ async fn control(State(app): State<Arc<AppState>>, Path(key): Path<String>, Json
         }
         Ok(_) => {}
     }
-    let reply = match tokio::time::timeout(Duration::from_secs(30), rx).await {
+    // Summarizing the branch being left is a model call.
+    let summarize = req.command == "goto" && args.as_ref().and_then(|a| a.get("summarize")).and_then(Value::as_bool) == Some(true);
+    let wait = Duration::from_secs(if summarize { 600 } else { 30 });
+    let reply = match tokio::time::timeout(wait, rx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => return Err(err(StatusCode::GONE, "pi exited")),
         Err(_) => {
@@ -1074,11 +1083,36 @@ async fn control(State(app): State<Arc<AppState>>, Path(key): Path<String>, Json
     // The reply entry's {reqId, ok, data|error}, or the {success:false}
     // every waiter gets when pi exits.
     let ok = reply.get("ok").or(reply.get("success")).and_then(Value::as_bool).unwrap_or(false);
+    // The chat now shows another branch: every client reloads its messages.
+    if ok && req.command == "goto" && reply.pointer("/data/cancelled") != Some(&Value::Bool(true)) {
+        let _ = live.tx.send(Arc::from(r#"{"type":"pocketpi_resync"}"#));
+    }
     Ok(Json(if ok {
         json!({ "success": true, "data": reply.get("data").cloned().unwrap_or(Value::Null) })
     } else {
         json!({ "success": false, "error": reply.get("error").cloned().unwrap_or(json!("failed")) })
     }))
+}
+
+/// The chat's session file and its header line (`{type:"session", id,
+/// timestamp, cwd, parentSession?}`), which no RPC command reports: for the
+/// session info sheet. `header` is null until pi has written the file.
+async fn session_header(State(app): State<Arc<AppState>>, Path(key): Path<String>) -> AppResult<Json<Value>> {
+    let live = get_live_ready(&app, &key).await?;
+    if live.session_file().is_none() {
+        let _ = rpc_internal(&live, json!({"type": "get_state"})).await;
+    }
+    let file = live.session_file();
+    let header = file.as_deref().and_then(read_header);
+    Ok(Json(json!({ "file": file, "header": header })))
+}
+
+fn read_header(path: &str) -> Option<Value> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::BufReader::new(std::fs::File::open(path).ok()?).read_line(&mut line).ok()?;
+    let v: Value = serde_json::from_str(line.trim_end()).ok()?;
+    (v.get("type").and_then(Value::as_str) == Some("session")).then_some(v)
 }
 
 // ---------------------------------------------------------------- pi's config files and CLI

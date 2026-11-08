@@ -66,4 +66,43 @@ export default function (pi: ExtensionAPI) {
       active: [...active],
     };
   });
+
+  // Move to another point of the session tree (pi's /tree): args
+  // `{"entryId": "…", "summarize": true, "instructions": "…"}`. In RPC mode
+  // navigateTree answers only `{cancelled}`, not what goes back into the
+  // editor, so this works it out the way pi does: a user message (or an
+  // extension message) comes back to edit and resend, and the chat carries
+  // on from the entry before it; anything else is carried on from.
+  // Summarizing the branch being left needs a model and takes a while.
+  command("pp-goto", "move to another point in the session tree", async (args, ctx) => {
+    const id = args?.entryId;
+    if (typeof id !== "string" || !id) throw new Error("entryId is required");
+    const target = ctx.sessionManager.getEntry(id);
+    if (!target) throw new Error(`Entry ${id} not found`);
+    const instructions = typeof args.instructions === "string" && args.instructions.trim() ? args.instructions.trim() : undefined;
+    const r = await ctx.navigateTree(id, { summarize: !!args.summarize, customInstructions: instructions });
+    if (r?.cancelled) return { cancelled: true };
+    let editorText: string | null = null;
+    if (target.type === "message" && target.message?.role === "user") editorText = textOf(target.message.content);
+    else if (target.type === "custom_message") editorText = textOf(target.content);
+    return { cancelled: false, editorText, leafId: ctx.sessionManager.getLeafId() };
+  });
+
+  // Set (`{"entryId": "…", "label": "checkpoint"}`) or clear (no or an empty
+  // label) an entry's label; get_tree reports labels on their entries.
+  command("pp-label", "set or clear a label on a session entry", (args, ctx) => {
+    const id = args?.entryId;
+    if (typeof id !== "string" || !id) throw new Error("entryId is required");
+    if (!ctx.sessionManager.getEntry(id)) throw new Error(`Entry ${id} not found`);
+    const label = typeof args.label === "string" && args.label.trim() ? args.label.trim() : undefined;
+    pi.setLabel(id, label);
+    return { entryId: id, label: label ?? null };
+  });
+}
+
+// pi's contentText(content, ""): a string, or its text blocks joined.
+function textOf(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((b: any) => b?.type === "text").map((b: any) => b.text ?? "").join("");
 }

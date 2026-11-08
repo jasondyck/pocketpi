@@ -326,6 +326,47 @@ with curl.
   `.sessionFileChanged`; `ChatSession` keeps its key across a restart, follows
   a fork's new file, exposes `needsRestart` and `restart()`.
 
+## 5b. Wave 3 findings: the session tree (W3-tree)
+
+Checked on 2026-11-08 against real pi 1.5.0 in a scratch `HOME` /
+`PI_CODING_AGENT_DIR`, driving `pi --mode rpc --session <seeded file> -e
+extensions/pocketpi-control.ts` directly, on a hand-written session file with
+two branches.
+
+- **`/pp-goto`** works with no model when not summarizing. In RPC mode
+  `ctx.navigateTree` answers only `{cancelled}` (rpc-mode.js drops the
+  `editorText` that `AgentSession.navigateTree` returns), so the extension
+  works it out like pi does: going to a user message (or a `custom_message`)
+  answers its text as `editorText` and pi's leaf moves to the message's
+  parent; anything else becomes the leaf. A wrong id answers
+  `Entry <id> not found`. With `summarize:true` pi made a `branch_summary`
+  entry (its `usage` counts in `get_session_stats`) — this needed a model:
+  the scratch run picked up a provider key from the environment and spent
+  ~$0.0015 on DeepSeek; without one pi rejects with "No model available".
+- **`/pp-label`** (`pi.setLabel`) appends a `label` entry; `get_tree` reports
+  the label on the target node (`label`, `labelTimestamp`); clearing writes a
+  `label` entry without `label`.
+- **The leaf is usually hidden.** The control reply is appended after the new
+  leaf and becomes the leaf, label entries do the same, and pi itself adds a
+  `thinking_level_change` when a session is opened. So the next prompt hangs
+  off a hidden entry. Both clients' tree builders (`Tree.swift`,
+  `web/tree.js`) drop everything that isn't shown in the chat (tool results,
+  system messages, model/thinking changes, labels, session info, usage,
+  `custom` entries, `custom_message` with `display:false`), hand their children
+  to the nearest shown entry, and take "current" as the nearest shown entry
+  above the leaf.
+- `get_entries` returns every entry (abandoned branches, compacted history),
+  so the session info's counts and cost per model are summed from it; usage
+  from compactions and branch summaries has no model and is listed as
+  "Summaries". The header (id, created, `parentSession`) isn't in any RPC
+  answer, hence `GET /api/s/{key}/header`.
+- **Fork mapping:** `get_fork_messages` lists user messages from every branch,
+  so after moving around the tree a prompt repeated on an abandoned branch
+  could be picked. Both clients now narrow it to the user entries on the
+  current branch (from `get_tree`) before lining up.
+- Not verified: `/pp-goto` while pi streams (needs a model); pi rejects
+  navigation while streaming and both clients refuse to send it then.
+
 ## 6. Safety wave (S): use existing packages, build only the glue
 
 Below is what four packages do once pocketpi has stripped the TUI away. It comes from reading their source on 2026-11-08 (`npm pack --ignore-scripts`, not executed), so it still needs checking under `pi --mode rpc`:

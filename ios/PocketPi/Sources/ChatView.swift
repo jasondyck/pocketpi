@@ -39,6 +39,7 @@ private struct ChatScreen: View {
     @State private var following = true
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var openedRun: String?
+    @State private var treeSheet: TreeSheet?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -170,6 +171,7 @@ private struct ChatScreen: View {
                 Task { await session.clone() }
             }
             .disabled(session.isStreaming || session.path == nil)
+            TreeMenuButtons(session: session, sheet: $treeSheet)
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { ContextGauge(session: session) }
@@ -187,6 +189,7 @@ private struct ChatScreen: View {
         .sheet(item: $session.pendingRequest) { req in
             ExtensionSheet(request: req) { answer in Task { await session.respond(to: req, answer) } }
         }
+        .treeSheets($treeSheet, session: session)
         .alert("Something went wrong", isPresented: Binding(
             get: { session.problem != nil },
             set: { if !$0 { session.problem = nil } }

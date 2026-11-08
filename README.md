@@ -11,6 +11,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - **push-review** (`extensions/push-review.ts`): pi's own `git push` is reviewed by `opencode-go/deepseek-v4-pro` first
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works or queueing a message until the turn ends (long-press or right-click send; Alt+Enter), `!cmd` / `!!cmd` shell commands (output into or kept out of the context) with a live card and Stop, a retry countdown with "Stop retrying", stop, image attachments, slash commands, extension dialogs
 - Fork from an earlier message of yours (it comes back into the message box to edit and resend) and clone a chat; both carry on in a new session file, listed as "Forked from …"
+- Session tree (pi's `/tree`): every branch of a chat with its labels, compactions and branch summaries; go back to any point in the same session file (a prompt comes back into the message box), optionally summarizing the branch you leave; label entries. Session info: file, id, parent, counts by role, cost per model
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
 - **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs with `--no-tools` and a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
 - **llama.cpp router** (`src/llama.rs`): `/api/llama` lists the router pi is logged in to (`/login llama.cpp`) and `/api/llama/load` loads a model on it (unloading the others), so the app can pick local models
@@ -48,7 +49,8 @@ next to its `config_epoch`, and `{"type":"config_changed"}` on `/api/runs/events
 | `GET /api/pi/status` | | `{config_epoch, control, live: [{key, file, cwd, kind, streaming, epoch, stale}]}` |
 | `POST /api/pi/reload` | `{"all": false}` | restarts idle chats behind the epoch (or all idle with `all`): `{restarted, busy, failed, config_epoch}` |
 | `POST /api/s/{key}/restart` | | same key, new pi on the same session file: `{key, file, epoch}`; clients get `pocketpi_exit` with `restarting: true` and reconnect |
-| `POST /api/s/{key}/control` | `{"command": "tools", "args": {...}}` | `{success, data}` / `{success: false, error}` |
+| `POST /api/s/{key}/control` | `{"command": "tools"\|"goto"\|"label", "args": {...}}`: `tools` `{active?}`; `goto` `{entryId, summarize?, instructions?}` (pi's navigateTree; answers `{cancelled, editorText, leafId}`, then every client gets `pocketpi_resync`; waits up to 10 min when summarizing); `label` `{entryId, label?}` (no label clears it) | `{success, data}` / `{success: false, error}` |
+| `GET /api/s/{key}/header` | | the chat's session file and its header line: `{file, header: {type, version, id, timestamp, cwd, parentSession?}}` (`header` null until pi writes the file) |
 | `POST /api/pi/jobs` | `{"action": "install"\|"remove"\|"list"\|"update"\|"mcp_list"\|"mcp_add"\|"mcp_remove"\|"auth_check"\|"version", ...}` | `{id}`; 409 while another job runs |
 | `GET /api/pi/jobs`, `GET /api/pi/jobs/{id}` | | `{jobs}` / `{job: {id, action, argv, status, code, output, started, ended}}`; output also streams on `/api/runs/events` as `{"type":"job","id","event":"start"\|"output"\|"end",...}` |
 | `GET /api/pi/version`, `GET /api/pi/auth/{provider}`, `GET /api/pi/mcp[?cwd=]`, `GET /api/pi/packages[?cwd=]` | | quick CLI calls: `{code, stdout, stderr, json}` |
