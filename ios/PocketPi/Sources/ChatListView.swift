@@ -11,6 +11,13 @@ enum Scope: Hashable {
 }
 
 /// What the detail column shows.
+/// Where Work was left: the sidebar pick, what's open, the iPhone column.
+struct WorkPlace: Equatable {
+    var scope: Scope? = .all
+    var target: ChatTarget?
+    var column: NavigationSplitViewColumn = .content
+}
+
 enum ChatTarget: Hashable {
     case chat(path: String, cwd: String)
     /// A chat that doesn't exist yet; the id makes each "new chat" distinct.
@@ -29,9 +36,18 @@ enum ChatTarget: Hashable {
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var scope: Scope? = .all
+    @State private var scope: Scope?
     @State private var target: ChatTarget?
-    @State private var column: NavigationSplitViewColumn = .content
+    @State private var column: NavigationSplitViewColumn
+
+    /// Built again on each switch to Work: it opens where it was left.
+    init(place: WorkPlace) {
+        _scope = State(initialValue: place.scope)
+        _target = State(initialValue: place.target)
+        _column = State(initialValue: place.column)
+    }
+
+    private var place: WorkPlace { WorkPlace(scope: scope, target: target, column: column) }
 
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $column) {
@@ -125,6 +141,7 @@ struct ChatListView: View {
             model.workChatOpen = c == .detail && target != nil
         }
         .onChange(of: target) { _, t in model.workChatOpen = column == .detail && t != nil }
+        .onChange(of: place) { _, p in model.workPlace = p }
     }
 }
 

@@ -23,15 +23,6 @@ enum AppMode: String {
     case work, chat
 }
 
-private extension View {
-    /// One of the top tabs: hidden (to the eye, touch and VoiceOver) when
-    /// the other is showing.
-    func tabLayer(shown: Bool) -> some View {
-        opacity(shown ? 1 : 0)
-            .allowsHitTesting(shown)
-            .accessibilityHidden(!shown)
-    }
-}
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -55,13 +46,27 @@ struct RootView: View {
                     .padding(.vertical, 6)
                     .accessibilityIdentifier("mode")
                 }
-                // Both stay alive, so switching keeps your place in each.
-                ZStack {
-                    ChatListView().tabLayer(shown: model.mode == .work)
-                    ChatTab().tabLayer(shown: model.mode == .chat)
+                // Only the showing tab exists (a hidden one would still be in
+                // the view hierarchy); each opens where it was left.
+                switch model.mode {
+                case .work: ChatListView(place: model.workPlace)
+                case .chat: ChatTab()
                 }
             }
             .animation(.default, value: model.chatOpen)
+            // A tapped notification: a Chat-tab chat opens there, anything
+            // else in Work (which handles the link once it's showing).
+            .onChange(of: model.pendingLink, initial: true) { _, link in
+                guard let link else { return }
+                if case .chat(let p) = link, model.chats.contains(where: { $0.path == p }) {
+                    model.pendingLink = nil
+                    model.mode = .chat
+                    model.chatPath = [.open(p)]
+                } else {
+                    model.mode = .work
+                }
+            }
+            .onChange(of: model.openRequest) { _, req in if req != nil { model.mode = .work } }
             .task { await model.enablePush() }
         }
     }
@@ -126,6 +131,9 @@ final class AppModel {
     var workChatOpen = false
     var chatTabOpen = false
     var chatOpen: Bool { mode == .work ? workChatOpen : chatTabOpen }
+    /// Where each tab was left, for when it's shown again.
+    var workPlace = WorkPlace()
+    var chatPath: [ChatRoute] = []
     /// Workflow runs waiting for an approval, newest first.
     private(set) var approvals: [RunInfo] = []
     private(set) var workflows: [WorkflowInfo] = []

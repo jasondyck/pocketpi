@@ -4,17 +4,22 @@ import SwiftUI
 /// The Chat tab: plain conversations with any model, pi's enabled ones, the
 /// rest, or one on the llama.cpp router. pi has no tools here (the server
 /// starts it that way in its chat folder), and these chats stay out of Work.
+/// A screen in the Chat tab's stack (kept in the app model, so the tab
+/// opens where it was left, and a notification can open a chat in it).
+enum ChatRoute: Hashable {
+    case open(String)
+    case new(UUID)
+}
+
 struct ChatTab: View {
     @Environment(AppModel.self) private var model
-    @State private var path: [ChatRoute] = []
 
-    enum ChatRoute: Hashable {
-        case open(String)
-        case new(UUID)
+    private var path: Binding<[ChatRoute]> {
+        Binding(get: { model.chatPath }, set: { model.chatPath = $0 })
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: path) {
             List {
                 ForEach(model.chats) { s in
                     NavigationLink(value: ChatRoute.open(s.path)) {
@@ -38,7 +43,7 @@ struct ChatTab: View {
                         Text("Talk with any model, including local ones on the llama.cpp router. pi has no tools here: it only talks.")
                     } actions: {
                         if model.chatDir != nil {
-                            Button("New chat") { path.append(.new(UUID())) }
+                            Button("New chat") { model.chatPath.append(.new(UUID())) }
                                 .buttonStyle(.borderedProminent)
                                 .tint(Theme.signal)
                                 .foregroundStyle(Theme.signalInk)
@@ -49,7 +54,7 @@ struct ChatTab: View {
             .navigationTitle("Chats")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { path.append(.new(UUID())) } label: {
+                    Button { model.chatPath.append(.new(UUID())) } label: {
                         Image(systemName: "square.and.pencil")
                     }
                     .disabled(model.chatDir == nil)
@@ -80,7 +85,8 @@ struct ChatTab: View {
         } message: {
             Text(model.problem ?? "")
         }
-        .onChange(of: path) { _, p in
+        .onAppear { model.chatTabOpen = !model.chatPath.isEmpty }
+        .onChange(of: model.chatPath) { _, p in
             model.chatTabOpen = !p.isEmpty
             // Back on the list: a chat that was just started now has a row.
             if p.isEmpty { Task { await model.refresh() } }

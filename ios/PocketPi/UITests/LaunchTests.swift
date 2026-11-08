@@ -115,7 +115,7 @@ final class LaunchTests: XCTestCase {
         keep(app, "project")
 
         // The Chat tab at the top: plain chats, any model, local ones too.
-        app.segmentedControls["mode"].buttons["Chat"].tap()
+        app.segmentedControls.buttons["Chat"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         let plainChat = app.descendants(matching: .any)["chat-tab-row"].firstMatch
         XCTAssertTrue(plainChat.waitForExistence(timeout: 10))
@@ -123,7 +123,7 @@ final class LaunchTests: XCTestCase {
         plainChat.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
                       || app.textFields["composer"].waitForExistence(timeout: 2))
-        XCTAssertFalse(app.segmentedControls["mode"].exists)
+        XCTAssertFalse(app.segmentedControls.buttons["Chat"].exists)
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["local-tiny-chat"].waitForExistence(timeout: 5))
@@ -134,7 +134,7 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).
-        app.segmentedControls["mode"].buttons["Work"].tap()
+        app.segmentedControls.buttons["Work"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
 
         // A chat, for the composer and the transcript.
