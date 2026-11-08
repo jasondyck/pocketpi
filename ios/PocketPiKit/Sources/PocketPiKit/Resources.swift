@@ -148,6 +148,13 @@ public struct PiPackageInfo: Sendable, Equatable, Identifiable {
     }
 }
 
+/// One kind's resources, for a list section.
+public struct PiResourceSection: Sendable, Equatable, Identifiable {
+    public var kind: PiResourceKind
+    public var items: [PiResource]
+    public var id: PiResourceKind { kind }
+}
+
 /// `GET /api/pi/resources[?cwd=]`.
 public struct PiResources: Sendable, Equatable {
     /// The project (canonical), or nil for global resources only.
@@ -187,8 +194,8 @@ public struct PiResources: Sendable, Equatable {
     }
 
     /// Kinds to show for a filter (nil = all), with their resources.
-    public func sections(_ filter: PiResourceKind?) -> [(kind: PiResourceKind, items: [PiResource])] {
-        PiResourceKind.allCases.filter { filter == nil || $0 == filter }.map { ($0, list($0)) }
+    public func sections(_ filter: PiResourceKind?) -> [PiResourceSection] {
+        PiResourceKind.allCases.filter { filter == nil || $0 == filter }.map { PiResourceSection(kind: $0, items: list($0)) }
     }
 
     /// The project isn't trusted but has things trust gates: say so.

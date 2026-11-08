@@ -49,6 +49,8 @@ enum SettingsPages {
     /// lines at the end.
     static let all: [SettingsPage] = [
         .about,
+        .trust,
+        .resources,
     ]
 
     static var sorted: [SettingsPage] {
