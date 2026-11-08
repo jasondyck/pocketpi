@@ -96,6 +96,7 @@ final class LaunchTests: XCTestCase {
                       || app.textFields["composer"].waitForExistence(timeout: 2))
         sleep(1)
         keep(app, "edit-in-chat")
+        dismissKeyboardTip(app)
         // Back to Projects (chat → clipt's chats → projects), then Workflows again.
         app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
         sleep(1)
@@ -220,6 +221,14 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
         sleep(1)
         keep(app, "title-menu")
+    }
+
+    /// A fresh simulator shows the keyboard's one-time "slide to type" tip
+    /// over the app the first time the keyboard comes up; it eats the next taps.
+    @MainActor
+    private func dismissKeyboardTip(_ app: XCUIApplication) {
+        let tip = app.buttons["Continue"]
+        if tip.waitForExistence(timeout: 2) { tip.tap(); sleep(1) }
     }
 
     /// The tab bar minimizes on scroll down to just the current tab; a tap

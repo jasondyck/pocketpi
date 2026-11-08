@@ -86,6 +86,10 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" \
             -derivedDataPath "$RUNNER_TEMP/dd" \
             CODE_SIGNING_ALLOWED=NO | tail -200
+      - name: Why the UI tests failed
+        if: failure()
+        run: |
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ui.xcresult" --compact || true
       - name: Screenshots out of the result bundle
         if: always()
         run: |
