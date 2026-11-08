@@ -188,7 +188,8 @@ public struct Transcript: Sendable, Equatable {
         switch ev["type"]?.string ?? "" {
         case "pocketpi_hello":
             extensionUI.reset(replaying: ev["ui"]?.array ?? [])
-            return [.reloadSnapshot]
+            // Dialogs still waiting (a notification opened the chat): show them.
+            return [.reloadSnapshot] + (ev["dialogs"]?.array ?? []).flatMap { extensionRequest($0, now: now) }
         case "pocketpi_resync":
             return [.reloadSnapshot]
         case "pocketpi_exit":

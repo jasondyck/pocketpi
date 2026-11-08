@@ -675,7 +675,7 @@ function renderQueue(steering = [], followUp = []) {
 
 function onEvent(ev) {
   switch (ev.type) {
-    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); return loadSnapshot();
+    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); (ev.dialogs || []).forEach(extensionUI); return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
     case "pocketpi_session": loadSnapshot(); break;
     case "pocketpi_exit": {

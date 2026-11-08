@@ -224,6 +224,10 @@ pub fn opened(app: &Arc<AppState>, live: &Arc<Live>, req: Value) {
         let Some(req) = live.ext_ui.lock().unwrap().dialogs.claim(&id, Instant::now()) else { return };
         let project = live.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
         let (title, body) = summary(&req, &project);
+        if live.session_file().is_none() {
+            // A new chat: the server learns its file from get_state.
+            let _ = crate::rpc_internal(&live, json!({"type": "get_state"})).await;
+        }
         let url = match live.session_file() {
             Some(f) => format!("/?s={}", crate::urlencode(&f)),
             None => "/".to_string(),
