@@ -285,7 +285,6 @@ async fn toggle(State(app): State<Arc<AppState>>, Json(req): Json<ToggleReq>) ->
         Some(c) => Path::new(c).join(".pi"),
         None => app.agent_dir.clone(),
     };
-    let home = app.home.clone();
     let before = app.admin.epoch();
     let mut result_key = key.to_string();
     let mut entries_after = Value::Null;
@@ -342,7 +341,6 @@ async fn toggle(State(app): State<Arc<AppState>>, Json(req): Json<ToggleReq>) ->
                     n
                 }
             };
-            let _ = &home;
             entries_after = json!(next);
             if next == current {
                 return Ok(false);
@@ -512,7 +510,8 @@ async fn mcp_signin(State(app): State<Arc<AppState>>, Json(req): Json<SigninReq>
     if !["login", "logout", "reconnect"].contains(&req.action.as_str()) {
         return Err(bad("action must be login, logout or reconnect"));
     }
-    let live = pick_chat(&app, req.key.as_deref(), req.cwd.as_deref()).await?;
+    // Reconnecting only means something to a pi that's running.
+    let live = pick_chat(&app, req.key.as_deref(), req.cwd.as_deref(), req.action != "reconnect").await?;
     if live.streaming.load(Ordering::Relaxed) {
         return Err(err(StatusCode::CONFLICT, "pi is replying in that chat; try again when it's done"));
     }
@@ -604,7 +603,7 @@ fn note(line: &str, notices: &mut Vec<Value>, url: &mut Option<String>, dialog: 
 
 /// The chat for a sign-in: the one asked for, else the most recently used
 /// chat open in the project, else a new chat there (or in $HOME).
-async fn pick_chat(app: &Arc<AppState>, key: Option<&str>, cwd: Option<&str>) -> crate::AppResult<Arc<Live>> {
+async fn pick_chat(app: &Arc<AppState>, key: Option<&str>, cwd: Option<&str>, spawn: bool) -> crate::AppResult<Arc<Live>> {
     if let Some(k) = key.filter(|k| !k.is_empty()) {
         let live = app.live.lock().unwrap().get(k).cloned().ok_or_else(|| err(StatusCode::NOT_FOUND, "that chat isn't open"))?;
         if live.kind != Kind::Chat {
@@ -624,7 +623,8 @@ async fn pick_chat(app: &Arc<AppState>, key: Option<&str>, cwd: Option<&str>) ->
         .cloned();
     match found {
         Some(l) => Ok(l),
-        None => crate::spawn_pi(app, &dir, None).await,
+        None if spawn => crate::spawn_pi(app, &dir, None).await,
+        None => Err(err(StatusCode::CONFLICT, "no chat is open in this project")),
     }
 }
 
