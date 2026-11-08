@@ -36,6 +36,9 @@ pub const CHAT_POLICY: &str = include_str!("../extensions/safety/chat-policy.jso
 pub const STAGE_POLICY: &str = include_str!("../extensions/safety/stage-policy.json");
 
 static OVERLAY_LOCK: Mutex<()> = Mutex::new(());
+/// The agent dir's files pi may create on its own, shared with stages even
+/// before they exist.
+const SHARED_FILES: &[&str] = &["auth.json", "settings.json", "models.json", "models-store.json", "mcp.json", "trust.json"];
 
 /// Where a stage's agent dir goes: beside the real one.
 pub fn overlay_path(agent_dir: &Path) -> Option<PathBuf> {
@@ -77,10 +80,22 @@ fn ensure_link(target: &Path, link: &Path) -> std::io::Result<()> {
 
 /// Mirrors `real` into `overlay` as symlinks (except `skip`), and drops
 /// overlay symlinks whose real entry is gone. Plain files and folders pi
-/// made in the overlay itself (lock folders, tmp) are kept.
-fn mirror(real: &Path, overlay: &Path, skip: &str) -> std::io::Result<()> {
+/// made in the overlay itself (lock folders, tmp) are kept. `ensure` names
+/// files linked even before they exist, so pi creates them in the real dir
+/// (writes follow a dangling symlink).
+fn mirror(real: &Path, overlay: &Path, skip: &str, ensure: &[&str]) -> std::io::Result<()> {
     std::fs::create_dir_all(overlay)?;
-    let mut names = Vec::new();
+    for name in ensure {
+        let (r, o) = (real.join(name), overlay.join(name));
+        if std::fs::symlink_metadata(&r).is_err() {
+            // One pi made here before there was a real one: it becomes the real one.
+            if std::fs::symlink_metadata(&o).is_ok_and(|m| m.is_file()) {
+                std::fs::rename(&o, &r)?;
+            }
+            ensure_link(&r, &o)?;
+        }
+    }
+    let mut names: Vec<std::ffi::OsString> = ensure.iter().map(|n| n.into()).collect();
     if let Ok(entries) = std::fs::read_dir(real) {
         for e in entries.flatten() {
             let name = e.file_name();
@@ -114,8 +129,11 @@ pub fn build_overlay(agent_dir: &Path, policy: &Path) -> std::io::Result<PathBuf
     if std::fs::symlink_metadata(&ext).is_ok_and(|m| m.file_type().is_symlink()) {
         std::fs::remove_file(&ext)?;
     }
-    mirror(agent_dir, &overlay, "extensions")?;
-    mirror(&agent_dir.join("extensions"), &ext, EXT_DIR)?;
+    // pi creates these at startup; created through the overlay they must
+    // land in the real dir. Sessions go there anyway (`--session-dir`).
+    std::fs::create_dir_all(agent_dir.join("sessions"))?;
+    mirror(agent_dir, &overlay, "extensions", SHARED_FILES)?;
+    mirror(&agent_dir.join("extensions"), &ext, EXT_DIR, &[])?;
     let own = ext.join(EXT_DIR);
     if std::fs::symlink_metadata(&own).is_ok_and(|m| m.file_type().is_symlink()) {
         std::fs::remove_file(&own)?;
@@ -256,6 +274,7 @@ mod tests {
         // the overlay before the real one existed gives way to the real one.
         std::fs::remove_file(real.join("extensions/mine.ts")).unwrap();
         std::fs::write(real.join("models.json"), "{}").unwrap();
+        std::fs::remove_file(o.join("mcp.json")).unwrap();
         std::fs::write(o.join("mcp.json"), "{}").unwrap();
         std::fs::write(real.join("mcp.json"), r#"{"real":1}"#).unwrap();
         std::fs::create_dir_all(o.join("auth.json.lock")).unwrap();
@@ -264,6 +283,10 @@ mod tests {
         assert!(!o.join("extensions/mine.ts").exists());
         assert_eq!(std::fs::read_to_string(o.join("mcp.json")).unwrap(), r#"{"real":1}"#);
         assert!(o.join("auth.json.lock").is_dir(), "pi's own lock folders stay");
+        // Files pi creates later are created in the real dir.
+        assert!(std::fs::symlink_metadata(o.join("trust.json")).unwrap().file_type().is_symlink());
+        std::fs::write(o.join("trust.json"), r#"{"/p":true}"#).unwrap();
+        assert_eq!(std::fs::read_to_string(real.join("trust.json")).unwrap(), r#"{"/p":true}"#);
         // The real chat policy was never touched.
         assert_eq!(std::fs::read_to_string(real.join("extensions/pi-permission-system/config.json")).unwrap(), r#"{"chat":true}"#);
         std::fs::remove_dir_all(dir).unwrap();
