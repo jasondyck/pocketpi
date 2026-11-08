@@ -258,6 +258,21 @@ struct IntegrationTests {
         #expect(try await !client.archivedSessions().contains { $0.path == s.path })
     }
 
+    @Test func titlesANewChatAfterItsFirstReply() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("please name this chat about sourdough starters")
+        try await waitFor("the title", timeout: 15) { s.title == "Please name this chat about" }
+        try await waitFor("the session file") { s.path != nil }
+        var listed: String?
+        for _ in 0..<40 {
+            listed = try await client.sessions().first { $0.path == s.path }?.displayTitle
+            if listed == "Please name this chat about" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(listed == "Please name this chat about")
+        s.leave()
+    }
+
     @Test func deletesOnlyArchivedChats() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("delete me later")

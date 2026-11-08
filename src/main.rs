@@ -112,6 +112,8 @@ pub struct Live {
     pub(crate) session_file: StdMutex<Option<String>>,
     pub(crate) stderr_tail: StdMutex<VecDeque<String>>,
     pub(crate) turn_started: StdMutex<Option<Instant>>,
+    /// A title was looked at for this chat (asked for once per pi process).
+    pub(crate) titled: AtomicBool,
 }
 
 impl Live {
@@ -378,6 +380,7 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
         session_file: StdMutex::new(session.map(String::from)),
         stderr_tail: StdMutex::new(VecDeque::new()),
         turn_started: StdMutex::new(None),
+        titled: AtomicBool::new(false),
     });
     app.live.lock().unwrap().insert(key.clone(), live.clone());
 
@@ -427,6 +430,11 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
                     }
                 }
                 "agent_settled" => {
+                    // The first reply in an unnamed chat: give it a title.
+                    if !live2.titled.swap(true, Ordering::Relaxed) {
+                        let (app3, live3) = (app2.clone(), live2.clone());
+                        tokio::spawn(async move { auto_title(&app3, &live3).await });
+                    }
                     let took = live2.turn_started.lock().unwrap().take().map(|t| t.elapsed());
                     // Long reply finished and nobody has the chat open: tell the phone.
                     if took.is_some_and(|d| d > Duration::from_secs(45)) && live2.tx.receiver_count() == 0 {
@@ -806,6 +814,101 @@ fn tail_chars(s: &str, n: usize) -> String {
     s.chars().skip(count.saturating_sub(n)).collect()
 }
 
+/// One `pi -p` call: no tools, context files, skills, extensions (except for
+/// a local model) or session, so only the prompt reaches the model and the
+/// API key never leaves pi.
+async fn one_shot(app: &AppState, model: &str, system: &str, prompt: &str) -> AppResult<String> {
+    // llama.cpp models come from pi's built-in llama extension, so a local
+    // model needs extensions on; it also skips thinking (a local reasoning
+    // model would think for a long time about a title).
+    let local = model.starts_with("llama.cpp/");
+    let mut cmd = Command::new(&app.pi_bin);
+    cmd.args(["--no-session", "-p", "--model", model, "--thinking", if local { "off" } else { "low" }])
+        .args(["--no-tools", "--no-context-files", "--no-skills", "--no-prompt-templates"]);
+    if !local {
+        cmd.arg("--no-extensions");
+    }
+    let run = cmd
+        .arg("--system-prompt")
+        .arg(system)
+        .arg(prompt)
+        .current_dir(std::env::temp_dir())
+        .env("PI_OFFLINE", "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(45), run)
+        .await
+        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "pi timed out"))?
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("pi: {e}")))?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+const TITLE_PROMPT: &str = "You name chats. Given the user's first message and the assistant's first reply, \
+write a title of 3 to 6 words that says what the chat is about, like an email subject. \
+Use the user's language. Plain text only: no quotes, no emoji, no trailing punctuation, no 'Chat about'. \
+Output ONLY the title.";
+
+/// The text of a pi message (its text blocks joined).
+fn message_text(m: &Value) -> String {
+    match &m["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter(|p| p["type"] == "text")
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// A model's title, tidied: first line, no quotes or trailing dot, at most
+/// 60 characters. None when nothing usable came back.
+fn clean_title(raw: &str) -> Option<String> {
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = line.strip_prefix("Title:").unwrap_or(line).trim();
+    let t: String = line
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '“' | '”' | '‘' | '’' | '*' | '#' | '`'))
+        .trim_end_matches(['.', '!', ':', ';'])
+        .trim()
+        .chars()
+        .take(60)
+        .collect();
+    (t.chars().count() >= 2).then_some(t)
+}
+
+/// Name an unnamed chat after its first exchange. A name set meanwhile (by
+/// the person, pi or a workflow) always wins. A chat on a local llama.cpp
+/// model is titled by that model, so its words stay on the machine.
+async fn auto_title(app: &Arc<AppState>, live: &Arc<Live>) {
+    let name_of = |st: &Value| st.pointer("/data/sessionName").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let Ok(st) = rpc_internal(live, json!({"type": "get_state"})).await else { return };
+    if !name_of(&st).is_empty() {
+        return;
+    }
+    let model = match (st.pointer("/data/model/provider").and_then(Value::as_str), st.pointer("/data/model/id").and_then(Value::as_str)) {
+        (Some("llama.cpp"), Some(id)) => format!("llama.cpp/{id}"),
+        _ => app.suggest_model.clone(),
+    };
+    let Ok(msgs) = rpc_internal(live, json!({"type": "get_messages"})).await else { return };
+    let list = msgs.pointer("/data/messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let first = |role: &str| list.iter().find(|m| m["role"] == role && !message_text(m).trim().is_empty()).map(message_text);
+    let (Some(user), Some(reply)) = (first("user"), first("assistant")) else { return };
+    let prompt = format!(
+        "USER'S FIRST MESSAGE:\n{}\n\nASSISTANT'S FIRST REPLY:\n{}",
+        user.trim().chars().take(1500).collect::<String>(),
+        reply.trim().chars().take(2000).collect::<String>()
+    );
+    let Ok(_slot) = app.suggest_slots.acquire().await else { return };
+    let Some(title) = one_shot(app, &model, TITLE_PROMPT, &prompt).await.ok().as_deref().and_then(clean_title) else { return };
+    // Named meanwhile? Keep that name.
+    let Ok(st) = rpc_internal(live, json!({"type": "get_state"})).await else { return };
+    if name_of(&st).is_empty() {
+        let _ = rpc_internal(live, json!({"type": "set_session_name", "name": title})).await;
+    }
+}
+
 /// Suggested replies via a one-shot `pi -p` on a cheap model, so the API key
 /// never leaves pi. No tools, context files, skills or session are loaded.
 async fn suggest(State(app): State<Arc<AppState>>, Json(req): Json<SuggestReq>) -> AppResult<Json<Value>> {
@@ -816,22 +919,7 @@ async fn suggest(State(app): State<Arc<AppState>>, Json(req): Json<SuggestReq>) 
         user.trim(),
         tail_chars(req.assistant.trim(), 4000)
     );
-    let run = Command::new(&app.pi_bin)
-        .args(["--no-session", "-p", "--model", &app.suggest_model, "--thinking", "low"])
-        .args(["--no-tools", "--no-context-files", "--no-skills", "--no-extensions", "--no-prompt-templates"])
-        .arg("--system-prompt")
-        .arg(SUGGEST_PROMPT)
-        .arg(prompt)
-        .current_dir(std::env::temp_dir())
-        .env("PI_OFFLINE", "1")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let out = tokio::time::timeout(Duration::from_secs(45), run)
-        .await
-        .map_err(|_| err(StatusCode::GATEWAY_TIMEOUT, "suggestion timed out"))?
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("pi: {e}")))?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = one_shot(&app, &app.suggest_model, SUGGEST_PROMPT, &prompt).await?;
     let replies: Vec<String> = match (text.find('{'), text.rfind('}')) {
         (Some(a), Some(b)) if b > a => serde_json::from_str::<Value>(&text[a..=b])
             .ok()
@@ -1312,4 +1400,24 @@ async fn revert_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String
     workflows::save_versioned(dir, &old, &format!("reverted to the version from {}", req.version)).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     changed(&app);
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn tidies_titles() {
+        assert_eq!(clean_title("\"Sourdough starter on long trips.\"\n").as_deref(), Some("Sourdough starter on long trips"));
+        assert_eq!(clean_title("\n\nTitle: **Fix macOS mic picker**").as_deref(), Some("Fix macOS mic picker"));
+        assert_eq!(clean_title("   \n").as_deref(), None);
+        assert_eq!(clean_title(&"x".repeat(100)).map(|t| t.chars().count()), Some(60));
+    }
+
+    #[test]
+    fn message_text_joins_text_blocks() {
+        let m = json!({"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "a"}, {"type": "text", "text": "b"}]});
+        assert_eq!(message_text(&m), "a\nb");
+        assert_eq!(message_text(&json!({"content": "plain"})), "plain");
+    }
 }
