@@ -1,0 +1,239 @@
+# Bringing pi's features into pocketpi: inventory and plan
+
+This plan is based on pi v1.5.0 (`@earendil-works/pi-coding-agent`) and pocketpi master at b75e80b, as of 2026-11-08.
+
+## 1. Constraints from pi that shape the design
+
+- **RPC has 32 commands, and that is all of them.** RPC has no commands for:
+  - moving around the session tree, or adding labels
+  - listing or deleting sessions
+  - logging in or out
+  - reading or changing settings, or reloading
+  - turning tools, extensions, packages, MCP servers or themes on or off
+
+  Everything else has to come from one of three places:
+  - (a) pocketpi reading and writing pi's files in `~/.pi/agent/*` or `<cwd>/.pi/*`
+  - (b) pocketpi running the pi CLI (`pi install|list|remove|update|config`, `pi mcp …`, `pi auth check`)
+  - (c) a **companion extension**, loaded into every chat pi with `-e`, that offers `/pp-*` commands. Only extensions can call `ctx.navigateTree`, `pi.setLabel`, `pi.setActiveTools`/`getAllTools`, `ctx.reload()` and `pi.getMcpServers`.
+- **Built-in slash commands don't work over RPC.** If a client sends `/tree`, `/settings` or `/reload` through `prompt`, the text goes to the model. Only extension commands, prompt templates and `/skill:x` are carried out.
+- **Some RPC setters change global `settings.json`:**
+  - `set_steering_mode`, `set_follow_up_mode`, `set_auto_compaction` and `set_auto_retry`
+  - `cycle_model`, which changes the default model
+
+  The UI must show these as global settings, not per-chat toggles. pocketpi should never send `cycle_model`.
+- **After editing files, pi has to restart (or run `ctx.reload()`).** This covers settings, `auth.json`, `models.json`, `mcp.json`, packages, skills and prompts. So pocketpi needs one "apply" mechanism: reload chat pis that are idle, and mark busy ones as stale.
+- **Project trust:** RPC can't ask about trust. With `defaultProjectTrust:"ask"`, pi silently ignores a project's `.pi/` resources. pocketpi has to manage `~/.pi/agent/trust.json` itself.
+- **OAuth logins (`/login`) need the TUI.** API-key providers can be set by writing `auth.json`. MCP OAuth works over RPC through `/mcp login <server>`, which shows a notify with the URL and then an input asking for the redirect URL.
+
+## 2. Feature list: what pi has, what pocketpi has, what to build
+
+Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the least risky; P3 is nice to have.
+
+### A. Sessions and history
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| A1 | Fork from an earlier user message | `get_fork_messages`, `fork{entryId}` (returns the text to put back in the composer) | ❌ | P1 |
+| A2 | Clone the current branch | `clone` | ❌ | P2 |
+| A3 | Session tree viewer showing branches, labels and compaction points | `get_tree` / `get_entries{since}` | ❌ | P2 |
+| A4 | Move to another point in the tree, with an optional branch summary | companion `/pp-goto <entryId> [--summarize]` → `ctx.navigateTree` | ❌ | P2 |
+| A5 | Labels and bookmarks on entries | companion `/pp-label` → `pi.setLabel`; read them through `get_tree` | ❌ | P3 |
+| A6 | Archive, unarchive, delete and rename from the list | pocketpi's `projects.json` and `remove_file` | 🟡 iOS has it, web doesn't | P1 |
+| A7 | Export HTML (view it in the app, share it) | `export_html{outputPath}` saved to a tmp folder, served by pocketpi | ❌ | P2 |
+| A8 | Export or download the JSONL | stream the session file | ❌ | P2 |
+| A9 | Import a JSONL file | upload it into the sessions folder, then `/api/open` | ❌ | P3 |
+| A10 | Share (gist) | runs on the host: `pi --export` + `gh gist create --secret` | ❌ | P3 |
+| A11 | Session info: file path, id, parent session, counts by message type, cost per model | `get_session_stats` plus the header | 🟡 only tokens, cost and context % | P2 |
+| A12 | Copy the last reply | `get_last_assistant_text` | 🟡 a Copy action on each message | — |
+| A13 | Paged history for long chats | `get_entries{since}` cursor | ❌ | P3 |
+
+### B. Prompting, the queue and running
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| B1 | Choose between steer and follow-up (queue after the turn) | `follow_up`, `prompt{streamingBehavior}` | 🟡 steer only | P1 |
+| B2 | Run a shell command from the composer: `!cmd` goes into context, `!!cmd` stays out | `bash{command,excludeFromContext}`, `bash_execution_update`, `abort_bash` | ❌ | P1 |
+| B3 | Delivery modes: all at once vs one at a time | `set_steering_mode`, `set_follow_up_mode` (global) | ❌ | P3 |
+| B4 | Auto-retry: show a countdown and a "Stop retrying" button; global toggle | `auto_retry_*` events, `abort_retry`, `set_auto_retry` | 🟡 events shown, `abort_retry` never sent | P1 |
+| B5 | Auto-compaction toggle and thresholds (global or per model) | `set_auto_compaction`, settings `compaction.*` | 🟡 manual compaction only | P2 |
+| B6 | Compact with custom instructions | `compact{customInstructions}` | 🟡 no instructions | P2 |
+| B7 | Paste an image from the clipboard (web) | — | ❌ | P3 |
+
+### C. Models and thinking
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| C1 | Set the default model and default thinking level for new chats | `settings.json` `defaultProvider`, `defaultModel`, `defaultThinkingLevel` | ❌ | P1 |
+| C2 | Edit scoped/favourite models (`enabledModels`, including `:thinking` suffixes) | `settings.json` | 🟡 read-only (`/api/models/enabled`) | P1 |
+| C3 | Thinking level per model | `modelThinkingLevels` | ❌ | P2 |
+| C4 | Custom providers and models | `models.json`: form editor plus a raw JSON editor checked against `schemas/models.schema.json` | ❌ | P3 |
+| C5 | Refresh the model catalogue | `pi update --models` | ❌ | P3 |
+| C6 | Local llama.cpp models | pocketpi `/api/llama` | ✅ iOS · ❌ web | P2 (web) |
+| C7 | Cache warming and the hide-thinking toggle | settings | ❌ | P3 |
+
+### D. Providers and auth
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| D1 | Provider status: which providers are ready, missing or invalid | `pi auth check --provider X --json` for each known provider | ❌ | P1 |
+| D2 | Add, replace or remove an API key | write `auth.json` (literal keys only; never send key values back to the client) | ❌ | P2 |
+| D3 | OAuth login (xAI, Codex, Claude, …) | TUI only. Option: a server-side pty that runs `pi` and forwards the device-code or URL prompt | ❌ | P3 (spike) |
+| D4 | Subscription fallback status (which chats fell back to which model) | `extensions/subscription-fallback.ts` writes a `custom` entry | ❌ | P3 |
+
+### E. Settings
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| E1 | Settings screen: typed controls for the keys that matter in RPC (model, interaction, compaction, retry, images, tools, codemode, shell, network); TUI-only keys hidden | `~/.pi/agent/settings.json`, keep a `.bak` | ❌ | P1 |
+| E2 | Project settings (`<cwd>/.pi/settings.json`) with a global vs project switch | file | ❌ | P2 |
+| E3 | Raw JSON editor with schema checking (`schemas/settings.schema.json`) | file | ❌ | P2 |
+| E4 | Apply changes: restart idle chat pis and mark busy ones "restart to apply" | pocketpi `/api/pi/reload` + `/api/s/{key}/restart` | ❌ | P1 (infra) |
+| E5 | Project trust: list projects, trust or untrust them, set the default | `~/.pi/agent/trust.json`, `defaultProjectTrust` | ❌ | P1 |
+| E6 | Context files: view and edit `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` (global and project) | files | ❌ | P2 |
+
+### F. Extensions, skills, prompts, packages, tools, MCP
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| F1 | Resource browser: extensions, skills and prompt templates with source and scope | `get_commands` (sourceInfo) plus a folder scan, plus `pi list` | 🟡 slash list only | P1 |
+| F2 | Turn extensions, skills, prompts and built-ins (`builtin:mcp`, `codemode`, `tool-search`, `llama.cpp`) on or off | `settings.json` resource arrays with `+`/`-` prefixes | ❌ | P2 |
+| F3 | Packages: list, install (npm, git or URL; global or project), remove, update | `pi install / remove / list / update` streamed as a job log | ❌ | P2 |
+| F4 | Browse the package gallery | npm search for keyword `pi-package` | ❌ | P3 |
+| F5 | Tools in the current chat: list them and turn them on or off | companion `/pp-tools` → `pi.getAllTools` / `setActiveTools` | ❌ | P2 |
+| F6 | Default tools (`defaultTools`), codemode mode and budget | settings | ❌ | P2 |
+| F7 | MCP servers: list them with state, tools and errors; add, remove, enable, change exposure | `pi mcp list --json`, `pi mcp add/remove`, edit `mcp.json` | ❌ | P2 |
+| F8 | MCP login, logout and reconnect from the phone | `/mcp login <srv>` through `prompt` (the notify + input dialog already works) | 🟡 works if typed | P2 |
+| F9 | Skill and prompt editor: create or edit `SKILL.md` and `prompts/*.md` | files | ❌ | P3 |
+| F10 | Prompt template arguments: show the argument hint in slash completion | `get_commands` | 🟡 | P3 |
+
+### G. Extension UI protocol gaps
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| G1 | `setStatus`: a status chip row above the composer | `extension_ui_request` | ❌ ignored | P1 |
+| G2 | `setWidget`: lines above or below the composer | `extension_ui_request` | ❌ ignored | P1 |
+| G3 | `setTitle` | `extension_ui_request` | ❌ | P2 |
+| G4 | Dialog `timeout`: show a countdown and close the sheet when pi resolves it | `extension_ui_request` | ❌ | P1 |
+| G5 | `extension_error`: a visible list of errors per chat | event | 🟡 shown as a toast | P3 |
+
+### H. Usage
+
+| # | Feature | pi mechanism | pocketpi now | Pri |
+|---|---|---|---|---|
+| H1 | Usage dashboard: cost and tokens per day, model, project and provider pool, across all sessions | aggregate `usage` from assistant messages and `usage` entries in session files, cached by (mtime, size) like `sessions::scan` | ❌ | P2 |
+| H2 | pi version, update available, self-update | `pi --version`, `pi update --self`, CHANGELOG | ❌ | P3 |
+
+### Parity between pocketpi's two clients (from the inventory)
+
+These are separate from pi's features.
+
+- The web lacks: archive and delete, the Chat tab, the approvals inbox, `enabledModels` favourites, llama, and the active-runs line.
+- iOS lacks: suggested replies, an explicit way to stop pi, a quick thinking chip, notification settings, webhook management, the DAG view, "open stage chat", worktree cleanup, approval notes, live runs over SSE, and adding projects by path.
+
+These go in phase 5. They don't block anything else.
+
+## 3. Architecture
+
+1. **`src/pi_admin.rs` (new):** an atomic JSON read-modify-write of pi's files with a `.bak` rotation, using the same `.tmp` + rename pattern as `projects.rs`.
+   - Files covered: `settings.json` (global and project), `auth.json`, `models.json`, `mcp.json` and `trust.json`.
+   - Writes are patch-based (`{set:{path:value}, unset:[path]}`), so keys pocketpi doesn't know about are kept.
+   - Reads of `auth.json` only return `{provider, type, hasKey}`, never the secrets.
+2. **`src/pi_cli.rs` (new):** a job runner for `pi install|remove|list|update|mcp …|auth check` with `stdin </dev/null`.
+   - Output goes over the existing runs SSE as `job` events.
+   - One job runs at a time.
+   - Arguments are a fixed allowlist and are never passed through a shell.
+3. **Restart and reload (`main.rs`):**
+   - `POST /api/s/{key}/restart` closes the pi and respawns it with `--session <file>`. The key stays the same; clients reconnect on `pocketpi_exit` with a `restarting:true` flag.
+   - `POST /api/pi/reload` restarts every idle chat pi and returns which busy ones still need a restart.
+   - A `config_epoch` counter increases on every admin write; each `Live` records the epoch it started with, and clients use that to show a "Restart to apply" chip.
+4. **Companion extension `extensions/pocketpi-control.ts`:**
+   - Always added with `-e` in `spawn_pi_with`, but not for Chat-tab or workflow stages.
+   - Commands: `/pp-tree` (only if `get_tree` turns out not to be enough), `/pp-goto <id> [summarize] [instructions]`, `/pp-label <id> [text]`, `/pp-tools [json]`, `/pp-reload`, `/pp-mcp`.
+   - It replies through a hidden custom entry (`customType:"pocketpi-control"`, `{reqId, ok, data}`), which clients receive as `entry_appended`. pocketpi turns that into an awaited response, so the client sees an ordinary `cmd` call.
+   - The server hides `/pp-*` from the `get_commands` it relays.
+   - **Phase 0 checks this end to end before anything depends on it.**
+5. **RPC allowlist:** add `fork, get_fork_messages, clone, get_tree, get_entries, export_html, bash, abort_bash, follow_up, get_last_assistant_text, set_auto_compaction, set_auto_retry, set_steering_mode, set_follow_up_mode`.
+   - Never allow `cycle_model`, `new_session` or `switch_session`. pocketpi's identity is the session file, so a session switch inside a pi would break the live-key mapping. A fork changes `sessionFile`, so after a fork the server re-reads `get_state` and broadcasts `pocketpi_session{file}`.
+6. **Web:** new screens go in a new `web/manage.js`, embedded like `app.js` and loaded on demand. This keeps the 1900-line `app.js` from becoming a merge hotspot. Chat-level features (fork, bash, widgets) still go in `app.js`.
+7. **iOS:**
+   - All logic goes in PocketPiKit: `Admin.swift` for settings/auth/packages/MCP/trust, and `Tree.swift` for tree building and the fork list. Both are unit-testable on Linux.
+   - Views go in a new **Settings** tab (or a sheet from the server menu).
+   - New chat features extend `ChatSession` and `Transcript`.
+8. **Tests:**
+   - `fake-pi.py` learns every new RPC command and the `/pp-*` commands.
+   - The integration tests cover each route.
+   - New Rust unit tests cover `pi_admin` (patch merge, keeping unknown keys, never reading secrets back).
+   - Add a `cargo test` job to `ios.yml`, or a new `rust.yml`.
+
+## 4. Running it with subagents
+
+Each wave launches agents with `isolation: "worktree"` on branches `pp/<feature>`. Every brief names the files the agent owns, the tests it must add, and "don't touch X". The orchestrator (this session) merges each branch, runs `cargo test` + `ios/test-linux.sh`, fixes conflicts, and only then starts the next wave. No wave runs more than 4 agents at once.
+
+### Wave 0: foundations (1 agent, run on its own because everything later depends on it)
+
+- **W0-core:** `pi_admin.rs` (read and patch, backups, secret redaction), `pi_cli.rs` job runner, restart/reload endpoints, `config_epoch`, the allowlist additions, `pocketpi_session` after fork, and a skeleton of `pocketpi-control.ts` with the reply-through-custom-entry mechanism checked against **real pi**.
+  - Also: `fake-pi.py` stubs for every new command; PocketPiKit `Client` methods plus models for the new routes; Rust unit tests; a CI `cargo test` job.
+  - Gate: one round-trip `/pp-tools` call through real pi 1.5.0 works and is written up in this file.
+
+### Wave 1: chat-level P1 (3 agents in parallel)
+
+| Agent | Scope | Owns |
+|---|---|---|
+| W1-fork | A1, A2: a "Fork from here" action on user messages (web and iOS) with the text put back in the composer; the server follows the session-file change | `app.js` message actions, `Transcript`/`ChatSession` fork, `MessageViews.swift` |
+| W1-composer | B1 steer vs follow-up (long-press on send / a menu), B2 `!`/`!!` bash with a streaming card and abort, B4 retry countdown + Stop retrying | `app.js` composer, `ChatView` composer, `Transcript` bash |
+| W1-extui | G1–G4: status chips, widgets, title, dialog timeouts | `app.js` `extensionUI`, `Transcript.extensionRequest`, `ExtensionSheet` |
+
+Conflict risk: all three touch `app.js` and `Transcript.swift`. Merge them in this order: extui, then composer, then fork. Each brief says "add new functions; edit `onEvent`/`apply` only with single-line dispatch calls".
+
+### Wave 2: management P1 (3 agents in parallel)
+
+| Agent | Scope |
+|---|---|
+| W2-settings | E1 settings screen (typed fields from a hand-written spec of RPC-relevant keys), E4 "Restart to apply" UI, C1 defaults, C2 `enabledModels` editor, B3/B4/B5 global toggles. Web goes in `manage.js`; iOS gets a Settings tab. |
+| W2-trust-resources | E5 trust manager; F1 resource browser (extensions, skills and prompts from a folder scan plus `get_commands` sourceInfo plus `pi list`) |
+| W2-providers | D1 provider status (`pi auth check`), D2 API-key add and remove (redacted), with a warning that OAuth providers need the terminal |
+
+### Wave 3: P2 depth (up to 4 agents in parallel)
+
+| Agent | Scope |
+|---|---|
+| W3-tree | A3 tree viewer, A4 navigate with a summary prompt, A5 labels (through `pocketpi-control`), A11 session info |
+| W3-packages-mcp | F2 enable/disable, F3 package jobs, F7 MCP manager, F8 MCP login helper button |
+| W3-tools-context | F5 per-chat tools, F6 default tools and codemode, E6 context-file editor, E2/E3 project settings and raw editor |
+| W3-export-usage | A7 HTML export viewer, A8 JSONL download, H1 usage dashboard (`src/usage.rs`, cached scan), B6 compact with instructions, C3 thinking per model, C6 llama on the web |
+
+### Wave 4: P3 and spikes (only if wanted)
+
+A9 import, A10 gist share, A13 paging, C4 `models.json` editor, C5/H2 updates, D3 OAuth through a pty (a research spike: write up what's feasible first, then decide), D4, F4 gallery, F9 skill/prompt editor, G5.
+
+### Wave 5: web ↔ iOS parity
+
+Two agents: "web catches up to iOS" and "iOS catches up to web", using the gap lists in §2.
+
+### What every agent brief includes
+
+- The goal and the feature IDs from this document, and the files the agent owns and must not touch.
+- How pocketpi works:
+  - Identity is the session file path; live keys are temporary.
+  - Every POST needs `X-Pocketpi: 1`.
+  - `kill_on_drop` and the reaper.
+  - Session files must be written as compact JSON, because `sessions::scan` matches on substrings.
+- Rules:
+  - Never send secrets to clients.
+  - Never send `cycle_model`, `new_session` or `switch_session`.
+  - Settings writes are patches.
+- Definition of done:
+  - `cargo build --release` and `cargo test` pass.
+  - `ios/test-linux.sh` passes, with new integration tests.
+  - `fake-pi.py` is updated.
+  - Web is checked by hand with Playwright screenshots (chromium is preinstalled), at phone size.
+  - iOS views compile. Real compilation needs the manual `ios.yml` macOS run, which the orchestrator triggers once per wave rather than each agent.
+- Commit style: short imperatives, prefixed `iOS:` where it fits. Don't push; the orchestrator merges.
+
+### Risks
+
+- **Global settings side effects.** RPC toggles change `settings.json`, which also affects the terminal TUI and workflow stages. The UI labels them "Global", and `pi_admin` keeps backups.
+- **Restarting a pi mid-chat** loses in-flight state, so reload only touches idle processes.
+- **Whether the `pocketpi-control` reply channel works isn't confirmed yet.** If `entry_appended` doesn't fire for a custom entry made inside a command, fall back to the extension POSTing to pocketpi over HTTP, as `pocketpi-workflows.ts` already does.
+- **OAuth through a pty** is fragile, so it's held back to Wave 4 as a spike.
+- **iOS SwiftUI can't be compiled on Linux**, so view errors only show up in the macOS CI run. Keep views thin.
