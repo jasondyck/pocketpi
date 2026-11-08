@@ -20,7 +20,7 @@ struct PocketPiApp: App {
 }
 
 enum AppMode: String {
-    case work, chat
+    case work, chat, settings
 }
 
 
@@ -42,6 +42,11 @@ struct RootView: View {
                 Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppMode.chat) {
                     ChatTab()
                 }
+                // pi's settings and the pages Wave 2 adds (SettingsTab.swift).
+                Tab("Settings", systemImage: "gearshape", value: AppMode.settings) {
+                    if let hub = model.hub { SettingsTab(hub: hub) }
+                }
+                .badge(model.hub?.staleChats.count ?? 0)
             }
             .tabBarMinimizeBehavior(.onScrollDown)
             .onChange(of: model.pendingLink, initial: true) { _, link in
@@ -56,6 +61,8 @@ struct RootView: View {
             }
             .onChange(of: model.openRequest) { _, req in if req != nil { model.mode = .work } }
             .task { await model.enablePush() }
+            // "Restart to apply" in Settings and in chats: keep pi's status fresh.
+            .task(id: model.client?.server.url) { await model.hub?.watch() }
         }
     }
 }
@@ -104,6 +111,8 @@ final class AppModel {
     private static let pushTokenKey = "pushToken"
 
     private(set) var client: PocketPiClient?
+    /// pi's status for "Restart to apply"; one per server, with `client`.
+    private(set) var hub: SettingsHub?
     private(set) var projects: [Project] = []
     private(set) var sessions: [SessionInfo] = []
     private(set) var archived: [SessionInfo] = []
@@ -140,6 +149,7 @@ final class AppModel {
         if let s = UserDefaults.standard.string(forKey: Self.serverKey),
            let url = URL(string: s) {
             client = PocketPiClient(server: ServerAddress(url: url))
+            hub = client.map { SettingsHub(client: $0) }
         }
     }
 
@@ -150,6 +160,7 @@ final class AppModel {
         _ = try await c.version()
         UserDefaults.standard.set(address.url.absoluteString, forKey: Self.serverKey)
         client = c
+        hub = SettingsHub(client: c)
         await refresh()
     }
 
@@ -159,6 +170,7 @@ final class AppModel {
         }
         UserDefaults.standard.removeObject(forKey: Self.serverKey)
         client = nil
+        hub = nil
         projects = []
         sessions = []
         archived = []

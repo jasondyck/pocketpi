@@ -263,6 +263,9 @@ async fn main() {
         .route("/", get(|| async { static_file("index.html") }))
         .route("/app.js", get(|| async { static_file("app.js") }))
         .route("/app.css", get(|| async { static_file("app.css") }))
+        .route("/manage.js", get(|| async { static_file("manage.js") }))
+        .route("/manage/{file}", get(manage_page_file))
+        .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
         .route("/icon-180.png", get(|| async { static_file("icon-180.png") }))
         .route("/icon-512.png", get(|| async { static_file("icon-512.png") }))
@@ -377,11 +380,37 @@ async fn guard(
     next.run(req).await
 }
 
+/// One Settings page: `manage_page!("x")` embeds `web/manage-x.js`, served
+/// at `/manage/x.js` and listed by `/api/manage/pages` (docs/pi-parity-plan.md §7).
+macro_rules! manage_page {
+    ($id:literal) => {
+        ($id, include_bytes!(concat!("../web/manage-", $id, ".js")) as &[u8])
+    };
+}
+
+/// The Settings hub's pages, one line each. The hub sorts them by their own
+/// `order`, so the order here doesn't matter: add new lines at the end.
+const MANAGE_PAGES: &[(&str, &[u8])] = &[
+    manage_page!("about"),
+];
+
+async fn manage_page_file(Path(file): Path<String>) -> Response {
+    let Some((_, body)) = MANAGE_PAGES.iter().find(|(id, _)| file.strip_suffix(".js") == Some(id)) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut res = body.into_response();
+    let hs = res.headers_mut();
+    hs.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/javascript; charset=utf-8"));
+    hs.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    res
+}
+
 fn static_file(name: &str) -> Response {
     let (body, ctype): (&'static [u8], &str) = match name {
         "index.html" => (include_bytes!("../web/index.html"), "text/html; charset=utf-8"),
         "app.js" => (include_bytes!("../web/app.js"), "text/javascript; charset=utf-8"),
         "app.css" => (include_bytes!("../web/app.css"), "text/css; charset=utf-8"),
+        "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
@@ -1825,4 +1854,23 @@ async fn revert_workflow(State(app): State<Arc<AppState>>, Path(id): Path<String
     workflows::save_versioned(dir, &old, &format!("reverted to the version from {}", req.version)).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     changed(&app);
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod manage_tests {
+    use super::MANAGE_PAGES;
+
+    /// Every Settings page has a plain id, is listed once, and registers
+    /// itself under that id (docs/pi-parity-plan.md §7).
+    #[test]
+    fn manage_pages_follow_the_contract() {
+        let mut seen = std::collections::HashSet::new();
+        for (id, body) in MANAGE_PAGES {
+            assert!(!id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "bad id {id}");
+            assert!(seen.insert(*id), "{id} listed twice");
+            let src = std::str::from_utf8(body).unwrap();
+            assert!(src.contains("ppManage.register("), "manage-{id}.js doesn't call ppManage.register");
+            assert!(src.contains(&format!("id: \"{id}\"")), "manage-{id}.js doesn't register id \"{id}\"");
+        }
+    }
 }

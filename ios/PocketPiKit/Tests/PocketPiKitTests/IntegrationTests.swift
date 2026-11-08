@@ -547,6 +547,30 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func settingsHubSeesAChangeAndApplies() async throws {
+        let hub = SettingsHub(client: client)
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("hub")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: hub" && !s.isStreaming }
+        let key = try #require(s.key)
+        await hub.refresh()
+        #expect(!hub.needsRestart(s))
+        _ = try await client.patchConfig(.settings, PiConfigPatch(set: ["retry.maxRetries": 5]))
+        // The open chat's hello predates the change; only the hub's status knows.
+        #expect(!s.needsRestart)
+        await hub.changed()
+        #expect(hub.needsRestart(s))
+        #expect(hub.staleChats.contains { $0.key == key })
+        #expect(hub.bannerText != nil)
+        let r = try #require(await hub.reload())
+        #expect(r.restarted.contains(key))
+        #expect(!hub.staleChats.contains { $0.key == key })
+        try await waitFor("the reconnect", timeout: 15) { s.status == .connected && s.transcript.items.count == 2 }
+        #expect(!hub.needsRestart(s))
+        _ = try await client.patchConfig(.settings, PiConfigPatch(unset: ["retry"]))
+        s.leave()
+    }
+
     @Test func forkMovesTheChatToTheNewFile() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("one")
@@ -582,6 +606,8 @@ struct IntegrationTests {
         #expect(await s.fork(at: target))
         #expect(s.problem == nil)
         #expect(s.composer == "again")
+        // ...and the keyboard comes up for it.
+        #expect(s.composerFocusRequests == 1)
         #expect(s.path != nil && s.path != old)
         #expect(s.transcript.userMessages.map { ForkMap.text(of: $0.message) } == ["first"])
         let list = try await client.sessions()

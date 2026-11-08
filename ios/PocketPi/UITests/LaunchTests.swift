@@ -145,6 +145,18 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Select model"].waitForNonExistence(timeout: 5))
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
+        // Settings: the list of pages, and About.
+        showTab(app, "Settings")
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        let about = app.descendants(matching: .any)["settings-page-about"].firstMatch
+        XCTAssertTrue(about.waitForExistence(timeout: 5))
+        keep(app, "settings")
+        about.tap()
+        XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
+        sleep(1)
+        keep(app, "settings-about")
+        app.navigationBars["About"].buttons["BackButton"].tap()
+        XCTAssertTrue(about.waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).
         showTab(app, "Work")
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))

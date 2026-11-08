@@ -54,6 +54,9 @@ def out(obj):
 
 
 args = sys.argv[1:]
+if args == ["--version"]:
+    print("0.0.0-fake")
+    sys.exit(0)
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
 # pocketpi loads its companion extension into normal chats with -e.

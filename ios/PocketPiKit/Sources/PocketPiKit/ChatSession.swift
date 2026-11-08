@@ -74,6 +74,13 @@ public final class ChatSession {
     /// pi's config changed after this chat's pi started ("Restart to apply").
     /// From the server's hello; cleared by the reconnect after a restart.
     public private(set) var needsRestart = false
+    /// The config epoch this chat's pi started at, and the server's then
+    /// (from the hello), so `SettingsHub` can tell which is newer.
+    public private(set) var piEpoch: UInt64?
+    public private(set) var helloConfigEpoch: UInt64?
+    /// Bumped when the message box should take the keyboard (after a fork
+    /// puts the message back in it). The composer view watches this.
+    public private(set) var composerFocusRequests = 0
     /// A dialog an extension asked for, until it is answered.
     public var pendingRequest: ExtensionRequest?
     /// The message box. Here rather than in the view because pi can set it
@@ -231,6 +238,8 @@ public final class ChatSession {
         if ev["type"]?.string == "pocketpi_hello" {
             status = .connected
             needsRestart = ev["stale"]?.bool ?? false
+            piEpoch = ev["epoch"]?.int.map { UInt64(max(0, $0)) }
+            helloConfigEpoch = ev["config_epoch"]?.int.map { UInt64(max(0, $0)) }
         }
         for effect in transcript.apply(ev) {
             switch effect {
@@ -636,6 +645,7 @@ public final class ChatSession {
             }
             await reloadAfterSwitch()
             composer = r["text"]?.string ?? shown[n]
+            composerFocusRequests += 1
             onTurnFinished?()
             return true
         } catch {
