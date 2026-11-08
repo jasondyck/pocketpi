@@ -22,6 +22,9 @@ fork from the first message picks a file but writes it only with the next
 message); a prompt containing "no-fork" makes them answer `cancelled`, as an
 extension's session_before_fork would.
 
+`pi auth check --provider X --json` answers from auth.json for a few
+providers (see auth_check), like pi's CLI does.
+
 Steering and follow-ups queue while it streams (queue_update) and are answered
 after the reply, steering first; "pause" in a prompt makes the reply wait a
 moment so there is time to queue. "retry" fails the first attempt with an
@@ -57,6 +60,42 @@ args = sys.argv[1:]
 if args == ["--version"]:
     print("0.0.0-fake")
     sys.exit(0)
+
+
+def auth_check(argv):
+    """`pi auth check --provider X --json` like pi 1.5.0 answers it: exit 0
+    ready, 1 not_ready, 2 invalid, JSON on stdout either way. Knows a handful
+    of providers; a stored key starting with "bad" reads as invalid, an OAuth
+    credential as ready, an env var as ready."""
+    provider = argv[argv.index("--provider") + 1] if "--provider" in argv else ""
+    known = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "openai-codex": None,
+             "xai": "XAI_API_KEY", "opencode-go": "OPENCODE_API_KEY", "openrouter": "OPENROUTER_API_KEY",
+             "google": "GEMINI_API_KEY", "groq": "GROQ_API_KEY"}
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    try:
+        with open(os.path.join(agent, "auth.json")) as f:
+            cred = json.load(f).get(provider)
+    except (OSError, ValueError):
+        cred = None
+    if provider not in known:
+        res, code = {"status": "not_ready", "provider": provider, "reason": "provider_not_found"}, 1
+    elif cred and cred.get("type") == "oauth":
+        res, code = {"status": "ready", "provider": provider, "authType": "oauth"}, 0
+    elif cred and cred.get("key"):
+        if cred["key"].startswith("bad"):
+            res, code = {"status": "invalid", "provider": provider, "reason": "invalid_credentials"}, 2
+        else:
+            res, code = {"status": "ready", "provider": provider, "authType": "api_key"}, 0
+    elif known[provider] and os.environ.get(known[provider]):
+        res, code = {"status": "ready", "provider": provider, "authType": "api_key"}, 0
+    else:
+        res, code = {"status": "not_ready", "provider": provider, "reason": "credentials_not_configured"}, 1
+    print(json.dumps(res))
+    sys.exit(code)
+
+
+if args[:2] == ["auth", "check"]:
+    auth_check(args)
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
 # pocketpi loads its companion extension into normal chats with -e.
