@@ -40,6 +40,17 @@ import threading
 import time
 import uuid
 
+# One-shot `pi -p` (pocketpi's titles and suggestions): the prompt is the
+# last argument. A title is the first five words of the user's message.
+if "-p" in sys.argv:
+    prompt = sys.argv[-1]
+    if "USER'S FIRST MESSAGE:" in prompt:
+        words = prompt.split("USER'S FIRST MESSAGE:", 1)[1].split("ASSISTANT'S", 1)[0].split()
+        print(" ".join(words[:5]).capitalize())
+    else:
+        print('{"replies":[]}')
+    sys.exit(0)
+
 lock = threading.Lock()
 answers = {}
 answered = threading.Condition(lock)

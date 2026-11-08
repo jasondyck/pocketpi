@@ -318,9 +318,14 @@ private struct ChatsView: View {
                     .tag(s.path)
                     .accessibilityIdentifier("chat-row")
                     // Like Mail: a full swipe left archives.
-                    .swipeActions(edge: .trailing) {
+                    // In the archive a full swipe doesn't delete; Delete asks first.
+                    .swipeActions(edge: .trailing, allowsFullSwipe: !isArchive) {
                         if isArchive {
-                            Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                            // Not role: .destructive: that removes the row at once,
+                            // before "Delete this chat?" is answered (and the list
+                            // and its data disagree).
+                            Button("Delete", systemImage: "trash") { deleting = s }
+                                .tint(.red)
                         }
                         archiveButton(s)
                         Button("Rename", systemImage: "pencil") {
