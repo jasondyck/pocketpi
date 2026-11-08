@@ -52,6 +52,7 @@ next to its `config_epoch`, and `{"type":"config_changed"}` on `/api/runs/events
 | `POST /api/pi/jobs` | `{"action": "install"\|"remove"\|"list"\|"update"\|"mcp_list"\|"mcp_add"\|"mcp_remove"\|"auth_check"\|"version", ...}` | `{id}`; 409 while another job runs |
 | `GET /api/pi/jobs`, `GET /api/pi/jobs/{id}` | | `{jobs}` / `{job: {id, action, argv, status, code, output, started, ended}}`; output also streams on `/api/runs/events` as `{"type":"job","id","event":"start"\|"output"\|"end",...}` |
 | `GET /api/pi/version`, `GET /api/pi/auth/{provider}`, `GET /api/pi/mcp[?cwd=]`, `GET /api/pi/packages[?cwd=]` | | quick CLI calls: `{code, stdout, stderr, json}` |
+| `GET /api/manage/pages` | | the web Settings pages, `{pages: ["about", …]}`, each served at `/manage/<id>.js` (docs/pi-parity-plan.md §7) |
 
 Writes go to a `.tmp` file renamed over the original, the previous version is
 kept as `<file>.pocketpi.bak` (then `.bak.1`, `.bak.2`), and keys pocketpi

@@ -370,3 +370,97 @@ It goes after Wave 0, because it needs `pi_admin` and restart-to-apply, and runs
   - Running both packages together hasn't been tested yet; check it before offering both at once.
 - **Drop `pi-sandbox`:** nothing in it can be approved from the phone, and its defaults allow reads of `~/.ssh` and writes outside the project.
 - **Workflow stages:** dialogs are auto-cancelled, so every "ask" becomes a deny. Stages need their own gotgenes config (allow the usual build commands, deny the dangerous list), loaded through a stage-specific agent dir or a project config. S3 builds the UI for this.
+
+## 7. Settings hub contract
+
+W2-shell built an empty Settings hub so the Wave 2 agents can each add pages
+without touching the same lines. On both clients a page is **one new file plus
+one line**; nothing else in the hub, `app.js`, `index.html` or the app's tabs
+changes.
+
+### Web
+
+A page is `web/manage-<id>.js` plus one line in `MANAGE_PAGES` in `src/main.rs`:
+
+```rust
+const MANAGE_PAGES: &[(&str, &[u8])] = &[
+    manage_page!("about"),
+    manage_page!("<id>"),   // ← the only Rust line a page adds (append at the end)
+];
+```
+
+`manage_page!` embeds the file, serves it at `/manage/<id>.js` and lists it in
+`GET /api/manage/pages`; `web/manage.js` loads every listed page the first time
+Settings opens. `cargo test` checks that each listed file calls
+`ppManage.register` with its own id. The file:
+
+```js
+ppManage.register({
+  id: "<id>",            // [a-z0-9-]+, same as the file name; URL ?m=<id>
+  title: "Providers",
+  subtitle: "API keys",  // optional (string or () => string)
+  icon: "<svg …>",       // optional, 24×24 stroke like app.js ICON.*
+  order: 30,             // hub position, ascending
+  async render(el, ctx) { /* fill el; return a cleanup function if needed */ },
+});
+```
+
+`ctx`: `api(path, body?)` (app.js's helper: GET, or POST JSON with
+`X-Pocketpi: 1`), `toast(msg, error?)`, `openSheet(build)` / `closeSheet()`,
+`navigate(id)` (`""` = hub), `rerender()`, `needsRestart()` (call after a
+config write or a job that changed files: refetches `/api/pi/status` and shows
+"Restart to apply"; returns the status), `status()`, `project` (the drawer's
+selected project path, for `?cwd=`), `home`, `style(css)` (page CSS injected
+once; scope it under `.mp-<id>`, which `el` carries, so nobody edits
+`app.css`), `el`, `esc`, `ICON`. Reuse app.js's classes: `.wf-section`,
+`.wf-card`, `.opt` rows, `.switch`, `.chip`, `.btn`/`.btn-row`, `.field`,
+`.errbox`, `.list-empty`.
+
+Ways in: `?m=` (hub) / `?m=<id>`, the gear at the bottom of the drawer's rail,
+and a "Settings" row in the chat sheet, the new-chat sheet and the project
+menu. app.js only has one-line hooks (`window.ppManage?.…` in `showView`,
+`pocketpi_hello`, `config_changed`, the sheets and boot).
+
+### iOS
+
+A page is `ios/PocketPi/Sources/Settings<Name>Page.swift` plus one line in
+`SettingsPages.all` (`SettingsTab.swift`):
+
+```swift
+extension SettingsPage {
+    static let providers = SettingsPage(id: "providers", title: "Providers", subtitle: "API keys",
+                                        systemImage: "key", order: 30) { ProvidersPage() }
+}
+// SettingsTab.swift:  static let all: [SettingsPage] = [ .about, .providers, ]
+```
+
+The page view reads `@Environment(SettingsHub.self) private var hub`, calls the
+server with `hub.client` (`Admin.swift`: `config`, `patchConfig`, `startJob`,
+`authCheck`, …) and calls `await hub.changed()` after a write. Logic goes in
+PocketPiKit (tested on Linux); the view stays thin. Settings is the third tab.
+
+### Restart to apply (both clients)
+
+`SettingsHub` (Kit) / `manage.js` keep `/api/pi/status`: the web refetches it on
+`config_changed` (runs SSE), on each chat's `pocketpi_hello` and on
+`ctx.needsRestart()`; iOS polls it every 8 s while connected and on
+`hub.changed()`. A chat's pi is behind when its epoch (the newer of the status
+and its hello) is below the config epoch (the newer of both). The banner shows
+in Settings when any chat (not a workflow stage) is behind, and on a chat when
+that chat is. Its button is `POST /api/pi/reload` (web, both places; iOS
+Settings) or `POST /api/s/{key}/restart` (iOS chat); busy chats are reported
+("N busy chats left") and keep the banner until they're idle and it's pressed
+again.
+
+### Suggested ids and order
+
+| order | id | owner |
+|---|---|---|
+| 10 | `settings` (general, models, global toggles) | W2-settings |
+| 20 | `providers` | W2-providers |
+| 30 | `trust` | W2-trust-resources |
+| 40 | `resources` | W2-trust-resources |
+| 50 | `safety` | S3 |
+| 1000 | `about` | W2-shell |
+
+Use the same id and order on web and iOS.

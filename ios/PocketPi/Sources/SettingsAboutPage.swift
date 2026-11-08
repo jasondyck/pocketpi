@@ -36,8 +36,9 @@ private struct SettingsAboutPage: View {
     }
 
     private func load() async {
-        async let v = try? hub.client.piVersion()
-        async let b = try? hub.client.version()
+        let client = hub.client
+        async let v = try? client.piVersion()
+        async let b = try? client.version()
         await hub.refresh()
         let version = await v
         piVersion = (version?.isEmpty == false) ? version : "unknown"

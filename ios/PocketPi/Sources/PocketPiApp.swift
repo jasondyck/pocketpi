@@ -149,7 +149,7 @@ final class AppModel {
         if let s = UserDefaults.standard.string(forKey: Self.serverKey),
            let url = URL(string: s) {
             client = PocketPiClient(server: ServerAddress(url: url))
-            hub = client.map(SettingsHub.init)
+            hub = client.map { SettingsHub(client: $0) }
         }
     }
 

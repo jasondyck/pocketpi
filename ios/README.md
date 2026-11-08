@@ -11,11 +11,15 @@ notifications come through APNs.
 
 ## Tabs
 
-A switch at the top flips between **Work** (projects, chats, workflows,
+The tab bar flips between **Work** (projects, chats, workflows,
 approvals) and **Chat** (plain conversations: pi without tools, any model).
 The model sheet lists the llama.cpp router's models under *Local*; picking an
 unloaded one loads it on the router, restarts the chat's pi so pi sees it, and
 switches to it. `fake-llama.py` stands in for the router in the tests.
+
+**Settings** lists pi's configuration pages (one file each, see
+docs/pi-parity-plan.md §7) and shows "Restart to apply" when chats run with
+settings older than the last change; chats show it too.
 
 ## Notifications
 
