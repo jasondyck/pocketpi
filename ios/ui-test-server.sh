@@ -101,11 +101,16 @@ chat "$P/canopy" "Old note one"
 chat "$P/canopy" "Old note two"
 chat "$CHAT_DIR" "Old chat one"
 chat "$CHAT_DIR" "Old chat two"
-for q in "" "?chat=1"; do
-  curl -fs "$URL/api/sessions$q" | python3 -c 'import json,sys
+# The session files appear a moment after the prompt (slower on CI): keep
+# looking until two are archived in each list.
+old_paths() { curl -fs "$URL/api/sessions$1" | python3 -c 'import json,sys
 for s in json.load(sys.stdin)["sessions"]:
-    if s["title"].startswith("Old "): print(s["path"])' | while read -r f; do
-    post /api/sessions/archive "{\"path\":\"$f\"}" >/dev/null
+    if s["title"].startswith("Old "): print(s["path"])'; }
+for q in "" "chat=1&"; do
+  for _ in $(seq 1 40); do
+    old_paths "?$q" | while read -r f; do post /api/sessions/archive "{\"path\":\"$f\"}" >/dev/null; done
+    [ "$(old_paths "?${q}archived=1" | wc -l)" -ge 2 ] && break
+    sleep 0.5
   done
 done
 echo "$URL"
