@@ -138,6 +138,9 @@ async fn main() {
     let sessions_dir = std::env::var("PI_CODING_AGENT_SESSION_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| agent_dir.join("sessions"));
+    // Resolved once (macOS /var is /private/var): archive and delete store
+    // canonical paths, and the session list must name files the same way.
+    let sessions_dir = std::fs::canonicalize(&sessions_dir).unwrap_or(sessions_dir);
     let allowed_users = std::env::var("POCKETPI_ALLOWED_USERS").ok().map(|s| {
         s.split(',')
             .map(|u| u.trim().to_string())
