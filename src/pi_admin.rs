@@ -244,6 +244,25 @@ impl Admin {
         }
         Ok(self.view(file, cwd, &path, doc, true))
     }
+
+    /// A read-modify-write of the raw document (secrets included) under the
+    /// lock, for changes a dotted-path patch can't express (an array entry
+    /// swapped, an object turned into a string). `f` returns whether it
+    /// changed anything; only then is the file written and the epoch bumped.
+    /// Answers the redacted view, like [`Admin::patch`].
+    pub fn update(&self, file: File, cwd: Option<&str>, f: impl FnOnce(&mut Value) -> Result<bool, AdminError>) -> Result<Value, AdminError> {
+        let path = self.path(file, cwd)?;
+        let _g = self.lock.lock().unwrap();
+        let (mut doc, exists) = load(&path)?;
+        if !f(&mut doc)? {
+            return Ok(self.view(file, cwd, &path, doc, exists));
+        }
+        write(&path, &doc, file.default_mode()).map_err(|e| AdminError::Io(format!("{}: {e}", path.display())))?;
+        if file.bumps_epoch() {
+            self.bump();
+        }
+        Ok(self.view(file, cwd, &path, doc, true))
+    }
 }
 
 impl Admin {

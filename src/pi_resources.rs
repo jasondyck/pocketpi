@@ -187,7 +187,18 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
 }
 
 fn rel(base: &Path, path: &Path) -> Option<String> {
-    path.strip_prefix(base).ok().map(|r| r.to_string_lossy().into_owned())
+    Some(relative(base, path))
+}
+
+/// Node's `path.relative` for two absolute paths: `..` up from `base`, then
+/// down to `path` ("" when they're the same).
+pub fn relative(base: &Path, path: &Path) -> String {
+    let b: Vec<_> = base.components().collect();
+    let p: Vec<_> = path.components().collect();
+    let common = b.iter().zip(&p).take_while(|(x, y)| x == y).count();
+    let mut out: Vec<String> = std::iter::repeat_n("..".to_string(), b.len() - common).collect();
+    out.extend(p[common..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned()));
+    out.join("/")
 }
 
 fn strip_dot(p: &str) -> &str {
@@ -197,7 +208,7 @@ fn strip_dot(p: &str) -> &str {
 /// pi's `matchesAnyPattern` (globs) and `matchesAnyExactPattern` (exact):
 /// against the path relative to `base`, the file name, the absolute path,
 /// and for a `SKILL.md` its folder the same three ways.
-fn matches(path: &Path, pattern: &str, base: &Path, exact: bool) -> bool {
+pub(crate) fn matches(path: &Path, pattern: &str, base: &Path, exact: bool) -> bool {
     let pattern = strip_dot(pattern);
     let test = |p: &Path| -> bool {
         let candidates = [rel(base, p), p.file_name().map(|n| n.to_string_lossy().into_owned()), Some(p.to_string_lossy().into_owned())];
@@ -235,18 +246,41 @@ pub fn enabled_by_overrides(path: &Path, entries: &[String], base: &Path) -> boo
     on
 }
 
-/// A built-in's state from one settings array: Some(on/off) when an entry
-/// names it, None when none does.
-fn builtin_override(name: &str, entries: &[String]) -> Option<bool> {
+/// A built-in in the global `extensions` (pi's `isEnabledByOverrides` on
+/// the path `builtin:<name>`): a matching `!glob` turns it off, an exact
+/// `+builtin:x` back on, an exact `-builtin:x` off, whatever their order.
+pub fn builtin_global_enabled(name: &str, entries: &[String]) -> bool {
+    let id = format!("builtin:{name}");
+    let mut on = true;
+    if entries.iter().filter_map(|e| e.strip_prefix('!')).any(|p| glob_match(p, &id)) {
+        on = false;
+    }
+    if entries.iter().filter_map(|e| e.strip_prefix('+')).any(|p| strip_dot(p) == id) {
+        on = true;
+    }
+    if entries.iter().filter_map(|e| e.strip_prefix('-')).any(|p| strip_dot(p) == id) {
+        on = false;
+    }
+    on
+}
+
+/// A built-in in a project's `extensions` (pi's
+/// `applyAutoloadDisabledPatterns`): the last override entry naming it wins
+/// (`!glob`, `-builtin:x` off; `+builtin:x` on); None when none names it.
+pub fn builtin_project_override(name: &str, entries: &[String]) -> Option<bool> {
     let id = format!("builtin:{name}");
     let mut r = None;
     for e in entries {
-        if let Some(p) = e.strip_prefix('-').or_else(|| e.strip_prefix('!')) {
-            if p == id || glob_match(p, &id) {
+        if let Some(p) = e.strip_prefix('!') {
+            if glob_match(p, &id) {
+                r = Some(false);
+            }
+        } else if let Some(p) = e.strip_prefix('-') {
+            if strip_dot(p) == id {
                 r = Some(false);
             }
         } else if let Some(p) = e.strip_prefix('+') {
-            if p == id {
+            if strip_dot(p) == id {
                 r = Some(true);
             }
         }
@@ -724,10 +758,10 @@ pub fn scan(s: &Scan) -> Vec<Value> {
         }));
     }
     // The settings entry a +/- override would use for this file.
+    // pi's own pattern (`pi config`'s getResourcePattern): the file relative
+    // to the folder its overrides are matched against.
     let toggle = |kind: Kind3, path: &Path, scope: &str, base: &Path| -> Value {
-        let target = if kind == Kind3::Skill && path.file_name().is_some_and(|n| n == "SKILL.md") { path.parent().unwrap_or(path) } else { path };
-        let entry = rel(base, target).unwrap_or_else(|| target.to_string_lossy().into_owned());
-        json!({"key": kind.key(), "scope": scope, "entry": entry})
+        json!({"key": kind.key(), "scope": scope, "entry": relative(base, path)})
     };
     let untrusted = (!s.trusted).then_some("project not trusted");
 
@@ -813,9 +847,9 @@ pub fn scan(s: &Scan) -> Vec<Value> {
     // 4. Built-in extensions: on unless the global `extensions` says
     // `-builtin:x`; a project entry (when the project is trusted) wins.
     for b in BUILTINS {
-        let global = builtin_override(b, &g(Kind3::Extension));
-        let project = if s.trusted { builtin_override(b, &pr(Kind3::Extension)) } else { None };
-        let on = project.or(global).unwrap_or(true);
+        let global = builtin_global_enabled(b, &g(Kind3::Extension));
+        let project = if s.trusted { builtin_project_override(b, &pr(Kind3::Extension)) } else { None };
+        let on = project.unwrap_or(global);
         let scope = if project.is_some() { "project" } else { "global" };
         acc.list.push(json!({
             "kind": "extension",
@@ -1071,9 +1105,18 @@ mod tests {
         let s = Path::new("/agent/skills/review/SKILL.md");
         assert!(!enabled_by_overrides(s, &e(&["-skills/review"]), base));
         assert!(!enabled_by_overrides(s, &e(&["!review"]), base));
-        assert_eq!(builtin_override("mcp", &e(&["-builtin:mcp"])), Some(false));
-        assert_eq!(builtin_override("mcp", &e(&["-builtin:mcp", "+builtin:mcp"])), Some(true));
-        assert_eq!(builtin_override("codemode", &e(&["-builtin:mcp"])), None);
+        // Global: - beats + whatever the order; a !glob is undone by +.
+        assert!(!builtin_global_enabled("mcp", &e(&["-builtin:mcp"])));
+        assert!(!builtin_global_enabled("mcp", &e(&["+builtin:mcp", "-builtin:mcp"])));
+        assert!(!builtin_global_enabled("mcp", &e(&["-builtin:mcp", "+builtin:mcp"])));
+        assert!(!builtin_global_enabled("mcp", &e(&["!builtin:*"])));
+        assert!(builtin_global_enabled("mcp", &e(&["!builtin:*", "+builtin:mcp"])));
+        assert!(builtin_global_enabled("codemode", &e(&["-builtin:mcp"])));
+        // Project: the last entry naming it wins.
+        assert_eq!(builtin_project_override("mcp", &e(&["-builtin:mcp"])), Some(false));
+        assert_eq!(builtin_project_override("mcp", &e(&["-builtin:mcp", "+builtin:mcp"])), Some(true));
+        assert_eq!(builtin_project_override("mcp", &e(&["+builtin:mcp", "!builtin:*"])), Some(false));
+        assert_eq!(builtin_project_override("codemode", &e(&["-builtin:mcp"])), None);
     }
 
     #[test]
@@ -1204,7 +1247,7 @@ mod tests {
 
         let s = find(&list, "skill", "review");
         assert_eq!(s["description"], "Review the diff");
-        assert_eq!(s["toggle"]["entry"], "skills/review");
+        assert_eq!(s["toggle"]["entry"], "skills/review/SKILL.md");
         assert_eq!(find(&list, "skill", "loose")["description"], "A loose skill");
         assert_eq!(find(&list, "skill", "shared")["scope"], "global");
 

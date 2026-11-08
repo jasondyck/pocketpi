@@ -29,7 +29,12 @@ message); a prompt containing "no-fork" makes them answer `cancelled`, as an
 extension's session_before_fork would.
 
 `pi auth check --provider X --json` answers from auth.json for a few
-providers (see auth_check), like pi's CLI does.
+providers (see auth_check), like pi's CLI does. `pi install|remove <src> [-l]`
+edit the global or project settings' packages ("fail" in the source fails),
+`pi update` reports, and `pi mcp list --json|add|remove|logout` work on the
+mcp.json files (see mcp_cli). In a chat, `/mcp login|logout|reconnect <srv>`
+behaves like pi's built-in mcp extension outside the TUI (mcp_command), and
+get_commands lists `mcp` unless settings say `-builtin:mcp`.
 
 Steering and follow-ups queue while it streams (queue_update) and are answered
 after the reply, steering first; "pause" in a prompt makes the reply wait a
@@ -142,22 +147,165 @@ if args == ["list"]:
                 if full:
                     print(f"    {full}")
     sys.exit(0)
-if args[:1] in (["install"], ["remove"]) and len(args) >= 2 and "-l" not in args:
-    # `pi install|remove <source>`: only the global settings' packages list.
-    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
-    path = os.path.join(agent, "settings.json")
+AGENT = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+
+
+def load_json(path):
     try:
-        cfg = json.load(open(path))
+        with open(path) as f:
+            return json.load(f)
     except (OSError, ValueError):
-        cfg = {}
-    pkgs = [p for p in cfg.get("packages", []) if p != args[1]]
+        return {}
+
+
+def save_json(path, doc):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+
+
+if args[:1] in (["install"], ["remove"]) and len(args) >= 2:
+    # `pi install|remove <source> [-l]`: the global or the project's
+    # settings' packages list (string or object form). A source that says
+    # "fail" fails like npm can't reach it.
+    local = "-l" in args
+    path = os.path.join(os.getcwd(), ".pi", "settings.json") if local else os.path.join(AGENT, "settings.json")
+    cfg = load_json(path)
+    src = args[1]
+    if "fail" in src:
+        print(f"npm error 404 Not Found - {src}", file=sys.stderr)
+        sys.exit(1)
+    pkgs = [p for p in cfg.get("packages", []) if (p if isinstance(p, str) else p.get("source")) != src]
     if args[0] == "install":
-        pkgs.append(args[1])
+        print(f"Installing {src}...")
+        pkgs.append(src)
+    elif len(pkgs) == len(cfg.get("packages", [])):
+        print(f"No matching package found for {src}", file=sys.stderr)
+        sys.exit(1)
     cfg["packages"] = pkgs
-    os.makedirs(agent, exist_ok=True)
-    json.dump(cfg, open(path, "w"), indent=2)
-    print(f"{'Installed' if args[0] == 'install' else 'Removed'} {args[1]}")
+    save_json(path, cfg)
+    print(f"{'Installed' if args[0] == 'install' else 'Removed'} {src}")
     sys.exit(0)
+if args[:1] == ["update"] and args[1:2] != []:
+    # `pi update <source> | --extensions`: nothing to fetch here.
+    if args[1] == "--extensions":
+        for p in load_json(os.path.join(AGENT, "settings.json")).get("packages", []):
+            print(f"Updated {p if isinstance(p, str) else p.get('source')}")
+        print("All packages up to date.")
+    else:
+        print(f"Updated {args[1]}")
+    sys.exit(0)
+
+
+def mcp_files():
+    """(scope, path) of the mcp.json files pi reads here: the project's only
+    when trust.json trusts the folder (or a parent)."""
+    files = [("global", os.path.join(AGENT, "mcp.json"))]
+    trust = load_json(os.path.join(AGENT, "trust.json"))
+    d = os.path.realpath(os.getcwd())
+    trusted = False
+    while True:
+        if d in trust and trust[d] is not None:
+            trusted = trust[d] is True
+            break
+        if d == os.path.dirname(d):
+            break
+        d = os.path.dirname(d)
+    if trusted:
+        files.append(("project", os.path.join(os.getcwd(), ".pi", "mcp.json")))
+    return files
+
+
+def mcp_cli(argv):
+    """`pi mcp list --json | add | remove | logout` like pi 1.5.0. A server
+    connects with one tool unless its command is "false" or its url says
+    "fail" (failed) or "oauth" (needs sign-in); list exits 1 then."""
+    cmd = argv[0] if argv else ""
+    local = "-l" in argv or "--local" in argv
+    path = os.path.join(os.getcwd(), ".pi", "mcp.json") if local else os.path.join(AGENT, "mcp.json")
+    if cmd == "list":
+        servers, failed = {}, False
+        for scope, p in mcp_files():
+            for name, cfg in (load_json(p).get("mcpServers") or {}).items():
+                if scope == "project" and name in servers and not any(k in cfg for k in ("command", "url", "type")):
+                    base = servers[name]
+                    servers[name] = dict(base, config={**base["config"], **cfg}, override=p)
+                else:
+                    servers[name] = {"name": name, "scope": scope, "source": p, "config": cfg}
+        reports = []
+        for s in servers.values():
+            c = s["config"]
+            r = {"name": s["name"], "scope": s["scope"], "source": s["source"]}
+            if "override" in s:
+                r["override"] = s["override"]
+            r.update(enabled=c.get("enabled", True) is not False, exposure=c.get("exposure", "codemode"),
+                     transport=c.get("url") or " ".join([c.get("command", "")] + c.get("args", [])), state="disabled", tools=[])
+            if r["enabled"]:
+                url = c.get("url", "")
+                if c.get("command") == "false" or "fail" in url:
+                    r.update(state="failed", error="Connection closed")
+                elif "oauth" in url:
+                    r.update(state="needs-auth", error="Sign-in required")
+                else:
+                    r.update(state="connected", tools=[f"{s['name']}_echo"])
+                failed = failed or r["state"] != "connected"
+            reports.append(r)
+        print(json.dumps({"servers": reports, "errors": []}, indent=2))
+        sys.exit(1 if failed else 0)
+    name = argv[1] if len(argv) > 1 else ""
+    doc = load_json(path)
+    servers = doc.setdefault("mcpServers", {})
+    if cmd == "add":
+        rest = argv[2:]
+        if "--" in rest:
+            opts, command = rest[:rest.index("--")], rest[rest.index("--") + 1:]
+        else:
+            opts, command = rest, []
+        cfg, i = {}, 0
+        while i < len(opts):
+            o = opts[i]
+            if o in ("-l", "--local"):
+                i += 1
+                continue
+            v = opts[i + 1]
+            if o == "--url":
+                cfg["url"] = v
+            elif o == "--header":
+                k, _, val = v.partition("=")
+                cfg.setdefault("headers", {})[k] = val
+            elif o == "--env":
+                k, _, val = v.partition("=")
+                cfg.setdefault("env", {})[k] = val
+            elif o == "--bearer-token-env-var":
+                cfg.setdefault("headers", {})["Authorization"] = "Bearer ${" + v + "}"
+            elif o in ("--exposure", "--description"):
+                cfg[o[2:]] = v
+            i += 2
+        if command:
+            cfg = {"command": command[0], **({"args": command[1:]} if command[1:] else {}), **cfg}
+        replaced = name in servers
+        servers[name] = cfg
+        save_json(path, doc)
+        print(f"{'Replaced' if replaced else 'Added'} {'project' if local else 'global'} MCP server \"{name}\" in {path}.")
+        sys.exit(0)
+    if cmd == "remove":
+        if name not in servers:
+            print(f"No MCP server named \"{name}\" in {path}.", file=sys.stderr)
+            sys.exit(1)
+        del servers[name]
+        save_json(path, doc)
+        print(f"Removed MCP server \"{name}\" from {path}.")
+        sys.exit(0)
+    if cmd == "logout":
+        print(f"No stored credentials for MCP server \"{name}\".")
+        sys.exit(0)
+    print(f"Unknown mcp command \"{cmd}\".", file=sys.stderr)
+    sys.exit(1)
+
+
+if args[:1] == ["mcp"]:
+    mcp_cli(args[1:])
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
 # pocketpi loads its companion extension into normal chats with -e.
@@ -650,6 +798,37 @@ def state():
     }
 
 
+def mcp_command(cmd):
+    """The built-in mcp extension's `/mcp login|logout|reconnect <server>`
+    outside the TUI: login notifies the authorization URL, then asks for the
+    URL the browser was sent to (an answer with "code=" signs in). The
+    prompt's answer comes once the command is done, as in pi."""
+    parts = cmd["message"].split()
+    action, server = (parts + ["", ""])[1:3]
+    notify = lambda msg, kind="info": out({"type": "extension_ui_request", "id": uuid.uuid4().hex[:8],
+                                           "method": "notify", "message": msg, "notifyType": kind})
+    if action == "login":
+        notify(f"Sign in to MCP server \"{server}\" in your browser:\nhttps://auth.example.test/authorize?client_id=pi&server={server}")
+        rid = f"mcp-{cmd.get('id')}"
+        out({"type": "extension_ui_request", "id": rid, "method": "input",
+             "title": f"Waiting for sign-in to \"{server}\". If the browser cannot reach this machine, paste the URL it was redirected to.",
+             "placeholder": "http://127.0.0.1:.../callback?code=..."})
+        with answered:
+            answered.wait_for(lambda: rid in answers, timeout=60)
+            a = answers.pop(rid, {})
+        if "code=" in str(a.get("value", "")):
+            notify(f"Signed in to MCP server \"{server}\" (1 tools).")
+        else:
+            notify("Sign-in cancelled.")
+    elif action == "logout":
+        notify(f"No stored credentials for MCP server \"{server}\".")
+    elif action == "reconnect":
+        notify(f"Reconnected to MCP server \"{server}\" (connected, 1 tool).")
+    else:
+        notify("Usage: /mcp [login|logout|reconnect] <server>", "warning")
+    respond(cmd, {"disposition": "handled"})
+
+
 def respond(cmd, data=None, ok=True, error=None):
     r = {"type": "response", "id": cmd.get("id"), "command": cmd.get("type"), "success": ok}
     if data is not None:
@@ -668,6 +847,8 @@ for line in sys.stdin:
     if t == "prompt" and control and cmd.get("message", "").startswith("/pp-"):
         control_command(cmd["message"])
         respond(cmd, {"disposition": "handled"})
+    elif t == "prompt" and cmd.get("message", "").startswith("/mcp ") and not streaming:
+        threading.Thread(target=mcp_command, args=(cmd,), daemon=True).start()
     elif t in ("prompt", "steer", "follow_up"):
         behavior = {"steer": "steer", "follow_up": "followUp"}.get(t, cmd.get("streamingBehavior"))
         if streaming:
@@ -705,6 +886,10 @@ for line in sys.stdin:
             {"name": "workflows", "source": "extension",
              "sourceInfo": info("/fake/pocketpi-workflows.ts", "temporary", "cli")},
         ]
+        # The built-in mcp extension's /mcp, unless settings turn it off.
+        if "-builtin:mcp" not in (load_json(os.path.join(agent, "settings.json")).get("extensions") or []):
+            commands.append({"name": "mcp", "description": "Manage MCP servers", "source": "extension",
+                             "sourceInfo": info("builtin:mcp", "user", "builtin")})
         if control:
             for c in ("pp-tools", "pp-goto", "pp-label"):
                 commands.append({"name": c, "description": "pocketpi: " + c, "source": "extension",

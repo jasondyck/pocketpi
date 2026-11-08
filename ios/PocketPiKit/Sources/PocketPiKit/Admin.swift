@@ -125,12 +125,15 @@ public enum PiAction: Sendable, Equatable {
     case remove(source: String, local: Bool = false, cwd: String? = nil)
     case list(cwd: String? = nil)
     /// pi itself with no options; or one package, all packages, the model catalogs, everything.
-    case update(source: String? = nil, extensions: Bool = false, models: Bool = false, all: Bool = false)
+    /// With `cwd`, the project's packages are updated too.
+    case update(source: String? = nil, extensions: Bool = false, models: Bool = false, all: Bool = false, cwd: String? = nil)
     case mcpList(cwd: String? = nil)
     /// A stdio server (`command` + `args` + `env` as KEY=VALUE) or an HTTP one (`url` + `headers`).
     case mcpAdd(name: String, local: Bool = false, cwd: String? = nil, url: String? = nil, headers: [String] = [],
                 command: String? = nil, args: [String] = [], env: [String] = [], exposure: String? = nil, description: String? = nil)
     case mcpRemove(name: String, local: Bool = false, cwd: String? = nil)
+    /// `pi mcp logout`: forget the server's OAuth tokens (signing in needs a chat: `mcpSignin`).
+    case mcpLogout(name: String, local: Bool = false, cwd: String? = nil)
     case authCheck(provider: String)
     case version
 
@@ -143,8 +146,8 @@ public enum PiAction: Sendable, Equatable {
             o["source"] = .string(s); o["local"] = .bool(l); put("cwd", c)
         case .list(let c):
             o["action"] = "list"; put("cwd", c)
-        case .update(let s, let e, let m, let a):
-            o["action"] = "update"; put("source", s)
+        case .update(let s, let e, let m, let a, let c):
+            o["action"] = "update"; put("source", s); put("cwd", c)
             o["extensions"] = .bool(e); o["models"] = .bool(m); o["all"] = .bool(a)
         case .mcpList(let c):
             o["action"] = "mcp_list"; put("cwd", c)
@@ -154,8 +157,9 @@ public enum PiAction: Sendable, Equatable {
             o["headers"] = .array(h.map(JSONValue.string))
             o["args"] = .array(args.map(JSONValue.string))
             o["env"] = .array(env.map(JSONValue.string))
-        case .mcpRemove(let n, let l, let c):
-            o["action"] = "mcp_remove"; o["name"] = .string(n); o["local"] = .bool(l); put("cwd", c)
+        case .mcpRemove(let n, let l, let c), .mcpLogout(let n, let l, let c):
+            if case .mcpRemove = self { o["action"] = "mcp_remove" } else { o["action"] = "mcp_logout" }
+            o["name"] = .string(n); o["local"] = .bool(l); put("cwd", c)
         case .authCheck(let p):
             o["action"] = "auth_check"; o["provider"] = .string(p)
         case .version:

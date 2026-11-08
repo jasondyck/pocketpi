@@ -96,13 +96,13 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 | # | Feature | pi mechanism | pocketpi now | Pri |
 |---|---|---|---|---|
 | F1 | Resource browser: extensions, skills and prompt templates with source and scope | `get_commands` (sourceInfo) plus a folder scan, plus `pi list` | 🟡 slash list only | P1 |
-| F2 | Turn extensions, skills, prompts and built-ins (`builtin:mcp`, `codemode`, `tool-search`, `llama.cpp`) on or off | `settings.json` resource arrays with `+`/`-` prefixes | ❌ | P2 |
-| F3 | Packages: list, install (npm, git or URL; global or project), remove, update | `pi install / remove / list / update` streamed as a job log | ❌ | P2 |
-| F4 | Browse the package gallery | npm search for keyword `pi-package` | ❌ | P3 |
+| F2 | Turn extensions, skills, prompts and built-ins (`builtin:mcp`, `codemode`, `tool-search`, `llama.cpp`) on or off | `settings.json` resource arrays with `+`/`-` prefixes | ✅ Settings › Resources switches (§8) | P2 |
+| F3 | Packages: list, install (npm, git or URL; global or project), remove, update | `pi install / remove / list / update` streamed as a job log | ✅ Settings › Packages | P2 |
+| F4 | Browse the package gallery | npm search for keyword `pi-package` | ✅ Packages › Gallery | P3 |
 | F5 | Tools in the current chat: list them and turn them on or off | companion `/pp-tools` → `pi.getAllTools` / `setActiveTools` | ❌ | P2 |
 | F6 | Default tools (`defaultTools`), codemode mode and budget | settings | ❌ | P2 |
-| F7 | MCP servers: list them with state, tools and errors; add, remove, enable, change exposure | `pi mcp list --json`, `pi mcp add/remove`, edit `mcp.json` | ❌ | P2 |
-| F8 | MCP login, logout and reconnect from the phone | `/mcp login <srv>` through `prompt` (the notify + input dialog already works) | 🟡 works if typed | P2 |
+| F7 | MCP servers: list them with state, tools and errors; add, remove, enable, change exposure | `pi mcp list --json`, `pi mcp add/remove`, edit `mcp.json` | ✅ Settings › MCP servers | P2 |
+| F8 | MCP login, logout and reconnect from the phone | `/mcp login <srv>` through `prompt` (the notify + input dialog already works) | ✅ Sign in / Sign out / Reconnect (§8) | P2 |
 | F9 | Skill and prompt editor: create or edit `SKILL.md` and `prompts/*.md` | files | ❌ | P3 |
 | F10 | Prompt template arguments: show the argument hint in slash completion | `get_commands` | 🟡 | P3 |
 
@@ -612,8 +612,71 @@ again.
 | 30 | `trust` | W2-trust-resources |
 | 35 | `context` (AGENTS.md, SYSTEM.md, APPEND_SYSTEM.md) | W3-tools-context |
 | 40 | `resources` | W2-trust-resources |
+| 45 | `packages` | W3-packages-mcp |
+| 47 | `mcp` | W3-packages-mcp |
 | 50 | `safety` | S3 |
 | 60 | `usage` | W3-export-usage |
 | 1000 | `about` | W2-shell |
 
 Use the same id and order on web and iOS.
+
+## 8. Resource switches, packages and MCP (W3-packages-mcp)
+
+Read from pi 1.5.0's `core/package-manager.js`, `modes/interactive/components/config-selector.js`
+(`pi config`) and `extensions/mcp/{cli,config,index}.js`, and checked with real pi in a
+scratch `HOME` (`PI_OFFLINE=1`, `get_commands` after each change).
+
+**How pi reads `extensions` / `skills` / `prompts`.** Plain entries are paths to load;
+`!glob`, `+path` and `-path` are overrides. For a file pi found by itself (the auto folders)
+`isEnabledByOverrides` applies them in a fixed order, not the array's: a matching `!glob`
+turns it off, an exact `+path` back on, an exact `-path` off, so a `-` always beats a `+`.
+"Exact" is the path relative to the settings file's folder (the `.agents` folder for
+`.agents/skills`), or absolute; a skill also matches by its folder. Files under plain
+entries use `applyPatterns` (plain globs narrow them first, then the same three steps).
+Global overrides only see global files and project ones only project files. To change a
+global file in one project, `pi config --local` puts the file's absolute path in the
+project's array (so the project loads it first) plus `+`/`-` on that path. Built-ins
+(`builtin:<name>`) follow the fixed order in global settings, but in project settings the
+**last** entry naming one wins (`applyAutoloadDisabledPatterns`), and a project entry beats
+the global one. A package's object form filters what it offers: no key = everything,
+`[]` = nothing, otherwise plain globs include (none = everything), then `!`, `+`, `-`.
+
+**What pocketpi writes** (`src/pi_packages.rs`, `POST /api/pi/resources/toggle`): `pi config`'s
+own pattern (the file relative to its folder, e.g. `-skills/review/SKILL.md`; the scan's
+`toggle.entry` now uses it too), after removing every older `+`/`-` entry for the same file
+however it was spelled, so a stale `-path` can't outvote a new `+path`. It differs from
+`pi config` on purpose in three places: it never drops a plain entry (pi's toggle removes
+one equal to the pattern, which stops the file loading at all), it only adds `+path` when
+something still turns the file off, and turning one resource of a package on under `[]`
+writes that one path as an include (pi would write `["+x"]`, which loads all of them).
+Turning the last override of a package off makes it a plain string again. The scan's
+built-in state now follows these rules too (it treated global `-`/`+` as "last wins").
+
+**Packages** are `pi install|remove|update` jobs; `update` gets the project as its cwd (so
+`--extensions` covers project packages) and refuses `pi`/`self` as a source (that would
+update pi). `pi install -l` refuses projects pi doesn't trust. The gallery is npm's search
+API (`keywords:pi-package`, which includes monthly/weekly downloads), fetched by the
+server and cached 10 minutes; no emails are passed on.
+
+**MCP.** `pi mcp list --json` gives `{servers: [{name, scope, source, override?, enabled,
+exposure, transport, state, tools, toolExposure?, resources?, error?}], errors, note?}`
+and exits 1 when any enabled server isn't connected. Enable and exposure follow pi's
+`updateMcpServerConfig`: in the file that defines the server, going back to the default
+removes the key (`enabled`, `exposure: codemode`); a project override (an entry without
+`command`/`url`/`type`, which pi merges over the global server) keeps explicit values.
+"Like global" removes the override.
+
+**Sign-in (F8).** `pi mcp login` waits for a browser on the same machine, so it isn't
+offered; `/mcp login <server>` in a chat is. Outside the TUI pi's mcp extension notifies
+"Sign in to MCP server … in your browser:\n<url>" and then asks with an `input` dialog for
+the address the browser was sent to (`http://127.0.0.1:<port>/callback?code=…`, which a
+phone can't open). `POST /api/pi/mcp/signin` runs it in the chat open in the project (or a
+new one, restarted first when it predates the last config change so it knows a server just
+added), waits for that dialog and answers the URL and the dialog id, so the Settings page
+shows "Open the sign-in page" and a field for the address and answers through the chat
+(`extension_ui_response`); the dialog is also in the chat and notified like any other
+(S2). The prompt's RPC answer only comes once the command is done, so the server doesn't
+wait for it. Sign-out is `pi mcp logout` (a job, no chat needed); reconnect is
+`/mcp reconnect` and only offered when a chat is open there. Checked end to end with real
+pi against a stand-in OAuth server (protected-resource and authorization-server metadata,
+dynamic registration): URL and dialog arrive as described.

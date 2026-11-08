@@ -66,6 +66,9 @@ pub enum Action {
         models: bool,
         #[serde(default)]
         all: bool,
+        /// The project, so its packages are updated too.
+        #[serde(default)]
+        cwd: Option<String>,
     },
     /// `pi mcp list --json`.
     McpList {
@@ -98,6 +101,16 @@ pub enum Action {
     },
     /// `pi mcp remove <name> [-l]`.
     McpRemove {
+        name: String,
+        #[serde(default)]
+        local: bool,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    /// `pi mcp logout <name> [-l]`: forgets the server's OAuth tokens
+    /// (`mcp-auth.json`). Signing in needs a chat (`/mcp login`), so there
+    /// is no `mcp_login`.
+    McpLogout {
         name: String,
         #[serde(default)]
         local: bool,
@@ -148,7 +161,7 @@ impl Action {
                 }
             }
             Action::List { .. } => a.push(s("list")),
-            Action::Update { source, extensions, models, all } => {
+            Action::Update { source, extensions, models, all, .. } => {
                 a.push(s("update"));
                 let picked = source.is_some() as u8 + *extensions as u8 + *models as u8 + *all as u8;
                 if picked > 1 {
@@ -156,6 +169,10 @@ impl Action {
                 }
                 if let Some(src) = source {
                     not_a_flag("source", src)?;
+                    // `pi update pi|self` would update pi itself.
+                    if ["pi", "self"].contains(&src.trim()) {
+                        return Err("source names pi itself; update a package".into());
+                    }
                     a.push(src.clone());
                 }
                 if *extensions {
@@ -225,9 +242,10 @@ impl Action {
                     _ => return Err("give either url or command".into()),
                 }
             }
-            Action::McpRemove { name, local, .. } => {
+            Action::McpRemove { name, local, .. } | Action::McpLogout { name, local, .. } => {
                 plain_name("server name", name)?;
-                a.extend([s("mcp"), s("remove"), name.clone()]);
+                let verb = if matches!(self, Action::McpRemove { .. }) { "remove" } else { "logout" };
+                a.extend([s("mcp"), s(verb), name.clone()]);
                 if *local {
                     a.push(s("-l"));
                 }
@@ -249,7 +267,9 @@ impl Action {
             | Action::List { cwd }
             | Action::McpList { cwd }
             | Action::McpAdd { cwd, .. }
-            | Action::McpRemove { cwd, .. } => cwd.as_deref(),
+            | Action::McpRemove { cwd, .. }
+            | Action::McpLogout { cwd, .. }
+            | Action::Update { cwd, .. } => cwd.as_deref(),
             _ => None,
         }
     }
@@ -267,7 +287,7 @@ impl Action {
     fn needs_local_cwd(&self) -> bool {
         matches!(
             self,
-            Action::Install { local: true, .. } | Action::Remove { local: true, .. } | Action::McpAdd { local: true, .. } | Action::McpRemove { local: true, .. }
+            Action::Install { local: true, .. } | Action::Remove { local: true, .. } | Action::McpAdd { local: true, .. } | Action::McpRemove { local: true, .. } | Action::McpLogout { local: true, .. }
         )
     }
 }
@@ -489,6 +509,20 @@ mod tests {
         assert!(act(json!({"action": "mcp_add", "name": "x"})).unwrap().argv().is_err());
         assert!(act(json!({"action": "print_api_key", "provider": "openai"})).is_err());
         assert!(act(json!({"action": "mcp_login", "name": "x"})).is_err());
+        // Package updates never turn into pi updating itself.
+        assert!(act(json!({"action": "update", "source": "pi"})).unwrap().argv().is_err());
+        assert!(act(json!({"action": "update", "source": "self"})).unwrap().argv().is_err());
+    }
+
+    #[test]
+    fn logout_and_project_updates() {
+        let a = act(json!({"action": "mcp_logout", "name": "docs"})).unwrap();
+        assert_eq!(a.argv().unwrap(), ["mcp", "logout", "docs"]);
+        assert!(!a.writes_config());
+        let a = act(json!({"action": "update", "extensions": true, "cwd": "/tmp"})).unwrap();
+        assert_eq!(a.argv().unwrap(), ["update", "--extensions"]);
+        assert_eq!(a.cwd(), Some("/tmp"));
+        assert_eq!(act(json!({"action": "update", "source": "npm:x"})).unwrap().argv().unwrap(), ["update", "npm:x"]);
     }
 
     #[test]

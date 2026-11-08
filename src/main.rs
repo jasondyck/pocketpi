@@ -22,6 +22,7 @@ mod pi_cli;
 mod pi_providers;
 mod ext_ui;
 mod pi_resources;
+mod pi_packages;
 mod dialogs;
 mod safety;
 mod json_schema;
@@ -356,6 +357,7 @@ async fn main() {
         .merge(pi_resources::router())
         .merge(pi_context::router())
         .merge(pi_settings_raw::router())
+        .merge(pi_packages::router())
         .route("/api/safety", get(safety::info))
         .route("/api/safety/recommended", post(safety::use_recommended))
         .route("/api/s/{key}/export", post(exports::export))
@@ -434,6 +436,8 @@ const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("safety"),
     manage_page!("context"),
     manage_page!("usage"),
+    manage_page!("packages"),
+    manage_page!("mcp"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {

@@ -56,6 +56,8 @@ enum SettingsPages {
         .safety,
         .context,
         .usage,
+        .packages,
+        .mcp,
     ]
 
     static var sorted: [SettingsPage] {

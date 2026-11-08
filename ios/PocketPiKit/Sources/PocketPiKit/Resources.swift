@@ -2,9 +2,9 @@ import Foundation
 
 // The resource browser (plan F1; the server side is src/pi_resources.rs):
 // pi's extensions, skills and prompt templates for a project, where each
-// comes from and whether it loads. Read-only for now; each resource keeps
-// its `toggle` (the settings array and entry a +/- override would use) so
-// turning things on and off later is one patch.
+// comes from and whether it loads. Each resource keeps its `toggle` (the
+// settings array and entry a +/- override would use); Packages.swift turns
+// it into a request for `/api/pi/resources/toggle`.
 
 public enum PiResourceKind: String, Sendable, CaseIterable, Identifiable {
     case extensionFile = "extension", skill, prompt
@@ -66,6 +66,8 @@ public struct PiResource: Sendable, Equatable, Identifiable {
     public var origin: String
     /// The package's source, for package resources.
     public var package: String?
+    /// "user" or "project": which settings file names the package.
+    public var packageScope: String?
     /// Not turned off by a settings override.
     public var enabled: Bool
     /// Enabled and not skipped: pi loads it.
@@ -90,6 +92,7 @@ public struct PiResource: Sendable, Equatable, Identifiable {
         scope = PiResourceScope(rawValue: v["scope"]?.string ?? "") ?? .global
         origin = v["origin"]?.string ?? "auto"
         package = v["package"]?["source"]?.string
+        packageScope = v["package"]?["scope"]?.string
         enabled = v["enabled"]?.bool ?? true
         loads = v["loads"]?.bool ?? enabled
         skipped = v["skipped"]?.string
