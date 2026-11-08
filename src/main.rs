@@ -37,6 +37,7 @@ mod chat_state;
 mod outline;
 mod files;
 mod term;
+mod search;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -183,6 +184,8 @@ pub struct AppState {
     pub(crate) chat_state: chat_state::ChatState,
     /// Token and cost records per session file, for `/api/usage`.
     pub(crate) usage_cache: Arc<usage::Cache>,
+    /// The derived full-text index over every chat (`/api/sessions/search`).
+    pub(crate) search: search::Index,
 }
 
 /// What a live pi is for; restarts, reloads and the control extension only
@@ -307,10 +310,20 @@ async fn main() {
         next_key: AtomicU64::new(1),
         meta_cache: sessions::Cache::default(),
         usage_cache: Arc::new(usage::Cache::default()),
+        search: search::Index::new(data_dir.join("search.sqlite")),
     });
 
     tokio::spawn(reaper(app.clone()));
     tokio::spawn(sensors::run(app.clone()));
+    // Warm the search index in the background: the first search of a fresh
+    // install would otherwise parse every session file while the phone waits.
+    tokio::spawn({
+        let app = app.clone();
+        async move {
+            let roots = [app.sessions_dir.clone(), app.chat_dir.clone()];
+            let _ = tokio::task::spawn_blocking(move || app.search.sync(&roots)).await;
+        }
+    });
 
     let router = Router::new()
         .route("/", get(|| async { static_file("index.html") }))
@@ -407,6 +420,7 @@ async fn main() {
         .merge(subagents::router())
         .merge(files::router())
         .merge(term::router())
+        .merge(search::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());

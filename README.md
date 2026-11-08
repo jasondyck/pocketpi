@@ -21,6 +21,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - **Files panel** (`src/files.rs`; "Files" in the chat sheet on the web, side panel; title menu on iOS): the chat's folder as a tree with previews (text and code with line numbers, paged 5000 lines or 2 MiB at a time; markdown; images and PDFs; anything else downloads), never following a path or symlink out of the folder. **Changed**: the files each turn changed with their diffs, from git snapshots taken as each turn starts and settles in a private index and object store (`~/.local/share/pocketpi/snapshots`, the repository's objects as an alternate, so its index and objects are never written) and kept in the chat's `chats/<session>.json`; outside git, the paths pi's edit and write tools named. A "Changed N files" line closes each turn. Type `@` in the composer to pick a path (ranked like dsh, `target`/`node_modules`/… left out); only `@path` goes in and pi is told to read it before saying anything about it (`GET /api/files/{list,read,raw,search,changes}`)
 - **Terminal** (web only; `src/term.rs`, `web/term.js`): "Terminal" in the chat sheet opens your `$SHELL` (a login shell, `/bin/sh` if unset) in the chat's folder, in the side panel, with tabs for up to 8 terminals. Terminals keep running when the panel closes or the page reloads: the open ones are remembered in the browser and reattach with the last 256 KiB of output; one with nothing attached for 2 h is closed. Typing while disconnected is dropped, never sent later. Closing a tab hangs up the shell's whole process group. It runs over `GET /api/term/ws?root=&id=` (a WebSocket), whose `root` must be a live chat's or a project's folder. xterm.js 5.5.0 and its fit addon (MIT) are vendored in `web/vendor/xterm/` and loaded on first open
 - Export a chat as pi's HTML page (open or download; Quick Look and share on iOS) or download its session JSONL; compact with an optional "Focus the summary on…" (`src/exports.rs`, `web/chat-more.js`)
+- **Search** (`src/search.rs`): full-text search across every chat's messages (a derived SQLite FTS5 index, grouped by chat, filter by You / Pi / Tools / Summaries) beside the instant title filter in the drawer; `GET /api/sessions/search?q=&role=&limit=&offset=&hits=`
 - **Settings › Usage** (`src/usage.rs`): cost and tokens per day, model, provider and project over 7/30/90 days, from every session file (cached by mtime + size); subscription costs (OAuth logins, Codex, Copilot) shown as the API-rate equivalent and kept out of "spent", OpenCode Go's pool on its own
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
 - **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs without built-in tools but with `codemode` (`--no-tools --tools +codemode`) so MCP tools such as Playwright stay reachable, plus a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
@@ -135,6 +136,39 @@ capped (2 MB a file, 48 h old, 80 runs); pi-subagents deletes them itself after
 a day. Set `POCKETPI_SUBAGENTS_DIR` to read a different root (the tested
 fixtures use this). Project-scoped `.pi/subagents/` and nested async roots are
 not read.
+## Search (`src/search.rs`)
+
+The drawer's search box filters chat titles locally as you type and, from two
+characters on, asks the server for matches *inside* messages. The server keeps
+a **derived** SQLite FTS5 index (`$XDG_DATA_HOME/pocketpi/search.sqlite`,
+WAL) beside pi's session files and never writes to a session: delete the
+database and it rebuilds on the next start. Files are reconciled by (mtime,
+size), so a search parses only the sessions that changed since the last one
+(the first one warms in the background at startup). What is indexed, per
+`message` entry: `user`, `assistant` and `toolResult` text blocks (a tool
+result keeps its tool name; thinking, tool-call arguments and images are left
+out), plus `compactionSummary` / `branchSummary` summaries. The `system` prompt
+is skipped, and each entry is capped at 40k characters: the index finds a
+message, it doesn't serve it.
+
+| Route | Query | Answer |
+|---|---|---|
+| `GET /api/sessions/search` | `q=` (required), `role=user,assistant,tool,summary`, `limit` (chats, ≤50), `offset` (chats), `hits` (per chat, ≤20), `archived=1` | `{q, total, took_ms, indexed: {files, entries, reindexed, removed}, results: [{path, id, title, name, cwd, modified, messages, chat, live, streaming, count, hits: [{entry, role, tool, ts, snippet}]}]}` |
+
+Queries are AND of prefix terms (`foo bar` → `"foo"* AND "bar"*`) with an OR
+fallback when the AND finds nothing; ranking is FTS5's `bm25`, results are
+grouped by chat and ordered by their best match. Results span every project
+(each hit names its own project) even when the drawer is scoped to one chat's
+project. `snippet` marks matches with U+0001 / U+0002 — never HTML — and the
+client escapes then highlights them. Archived chats are left out unless
+`archived=1`; they and the workflow-stage sessions never consume a page slot,
+so `offset`/`limit` and `total` count what the drawer can actually show. Known
+limits: tokens and phrases, not arbitrary substrings (`entry` doesn't match
+`entries`; a substring would need a trigram index), CJK text is one `unicode61`
+token per run so short CJK queries need the full word, forked chats carry copies
+of the pre-fork entries (both can match the same old message), and only the best
+2000 matching messages are grouped per request — a very common word can stop
+after roughly 600 chats at the default `hits=3`.
 
 ## Safety (`src/safety.rs`, `src/dialogs.rs`)
 
