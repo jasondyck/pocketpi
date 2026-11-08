@@ -88,6 +88,8 @@ public final class ChatSession {
     @ObservationIgnored private var firstEventWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var opening: Task<Void, Error>?
     @ObservationIgnored private var snapshotSeq = 0
+    /// The newest snapshot that landed (or failed).
+    @ObservationIgnored private var appliedSeq = 0
     @ObservationIgnored private var left = false
 
     /// An existing chat.
@@ -276,8 +278,10 @@ public final class ChatSession {
             self.state = state
             followSessionFile(state)
             transcript.load(messages: m["messages"]?.array ?? [], isStreaming: state.isStreaming)
+            appliedSeq = seq
             if case .failed = status {} else { status = .connected }
         } catch {
+            if seq == snapshotSeq { appliedSeq = seq }
             status = .failed(error.localizedDescription)
             return
         }
@@ -299,6 +303,17 @@ public final class ChatSession {
     private func followSessionFile(_ state: ChatState) {
         guard let f = state.sessionFile, f != path else { return }
         if state.messageCount > 0 { path = f } else if path != nil { path = nil }
+    }
+
+    /// Reload after pi moved to another file, and wait until the screen
+    /// shows it: the server's pocketpi_session event starts a snapshot too,
+    /// which can overtake (and so drop) this one.
+    private func reloadAfterSwitch() async {
+        await loadSnapshot()
+        let end = Date().addingTimeInterval(5)
+        while appliedSeq < snapshotSeq, Date() < end {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     private func loadThinkingLevels() async {
@@ -544,7 +559,7 @@ public final class ChatSession {
                 problem = "An extension cancelled the fork."
                 return false
             }
-            await loadSnapshot()
+            await reloadAfterSwitch()
             composer = r["text"]?.string ?? shown[n]
             onTurnFinished?()
             return true
@@ -565,7 +580,7 @@ public final class ChatSession {
                 problem = "An extension cancelled the copy."
                 return false
             }
-            await loadSnapshot()
+            await reloadAfterSwitch()
             onTurnFinished?()
             return true
         } catch {
