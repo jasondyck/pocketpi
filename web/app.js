@@ -1023,7 +1023,7 @@ function renderExtUI() {
   above.innerHTML = ""; below.innerHTML = "";
   if (u.status.size) {
     const row = el("div", "ext-status");
-    for (const [k, t] of u.status) { const c = el("span", "ext-chip", esc(t)); c.dataset.key = k; row.append(c); }
+    for (const [k, t] of u.status) { const c = el("span", "ext-chip", esc(t)); c.dataset.key = k; c.title = t; row.append(c); }
     above.append(row);
   }
   for (const [k, w] of u.widgets) {

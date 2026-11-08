@@ -222,6 +222,15 @@ import Testing
         #expect(ExtensionUIState.plain("\u{1B}[1;31mred\u{1B}[0m ok") == "red ok")
         #expect(ExtensionUIState.plain("\u{1B}]8;;https://x\u{07}link\u{1B}]8;;\u{1B}\\") == "link")
         #expect(ExtensionUIState.plain("plain") == "plain")
+        // pi-permission-modes' status, exactly.
+        let mode = "\u{1B}[38;5;5mBuild\u{1B}[39m \u{1B}[2m(sandboxed in project dir, alt+m)\u{1B}[22;39m  \u{1B}[38;5;2mNetwork: filtered (alt+n)\u{1B}[39m"
+        #expect(ExtensionUIState.plain(mode) == "Build (sandboxed in project dir, alt+m)  Network: filtered (alt+n)")
+        // Widget lines and titles go through it too.
+        var ui = ExtensionUIState()
+        ui.apply(.object(["method": .string("setWidget"), "widgetKey": .string("w"), "widgetLines": .array([.string(mode)])]))
+        ui.apply(.object(["method": .string("setTitle"), "title": .string("\u{1B}[1mpi\u{1B}[0m - x")]))
+        #expect(ui.widgets.first?.lines == ["Build (sandboxed in project dir, alt+m)  Network: filtered (alt+n)"])
+        #expect(ui.title == "pi - x")
     }
 }
 

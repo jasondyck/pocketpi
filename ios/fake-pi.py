@@ -178,6 +178,9 @@ def ext_ui(prompt, cmd_id):
         return
     req(method="setStatus", statusKey="fake", statusText="\x1b[32mready\x1b[0m")
     req(method="setStatus", statusKey="lint", statusText="2 warnings")
+    # As pi-permission-modes sends it: SGR colours for the terminal.
+    req(method="setStatus", statusKey="mode", statusText="\x1b[38;5;5mBuild\x1b[39m \x1b[2m(sandboxed in project dir, alt+m)"
+        "\x1b[22;39m  \x1b[38;5;2mNetwork: filtered (alt+n)\x1b[39m")
     req(method="setWidget", widgetKey="todo", widgetLines=["TODO", "[x] status chips", "[ ] widgets"],
         widgetPlacement="aboveEditor")
     req(method="setWidget", widgetKey="hint", widgetLines=["tip: say 'clear widgets'"], widgetPlacement="belowEditor")

@@ -134,14 +134,15 @@ struct IntegrationTests {
         try await s.send("show widgets")
         try await waitFor("the reply") { lastAssistantText(s) == "Echo: show widgets" && s.path != nil && !s.isStreaming }
         let ui = s.transcript.extensionUI
-        #expect(ui.statuses == [.init(key: "fake", text: "ready"), .init(key: "lint", text: "2 warnings")])
+        #expect(ui.statuses == [.init(key: "fake", text: "ready"), .init(key: "lint", text: "2 warnings"),
+                                .init(key: "mode", text: "Build (sandboxed in project dir, alt+m)  Network: filtered (alt+n)")])
         #expect(ui.aboveEditor.map(\.lines) == [["TODO", "[x] status chips", "[ ] widgets"]])
         #expect(ui.belowEditor.map(\.key) == ["hint"])
         #expect(s.subtitle(fallback: "project") == "pi - fake project")
         #expect(s.title == "show widgets")
         try await s.send("clear widgets")
         try await waitFor("the clear") { lastAssistantText(s) == "Echo: clear widgets" && !s.isStreaming }
-        #expect(s.transcript.extensionUI.statuses.map(\.key) == ["fake"])
+        #expect(s.transcript.extensionUI.statuses.map(\.key) == ["fake", "mode"])
         #expect(s.transcript.extensionUI.widgets.map(\.key) == ["todo"])
         let path = try #require(s.path)
         s.leave()
@@ -150,7 +151,7 @@ struct IntegrationTests {
         let again = ChatSession(client: client, path: path, cwd: projectDir)
         await again.start()
         try await waitFor("the replay") { again.transcript.extensionUI.widgets.map(\.key) == ["todo"] }
-        #expect(again.transcript.extensionUI.statuses.map(\.key) == ["fake"])
+        #expect(again.transcript.extensionUI.statuses.map(\.key) == ["fake", "mode"])
         #expect(again.transcript.extensionUI.title == "pi - fake project")
 
         // A new pi on the same file starts with none of it.
