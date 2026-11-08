@@ -4,7 +4,8 @@ pocketpi without a model, a key or any cost.
 
 It speaks enough of pi's RPC protocol for pocketpi and PocketPiKit: the state
 and message commands, prompts that stream back an echo (thinking, text, and a
-tool call when the prompt says "tool"), an extension confirm dialog when the
+tool call when the prompt says "tool", a workflow_run call for the run id in
+~/.fake-pi-run when it says "deploy"), an extension confirm dialog when the
 prompt says "ask", session names, abort. Sessions are written in pi's format
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
@@ -110,6 +111,20 @@ def run(prompt, cmd_id):
         result = {"content": [{"type": "text", "text": "hi"}], "details": {}}
         out({"type": "tool_execution_end", "toolCallId": call["id"], "toolName": "bash", "result": result, "isError": False, "durationMs": 5})
         tr = {"role": "toolResult", "toolCallId": call["id"], "toolName": "bash", "content": result["content"], "isError": False}
+        out({"type": "message_start", "message": tr})
+        add(tr)
+        out({"type": "message_end", "message": tr})
+    run_file = os.path.expanduser("~/.fake-pi-run")
+    if "deploy" in prompt and os.path.exists(run_file):
+        run_id = open(run_file).read().strip()
+        call = {"type": "toolCall", "id": f"wf-{cmd_id}", "name": "workflow_run", "arguments": {"id": "natter-deploy"}}
+        stream_assistant([call], "toolUse")
+        out({"type": "tool_execution_start", "toolCallId": call["id"], "toolName": "workflow_run", "args": call["arguments"]})
+        result = {"content": [{"type": "text", "text": f"Started run {run_id}."}],
+                  "details": {"run_id": run_id, "workflow_id": "natter-deploy"}}
+        out({"type": "tool_execution_end", "toolCallId": call["id"], "toolName": "workflow_run", "result": result, "isError": False, "durationMs": 5})
+        tr = {"role": "toolResult", "toolCallId": call["id"], "toolName": "workflow_run",
+              "content": result["content"], "details": result["details"], "isError": False}
         out({"type": "message_start", "message": tr})
         add(tr)
         out({"type": "message_end", "message": tr})

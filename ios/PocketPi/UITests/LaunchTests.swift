@@ -118,8 +118,17 @@ final class LaunchTests: XCTestCase {
         app.descendants(matching: .any)["chat-row"].firstMatch.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
                       || app.textFields["composer"].waitForExistence(timeout: 2))
+        // pi started natter's deploy check here (ui-test-server.sh); it's
+        // still going, so a line above the composer says so.
+        let activeRun = app.descendants(matching: .any)["active-run"].firstMatch
+        XCTAssertTrue(activeRun.waitForExistence(timeout: 10))
         sleep(1)
         keep(app, "chat")
+        activeRun.tap()
+        XCTAssertTrue(app.navigationBars["natter: deploy check"].waitForExistence(timeout: 5))
+        keep(app, "active-run-opened")
+        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(activeRun.waitForExistence(timeout: 5))
 
         // Thinking and tool calls fold into one line; it opens to the steps.
         let activity = app.descendants(matching: .any)["activity-row"].firstMatch

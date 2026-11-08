@@ -39,6 +39,15 @@ cat > "$SCRATCH/home/.config/pocketpi/workflows/clipt-pr.json" <<JSON
            {"id":"decide","type":"shell","name":"Fix needed?","needs":["review"],"run":"echo 'Review passed: nothing to fix.'; exit 79"},
            {"id":"fix","type":"shell","name":"Fix findings","needs":["decide"],"run":"true"}]}
 JSON
+# A run that keeps going, started from a natter chat (fake-pi's "deploy"),
+# for the run line above the chat's composer.
+cat > "$SCRATCH/home/.config/pocketpi/workflows/natter-deploy.json" <<JSON
+{"id":"natter-deploy","name":"natter: deploy check","project":"$SCRATCH/home/projects/natter","worktree":false,"enabled":true,
+ "triggers":[{"type":"manual"}],"inputs":[],"improve":"off",
+ "stages":[{"id":"build","type":"shell","name":"Build","needs":[],"run":"echo built"},
+           {"id":"smoke","type":"shell","name":"Smoke test","needs":["build"],"run":"sleep 1800"},
+           {"id":"report","type":"shell","name":"Report","needs":["smoke"],"run":"echo ok"}]}
+JSON
 # A suggested improvement for it, for the Improvements screens.
 mkdir -p "$SCRATCH/home/.config/pocketpi/workflows/.proposals"
 python3 - "$SCRATCH/home/.config/pocketpi/workflows" <<'PY'
@@ -74,7 +83,8 @@ post /api/workflows/clipt-review/run '{}' >/dev/null
 post /api/workflows/clipt-pr/run '{"inputs":{"pr":"96","commit":"75348bc"}}' >/dev/null
 chat "$P/clipt" "Why does the region picker flicker on the second monitor?"
 chat "$P/clipt" "Add a tool call to check the changelog"
-chat "$P/natter" "Check the SFU log with a tool and summarize what changed since Monday"
+post /api/workflows/natter-deploy/run '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])' > "$SCRATCH/home/.fake-pi-run"
+chat "$P/natter" "Check the SFU log with a tool, deploy, and summarize what changed since Monday"
 chat "$P/canopy" "What does the Modbus poller do when a sensor times out?"
 chat "$P/lantern-keep" "Plan the next puzzle room"
 echo "$URL"
