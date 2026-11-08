@@ -108,6 +108,16 @@ public struct UsageDay: Sendable, Equatable, Identifiable {
     }
 }
 
+/// One stacked segment of the per-day chart.
+public struct UsagePoint: Sendable, Equatable, Identifiable {
+    public var day: String
+    /// "Nov 8".
+    public var label: String
+    public var billing: Billing
+    public var value: Double
+    public var id: String { day + "/" + billing.rawValue }
+}
+
 public struct UsageReport: Sendable, Equatable {
     public var days: Int
     public var from: String
@@ -151,6 +161,24 @@ public struct UsageReport: Sendable, Equatable {
     /// The tallest bar, for scaling the chart (`cost: false` for tokens).
     public func peak(cost: Bool) -> Double {
         byDay.map { cost ? $0.totals.cost : Double($0.totals.tokens) }.max() ?? 0
+    }
+
+    /// The x-axis labels to show: first, last, and a few between.
+    public func axisDays(count: Int = 4) -> [String] {
+        guard byDay.count > count else { return byDay.map(\.day) }
+        let step = Double(byDay.count - 1) / Double(count - 1)
+        return (0..<count).map { byDay[Int((Double($0) * step).rounded())].day }
+    }
+
+    /// The chart's marks: one per day and billing kind with anything in it,
+    /// days in order (for a stacked bar chart).
+    public func points(cost: Bool) -> [UsagePoint] {
+        byDay.flatMap { d in
+            Billing.allCases.compactMap { b in
+                let v = cost ? (d.cost[b] ?? 0) : Double(d.tokens[b] ?? 0)
+                return v > 0 ? UsagePoint(day: d.day, label: d.shortLabel, billing: b, value: v) : nil
+            }
+        }
     }
 
     /// One day's bar as stacked segments 0...1 of the chart's height, in

@@ -63,6 +63,10 @@ import Testing
         let tokens = r.segments(of: r.byDay[1], cost: false)
         #expect(tokens.map(\.0) == [.subscription, .pool])
         #expect(abs(tokens.map(\.1).reduce(0, +) - 1) < 1e-9)
+        let pts = r.points(cost: false)
+        #expect(pts.map(\.id) == ["2026-11-07/subscription", "2026-11-07/pool", "2026-11-08/api"])
+        #expect(pts.first?.label == "Nov 7" && pts.first?.value == 1115)
+        #expect(r.axisDays() == ["2026-11-06", "2026-11-07", "2026-11-08"])
         let empty = UsageReport(.object([:]))
         #expect(empty.byDay.isEmpty && empty.peak(cost: true) == 0 && empty.billingUsed.isEmpty)
     }

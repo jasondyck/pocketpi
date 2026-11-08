@@ -39,8 +39,8 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 | A4 | Move to another point in the tree, with an optional branch summary | companion `/pp-goto <entryId> [--summarize]` → `ctx.navigateTree` | ❌ | P2 |
 | A5 | Labels and bookmarks on entries | companion `/pp-label` → `pi.setLabel`; read them through `get_tree` | ❌ | P3 |
 | A6 | Archive, unarchive, delete and rename from the list | pocketpi's `projects.json` and `remove_file` | 🟡 iOS has it, web doesn't | P1 |
-| A7 | Export HTML (view it in the app, share it) | `export_html{outputPath}` saved to a tmp folder, served by pocketpi | ❌ | P2 |
-| A8 | Export or download the JSONL | stream the session file | ❌ | P2 |
+| A7 | Export HTML (view it in the app, share it) | `export_html{outputPath}` saved to a tmp folder, served by pocketpi | ✅ (W3) | P2 |
+| A8 | Export or download the JSONL | stream the session file | ✅ (W3) | P2 |
 | A9 | Import a JSONL file | upload it into the sessions folder, then `/api/open` | ❌ | P3 |
 | A10 | Share (gist) | runs on the host: `pi --export` + `gh gist create --secret` | ❌ | P3 |
 | A11 | Session info: file path, id, parent session, counts by message type, cost per model | `get_session_stats` plus the header | 🟡 only tokens, cost and context % | P2 |
@@ -56,7 +56,7 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 | B3 | Delivery modes: all at once vs one at a time | `set_steering_mode`, `set_follow_up_mode` (global) | ❌ | P3 |
 | B4 | Auto-retry: show a countdown and a "Stop retrying" button; global toggle | `auto_retry_*` events, `abort_retry`, `set_auto_retry` | 🟡 events shown, `abort_retry` never sent | P1 |
 | B5 | Auto-compaction toggle and thresholds (global or per model) | `set_auto_compaction`, settings `compaction.*` | 🟡 manual compaction only | P2 |
-| B6 | Compact with custom instructions | `compact{customInstructions}` | 🟡 no instructions | P2 |
+| B6 | Compact with custom instructions | `compact{customInstructions}` | ✅ (W3) | P2 |
 | B7 | Paste an image from the clipboard (web) | — | ❌ | P3 |
 
 ### C. Models and thinking
@@ -68,7 +68,7 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 | C3 | Thinking level per model | `modelThinkingLevels` | ❌ | P2 |
 | C4 | Custom providers and models | `models.json`: form editor plus a raw JSON editor checked against `schemas/models.schema.json` | ❌ | P3 |
 | C5 | Refresh the model catalogue | `pi update --models` | ❌ | P3 |
-| C6 | Local llama.cpp models | pocketpi `/api/llama` | ✅ iOS · ❌ web | P2 (web) |
+| C6 | Local llama.cpp models | pocketpi `/api/llama` | ✅ iOS · ✅ web (W3) | P2 (web) |
 | C7 | Cache warming and the hide-thinking toggle | settings | ❌ | P3 |
 
 ### D. Providers and auth
@@ -120,7 +120,7 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 
 | # | Feature | pi mechanism | pocketpi now | Pri |
 |---|---|---|---|---|
-| H1 | Usage dashboard: cost and tokens per day, model, project and provider pool, across all sessions | aggregate `usage` from assistant messages and `usage` entries in session files, cached by (mtime, size) like `sessions::scan` | ❌ | P2 |
+| H1 | Usage dashboard: cost and tokens per day, model, project and provider pool, across all sessions | aggregate `usage` from assistant messages and `usage` entries in session files, cached by (mtime, size) like `sessions::scan` | ✅ (W3, Settings › Usage) | P2 |
 | H2 | pi version, update available, self-update | `pi --version`, `pi update --self`, CHANGELOG | ❌ | P3 |
 
 ### Parity between pocketpi's two clients (from the inventory)
@@ -571,6 +571,7 @@ again.
 | 30 | `trust` | W2-trust-resources |
 | 40 | `resources` | W2-trust-resources |
 | 50 | `safety` | S3 |
+| 60 | `usage` | W3-export-usage |
 | 1000 | `about` | W2-shell |
 
 Use the same id and order on web and iOS.
