@@ -115,7 +115,7 @@ final class LaunchTests: XCTestCase {
         keep(app, "project")
 
         // The Chat tab at the top: plain chats, any model, local ones too.
-        app.tabBars.buttons["Chat"].tap()
+        showTab(app, "Chat")
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         let plainChat = app.descendants(matching: .any)["chat-tab-row"].firstMatch
         XCTAssertTrue(plainChat.waitForExistence(timeout: 10))
@@ -146,7 +146,7 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).
-        app.tabBars.buttons["Work"].tap()
+        showTab(app, "Work")
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
 
         // A chat, for the composer and the transcript.
@@ -208,6 +208,18 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
         sleep(1)
         keep(app, "title-menu")
+    }
+
+    /// The tab bar minimizes on scroll down to just the current tab; a tap
+    /// on that brings the others back.
+    @MainActor
+    private func showTab(_ app: XCUIApplication, _ name: String) {
+        let tab = app.tabBars.buttons[name]
+        if !tab.waitForExistence(timeout: 2) {
+            app.tabBars.buttons.firstMatch.tap()
+        }
+        XCTAssertTrue(tab.waitForExistence(timeout: 5))
+        tab.tap()
     }
 
     @MainActor
