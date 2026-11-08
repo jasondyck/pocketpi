@@ -97,6 +97,12 @@ impl File {
         matches!(self, File::Settings | File::Mcp | File::Permissions)
     }
 
+    /// Whole-file text editing (the raw editor): only settings, which hold
+    /// no secrets to redact.
+    pub fn raw_editable(self) -> bool {
+        matches!(self, File::Settings)
+    }
+
     /// A permission policy (ordered rule maps).
     pub fn is_policy(self) -> bool {
         matches!(self, File::Permissions | File::StagePolicy)
@@ -233,6 +239,50 @@ impl Admin {
             apply(&mut doc, patch)?;
         }
         write(&path, &doc, file.default_mode()).map_err(|e| AdminError::Io(format!("{}: {e}", path.display())))?;
+        if file.bumps_epoch() {
+            self.bump();
+        }
+        Ok(self.view(file, cwd, &path, doc, true))
+    }
+}
+
+impl Admin {
+    /// The raw editor's read: the file's text as it is on disk (even when it
+    /// isn't valid JSON, so it can be fixed), or None when it doesn't exist.
+    pub fn read_text(&self, file: File, cwd: Option<&str>) -> Result<(PathBuf, Option<String>), AdminError> {
+        if !file.raw_editable() {
+            return Err(AdminError::Bad(format!("{} can't be edited as text", file.file_name())));
+        }
+        let path = self.path(file, cwd)?;
+        let _g = self.lock.lock().unwrap();
+        match std::fs::read_to_string(&path) {
+            Ok(t) => Ok((path, Some(t))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((path, None)),
+            Err(e) => Err(AdminError::Io(format!("{}: {e}", path.display()))),
+        }
+    }
+
+    /// The raw editor's write: the whole file replaced by `text`, kept as
+    /// typed (the caller has checked it against the schema), with the same
+    /// lock and backups as a patch. Bumps the epoch like any settings write.
+    pub fn replace(&self, file: File, cwd: Option<&str>, text: &str) -> Result<Value, AdminError> {
+        if !file.raw_editable() {
+            return Err(AdminError::Bad(format!("{} can't be edited as text", file.file_name())));
+        }
+        let doc: Value = serde_json::from_str(text).map_err(|e| AdminError::Bad(format!("not valid JSON: {e}")))?;
+        if !doc.is_object() {
+            return Err(AdminError::Bad("the file must be a JSON object".into()));
+        }
+        if contains_redacted(&doc) {
+            return Err(AdminError::Bad(format!("refusing to store the {REDACTED} placeholder")));
+        }
+        let path = self.path(file, cwd)?;
+        let _g = self.lock.lock().unwrap();
+        let mut text = text.to_string();
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        write_text(&path, &text, file.default_mode()).map_err(|e| AdminError::Io(format!("{}: {e}", path.display())))?;
         if file.bumps_epoch() {
             self.bump();
         }
@@ -433,6 +483,16 @@ pub fn apply(doc: &mut Value, patch: &Patch) -> Result<(), AdminError> {
 /// `.tmp` + rename, keeping the old file as the newest backup. A symlinked
 /// file (dotfiles repos) is written through to its target.
 fn write(path: &Path, doc: &Value, default_mode: u32) -> std::io::Result<()> {
+    let mut text = serde_json::to_string_pretty(doc)?;
+    text.push('\n');
+    write_text(path, &text, default_mode)
+}
+
+/// Writes `text` the way every pocketpi edit of pi's files goes: `.tmp` +
+/// rename, the old version kept as `<file>.pocketpi.bak` (then `.bak.1`,
+/// `.bak.2`), symlinks written through. Also used for the context files
+/// (src/pi_context.rs).
+pub(crate) fn write_text(path: &Path, text: &str, default_mode: u32) -> std::io::Result<()> {
     let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -445,11 +505,19 @@ fn write(path: &Path, doc: &Value, default_mode: u32) -> std::io::Result<()> {
         set_mode(&backup_paths(&path)[0], mode)?;
     }
     let tmp = sibling(&path, ".pocketpi.tmp");
-    let mut text = serde_json::to_string_pretty(doc)?;
-    text.push('\n');
     std::fs::write(&tmp, text)?;
     set_mode(&tmp, mode)?;
     std::fs::rename(&tmp, &path)
+}
+
+/// Removes a file, keeping it as the newest backup (a symlink's target).
+pub(crate) fn remove_with_backup(path: &Path) -> std::io::Result<()> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !path.exists() {
+        return Ok(());
+    }
+    rotate_backups(&path)?;
+    std::fs::remove_file(&path)
 }
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -809,5 +877,27 @@ mod tests {
         let mut doc = json!({"a": 1, "b": 2, "c": 3});
         apply(&mut doc, &patch(json!({"unset": ["a"]}))).unwrap();
         assert_eq!(serde_json::to_string(&doc).unwrap(), r#"{"b":2,"c":3}"#);
+    }
+
+    #[test]
+    fn raw_text_reads_broken_files_and_replaces_with_a_backup() {
+        let dir = scratch();
+        let admin = Admin::new(dir.clone());
+        let path = dir.join("settings.json");
+        assert_eq!(admin.read_text(File::Settings, None).unwrap().1, None);
+        std::fs::write(&path, "{ broken").unwrap();
+        assert_eq!(admin.read_text(File::Settings, None).unwrap().1.as_deref(), Some("{ broken"));
+        // Kept as typed, the broken one backed up.
+        let v = admin.replace(File::Settings, None, "{\"a\":   1}").unwrap();
+        assert_eq!(v["data"], json!({"a": 1}));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":   1}\n");
+        assert_eq!(std::fs::read_to_string(&backup_paths(&path)[0]).unwrap(), "{ broken");
+        assert_eq!(admin.epoch(), 1);
+        assert!(matches!(admin.replace(File::Settings, None, "[1]"), Err(AdminError::Bad(_))));
+        assert!(matches!(admin.replace(File::Settings, None, "{nope"), Err(AdminError::Bad(_))));
+        assert!(matches!(admin.replace(File::Auth, None, "{}"), Err(AdminError::Bad(_))));
+        assert!(matches!(admin.read_text(File::Models, None), Err(AdminError::Bad(_))));
+        assert_eq!(admin.epoch(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

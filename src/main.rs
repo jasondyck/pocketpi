@@ -24,6 +24,9 @@ mod ext_ui;
 mod pi_resources;
 mod dialogs;
 mod safety;
+mod json_schema;
+mod pi_context;
+mod pi_settings_raw;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -273,6 +276,7 @@ async fn main() {
         .route("/app.js", get(|| async { static_file("app.js") }))
         .route("/app.css", get(|| async { static_file("app.css") }))
         .route("/manage.js", get(|| async { static_file("manage.js") }))
+        .route("/chat-tools.js", get(|| async { static_file("chat-tools.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -340,6 +344,8 @@ async fn main() {
         .route("/api/pi/providers/{id}/key", post(pi_providers::set_key))
         .route("/api/pi/providers/{id}/remove", post(pi_providers::remove_key))
         .merge(pi_resources::router())
+        .merge(pi_context::router())
+        .merge(pi_settings_raw::router())
         .route("/api/safety", get(safety::info))
         .route("/api/safety/recommended", post(safety::use_recommended))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
@@ -412,6 +418,7 @@ const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("trust"),
     manage_page!("resources"),
     manage_page!("safety"),
+    manage_page!("context"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {
@@ -431,6 +438,7 @@ fn static_file(name: &str) -> Response {
         "app.js" => (include_bytes!("../web/app.js"), "text/javascript; charset=utf-8"),
         "app.css" => (include_bytes!("../web/app.css"), "text/css; charset=utf-8"),
         "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
+        "chat-tools.js" => (include_bytes!("../web/chat-tools.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
