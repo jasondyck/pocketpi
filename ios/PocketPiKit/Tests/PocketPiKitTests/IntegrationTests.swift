@@ -487,6 +487,45 @@ struct IntegrationTests {
         }
     }
 
+    @Test func settingsPagePatchesRoundTripKeepingUnknownKeys() async throws {
+        let before = try await client.config(.settings)
+        let liveBefore = try await client.piStatus().live.count
+        // Keys the page doesn't know, next to ones it edits.
+        _ = try await client.patchConfig(.settings, PiConfigPatch(set: [
+            "theme": "dark", "compaction.modelOverrides": ["fake/echo-1": ["reserveTokens": 1000]],
+        ]))
+        let models = try await client.availableModels()
+        let echo = try #require(models.first { $0.key == "fake/echo-1" })
+        // Each control's write, as the page sends it.
+        _ = try await client.patchConfig(.settings, PiSettings.defaultModelPatch(echo))
+        _ = try await client.patchConfig(.settings, PiSettings.patch(PiSettings.spec("steeringMode")!, "all"))
+        _ = try await client.patchConfig(.settings, PiSettings.patch(PiSettings.spec("compaction.reserveTokens")!, 9000))
+        _ = try await client.patchConfig(.settings, PiSettings.modelThinkingPatch("other/glm-5.2", "xhigh"))
+        var favourites = EnabledModels.parse(before.data["enabledModels"])
+        favourites = EnabledModels.moving(EnabledModels.adding(ModelPattern(pattern: echo.key, thinking: "low"), to: favourites), at: 2, by: -1)
+        let doc = try await client.patchConfig(.settings, EnabledModels.patch(favourites))
+        #expect(doc.data["theme"]?.string == "dark")
+        #expect(doc.data["compaction"]?["modelOverrides"]?["fake/echo-1"]?["reserveTokens"]?.int == 1000)
+        #expect(PiSettings.int(doc.data, PiSettings.spec("compaction.reserveTokens")!) == 9000)
+        #expect(PiSettings.bool(doc.data, PiSettings.spec("compaction.enabled")!))
+        #expect(PiSettings.defaultModel(doc.data) == "fake/echo-1")
+        #expect(PiSettings.string(doc.data, PiSettings.spec("steeringMode")!) == "all")
+        #expect(PiSettings.modelThinking(doc.data).first { $0.model == "other/glm-5.2" }?.level == "xhigh")
+        #expect(EnabledModels.parse(doc.data["enabledModels"]).map(\.raw) == ["other/glm-5.2", "fake/echo-1:low", "fake/echo-*"])
+        #expect(PiSettings.compactionOverrides(doc.data).map(\.model) == ["fake/echo-1"])
+        // Back to defaults, then back to how the other tests expect it.
+        _ = try await client.patchConfig(.settings, PiSettings.defaultModelPatch(nil))
+        _ = try await client.patchConfig(.settings, PiSettings.modelThinkingPatch("other/glm-5.2", nil))
+        _ = try await client.patchConfig(.settings, PiSettings.patch(PiSettings.spec("steeringMode")!, nil))
+        let after = try await client.patchConfig(.settings, PiConfigPatch(set: ["enabledModels": before.data["enabledModels"] ?? .null],
+                                                                          unset: ["theme", "compaction", "modelThinkingLevels"]))
+        #expect(after.data == before.data)
+        // The temporary pi availableModels may have started is gone again.
+        let end = Date().addingTimeInterval(5)
+        while try await client.piStatus().live.count > liveBefore, Date() < end { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(try await client.piStatus().live.count <= liveBefore)
+    }
+
     @Test func neverReturnsCredentials() async throws {
         let doc = try await client.patchConfig(.auth, PiConfigPatch(set: ["fakeprov": ["type": "api_key", "key": "sk-test-secret"]]))
         let raw = String(decoding: try doc.data.encoded(), as: UTF8.self)
