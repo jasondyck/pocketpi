@@ -29,6 +29,15 @@ if [ "${1:-}" != "--unit" ]; then
   cargo build --release --quiet
   mkdir -p "$SCRATCH/home/project" "$SCRATCH/sessions" "$SCRATCH/home/.config/pocketpi/apns"
   mkdir -p "$SCRATCH/home/.pi/agent"
+  # Resources for Settings › Resources and project trust: one global
+  # extension, skill and prompt (the ones fake-pi's get_commands names), and a
+  # project prompt that only loads once the project is trusted.
+  A="$SCRATCH/home/.pi/agent"
+  mkdir -p "$A/extensions" "$A/skills/review" "$A/prompts" "$SCRATCH/home/project/.pi/prompts"
+  echo 'export default function () {}' > "$A/extensions/hello.ts"
+  printf -- '---\nname: review\ndescription: Review the staged diff\n---\nReview it.\n' > "$A/skills/review/SKILL.md"
+  printf -- '---\ndescription: Fix failing tests\nargument-hint: "<file>"\n---\nFix $1\n' > "$A/prompts/fix-tests.md"
+  printf -- '---\ndescription: Deploy this project\n---\nDeploy.\n' > "$SCRATCH/home/project/.pi/prompts/deploy.md"
   mkdir -p "$SCRATCH/home/.config/pocketpi/workflows"
   cat > "$SCRATCH/home/.config/pocketpi/workflows/approve-test.json" <<JSON
 {"id":"approve-test","name":"Approve test","project":"$SCRATCH/home/project","worktree":false,"enabled":true,

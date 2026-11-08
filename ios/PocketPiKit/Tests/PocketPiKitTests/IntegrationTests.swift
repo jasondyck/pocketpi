@@ -709,4 +709,76 @@ struct IntegrationTests {
         #expect(try await client.jobs().contains { $0.id == id })
         await #expect(throws: PocketPiError.self) { _ = try await client.startJob(.install(source: "--evil")) }
     }
+
+    // MARK: trust and resources (test-linux.sh seeds the scratch HOME)
+
+    @Test func trustToggleRoundTrip() async throws {
+        try await client.saveProject(path: projectDir)
+        var o = try await client.trustOverview()
+        var p = try #require(o.projects.first { $0.path == projectDir })
+        #expect(p.needsTrust)
+        #expect(p.protected.contains(".pi/prompts"))
+        #expect(p.decision == nil && !p.trusted)
+        #expect(o.defaultTrust == .ask)
+        let epoch = try await client.piStatus().configEpoch
+
+        // The scratch path has a dot in it (mktemp): the key must be escaped.
+        let doc = try await client.setTrust(.trust, for: p.canonical)
+        #expect(doc.data[p.canonical]?.bool == true)
+        #expect(try await client.piStatus().configEpoch > epoch)
+        o = try await client.trustOverview()
+        p = try #require(o.projects.first { $0.path == projectDir })
+        #expect(p.choice == .trust && p.trusted && p.explicit)
+        #expect(o.entries[p.canonical] == true)
+
+        try await client.setTrust(.distrust, for: p.canonical)
+        p = try #require(try await client.trustOverview().projects.first { $0.path == projectDir })
+        #expect(p.choice == .distrust && !p.trusted)
+
+        try await client.setTrust(.none, for: p.canonical)
+        try await client.setDefaultProjectTrust(.always)
+        o = try await client.trustOverview()
+        p = try #require(o.projects.first { $0.path == projectDir })
+        #expect(o.defaultTrust == .always)
+        #expect(p.choice == .none && p.decision == nil && p.trusted)
+        #expect(o.entries[p.canonical] == nil)
+        try await client.setDefaultProjectTrust(.ask)
+        #expect(try await client.trustOverview().defaultTrust == .ask)
+    }
+
+    @Test func listsResources() async throws {
+        var r = try await client.resources(cwd: projectDir)
+        let names = { (k: PiResourceKind) in r.list(k).map(\.name) }
+        #expect(names(.skill).contains("review"))
+        #expect(names(.extensionFile).contains("hello"))
+        #expect(Set(names(.extensionFile)).isSuperset(of: ["mcp", "llama.cpp", "codemode", "tool-search"]))
+        let review = try #require(r.list(.skill).first { $0.name == "review" })
+        #expect(review.description == "Review the staged diff")
+        #expect(review.scope == .global && review.loads)
+        let fix = try #require(r.list(.prompt).first { $0.name == "fix-tests" })
+        #expect(fix.argumentHint == "<file>")
+        #expect(fix.toggle?.entry == "prompts/fix-tests.md")
+        // The project's own prompt is skipped until the project is trusted.
+        var deploy = try #require(r.list(.prompt).first { $0.name == "deploy" })
+        #expect(deploy.scope == .project && !deploy.loads && deploy.skipped == "project not trusted")
+        #expect(r.untrustedWarning != nil)
+        // Global only: no project resources.
+        let global = try await client.resources()
+        #expect(global.cwd == nil && !global.resources.contains { $0.name == "deploy" })
+
+        let canonical = try #require(r.trust?.canonical)
+        try await client.setTrust(.trust, for: canonical)
+        // A chat open in the project: what its pi reports is marked running.
+        let chat = try await client.newChat(cwd: projectDir)
+        r = try await client.resources(cwd: projectDir)
+        deploy = try #require(r.list(.prompt).first { $0.name == "deploy" })
+        #expect(deploy.loads && r.untrustedWarning == nil)
+        #expect(r.liveCommands != nil)
+        #expect(r.list(.prompt).first { $0.name == "fix-tests" }?.live == true)
+        #expect(r.list(.skill).first { $0.name == "review" }?.live == true)
+        #expect(r.list(.extensionFile).contains { $0.name == "pocketpi-workflows" && $0.scope == .temporary })
+        #expect(!r.resources.contains { $0.commands.contains("pp-tools") })
+        try await client.close(key: chat.key)
+        try await client.setTrust(.none, for: canonical)
+    }
 }
