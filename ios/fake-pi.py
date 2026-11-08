@@ -471,13 +471,20 @@ for line in sys.stdin:
         thinking = cmd.get("level", thinking)
         respond(cmd, {})
     elif t == "get_commands":
+        agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+        def info(path, scope="user", source="auto"):
+            return {"path": path, "source": source, "scope": scope, "origin": "top-level"}
         commands = [
-            {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt"},
-            {"name": "skill:review", "description": "Review the diff", "source": "skill"},
-            {"name": "workflows", "source": "extension"},
+            {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt",
+             "sourceInfo": info(os.path.join(agent, "prompts", "fix-tests.md"))},
+            {"name": "skill:review", "description": "Review the diff", "source": "skill",
+             "sourceInfo": info(os.path.join(agent, "skills", "review", "SKILL.md"))},
+            {"name": "workflows", "source": "extension",
+             "sourceInfo": info("/fake/pocketpi-workflows.ts", "temporary", "cli")},
         ]
         if control:
-            commands.append({"name": "pp-tools", "description": "pocketpi: list this chat's tools", "source": "extension"})
+            commands.append({"name": "pp-tools", "description": "pocketpi: list this chat's tools", "source": "extension",
+                             "sourceInfo": info("/fake/pocketpi-control.ts", "temporary", "cli")})
         respond(cmd, {"commands": commands})
     elif t == "get_fork_messages":
         respond(cmd, {"messages": [{"entryId": eid, "text": fork_text(m)} for eid, m in entries

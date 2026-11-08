@@ -38,7 +38,7 @@ ppManage.register({
 .rs-detail span { font: 12.5px var(--mono); overflow-wrap: anywhere; }`);
     const { esc } = ctx;
     const tilde = (p) => (p && ctx.home && p.startsWith(ctx.home + "/") ? "~" + p.slice(ctx.home.length) : p || "");
-    const KINDS = [["extension", "Extensions"], ["skill", "Skills"], ["prompt", "Prompt templates"]];
+    const KINDS = [["extension", "Extensions", "Extensions"], ["skill", "Skills", "Skills"], ["prompt", "Prompt templates", "Prompts"]];
     const SCOPES = { global: "global", project: "project", package: "package", builtin: "built-in", temporary: "-e" };
     let project = ctx.project || "";
     let filter = "all";
@@ -125,7 +125,7 @@ ppManage.register({
 
       const list = data.resources || [];
       const seg = ctx.el("div", "seg");
-      for (const [v, label] of [["all", "All"], ...KINDS.map(([k, l]) => [k, l.split(" ")[0]])]) {
+      for (const [v, label] of [["all", "All"], ...KINDS.map(([k, , short]) => [k, short])]) {
         const n = v === "all" ? list.length : list.filter((r) => r.kind === v).length;
         const b = ctx.el("button", v === filter ? "on" : "", `${esc(label)} ${n}`);
         b.dataset.filter = v;
