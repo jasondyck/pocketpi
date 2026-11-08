@@ -151,6 +151,14 @@ model = MODELS[0]
 thinking = "medium"
 
 
+# Router models loaded when this pi started (ios/fake-llama.py), like pi's
+# llama.cpp provider with --no-models-autoload.
+LLAMA = []
+if os.environ.get("FAKE_LLAMA_STATE") and os.path.exists(os.environ["FAKE_LLAMA_STATE"]):
+    LLAMA = [{"id": m, "name": m, "provider": "llama.cpp", "reasoning": False, "contextWindow": 32768, "input": ["text"]}
+             for m, s in json.load(open(os.environ["FAKE_LLAMA_STATE"])).items() if s == "loaded"]
+
+
 def state():
     return {
         "sessionFile": session_file,
@@ -202,9 +210,9 @@ for line in sys.stdin:
             {"name": "workflows", "source": "extension"},
         ]})
     elif t == "get_available_models":
-        respond(cmd, {"models": MODELS})
+        respond(cmd, {"models": MODELS + LLAMA})
     elif t == "set_model":
-        found = [m for m in MODELS if m["provider"] == cmd.get("provider") and m["id"] == cmd.get("modelId")]
+        found = [m for m in MODELS + LLAMA if m["provider"] == cmd.get("provider") and m["id"] == cmd.get("modelId")]
         if found:
             model = found[0]
             respond(cmd, model)

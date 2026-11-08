@@ -9,6 +9,14 @@ Why native: things a Home Screen web app can't do. The keyboard follows the
 finger when you swipe down (`.scrollDismissesKeyboard(.interactively)`), and
 notifications come through APNs.
 
+## Tabs
+
+A switch at the top flips between **Work** (projects, chats, workflows,
+approvals) and **Chat** (plain conversations: pi without tools, any model).
+The model sheet lists the llama.cpp router's models under *Local*; picking an
+unloaded one loads it on the router, restarts the chat's pi so pi sees it, and
+switches to it. `fake-llama.py` stands in for the router in the tests.
+
 ## Notifications
 
 The server sends every notification it already sends by web push (approvals,

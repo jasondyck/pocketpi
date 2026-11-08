@@ -47,7 +47,16 @@ private struct ChatScreen: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if session.transcript.isEmpty, session.path == nil {
-                        EmptyChat(project: model.projectName(for: session.cwd), cwd: Format.tilde(session.cwd, home: model.home))
+                        if session.cwd == model.chatDir {
+                            ContentUnavailableView {
+                                Label("Ask anything", systemImage: "bubble.left")
+                            } description: {
+                                Text("No tools here: pi only talks. Pick any model below, including local ones on the llama.cpp router.")
+                            }
+                            .padding(.top, 80)
+                        } else {
+                            EmptyChat(project: model.projectName(for: session.cwd), cwd: Format.tilde(session.cwd, home: model.home))
+                        }
                     }
                     let rows = session.transcript.rows
                     ForEach(rows) { row in
@@ -115,6 +124,16 @@ private struct ChatScreen: View {
             VStack(spacing: 0) {
                 if !session.activeRuns.isEmpty {
                     ActiveRuns(runs: session.activeRuns) { openedRun = $0 }
+                }
+                if let m = session.loadingLocal {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small).tint(Theme.signalText)
+                        Text("Loading \(m) on the llama.cpp router…").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("loading-local")
                 }
                 Composer(session: session)
             }
@@ -430,6 +449,9 @@ private struct ModelSheet: View {
                         }
                     }
                 }
+                if let router = session.llama, router.available {
+                    LocalModels(session: session, router: router) { dismiss() }
+                }
                 if reasoning {
                     Section {
                         NavigationLink {
@@ -451,6 +473,7 @@ private struct ModelSheet: View {
             }
             .navigationTitle("Select model")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await session.refreshLlama() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
             }
@@ -482,6 +505,56 @@ private struct AllModels: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// The llama.cpp router's models with their state. A loaded one is picked
+/// like any model; an unloaded one is loaded first (unloading the others,
+/// they share the GPU), which the chat shows while it happens.
+private struct LocalModels: View {
+    @Bindable var session: ChatSession
+    let router: LlamaRouter
+    let done: () -> Void
+
+    var body: some View {
+        Section {
+            if let e = router.error {
+                Label(e, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(router.models) { m in
+                Button {
+                    Task { await session.useLocal(m) }
+                    done()
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(m.id).foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                            Text(state(m)).font(.subheadline).foregroundStyle(m.isLoaded ? Theme.signalText : .secondary)
+                        }
+                        Spacer()
+                        if m.key == session.currentModel?.key {
+                            Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(session.loadingLocal != nil || m.status == "loading")
+                .accessibilityIdentifier("local-" + m.id)
+            }
+        } header: {
+            Text("Local · llama.cpp")
+        } footer: {
+            Text("Loading a model unloads the router's others; they share the GPU.")
+        }
+    }
+
+    private func state(_ m: LlamaModel) -> String {
+        switch m.status {
+        case "loaded": "Loaded"
+        case "sleeping": "Loaded · asleep"
+        case "loading": "Loading…"
+        default: m.failed ? "Failed to load last time" : "Not loaded · tap to load"
         }
     }
 }

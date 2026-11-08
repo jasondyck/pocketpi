@@ -190,7 +190,7 @@ struct IntegrationTests {
         let s = ChatSession(client: client, newIn: projectDir)
         await s.prepare()
         try await waitFor("the models") { !s.models.isEmpty }
-        #expect(s.models.count == 3)
+        #expect(s.models.filter { $0.provider != "llama.cpp" }.count == 3)
         #expect(s.currentModel?.id == "echo-1")
         #expect(s.thinkingLevels.count == 4)
         let mini = try #require(s.models.first { $0.id == "echo-mini" })
@@ -217,6 +217,54 @@ struct IntegrationTests {
         #expect(s.slashMatches.isEmpty)
         s.composer = "/"
         #expect(s.slashMatches.map(\.name) == ["fix-tests", "skill:review", "workflows"])
+        s.leave()
+    }
+
+    @Test func chatTabChatsStayOutOfWork() async throws {
+        let list = try await client.chats()
+        #expect(!list.chatDir.isEmpty)
+        let s = ChatSession(client: client, newIn: list.chatDir)
+        try await s.send("hello from the chat tab")
+        try await waitFor("the reply") { lastAssistantText(s)?.contains("hello from the chat tab") == true }
+        try await waitFor("the session file") { s.path != nil }
+        let chats = try await client.chats().sessions.map(\.path)
+        let work = try await client.sessions().map(\.path)
+        #expect(chats.contains(s.path!))
+        #expect(!work.contains(s.path!))
+        #expect(try await client.projects().projects.allSatisfy { $0.path != list.chatDir })
+        s.leave()
+    }
+
+    @Test func loadsALocalModel() async throws {
+        let router = try await client.llama()
+        #expect(router.available)
+        #expect(router.models.map(\.id).sorted() == ["broken", "other-chat", "tiny-chat"])
+        let s = ChatSession(client: client, newIn: projectDir)
+        await s.prepare()
+        try await waitFor("the models") { !s.models.isEmpty }
+        await s.refreshLlama()
+        #expect(s.models.contains { $0.key == "llama.cpp/tiny-chat" })
+        #expect(!s.models.contains { $0.key == "llama.cpp/other-chat" })
+
+        // Unloaded: loaded on the router (the other one unloaded), pi restarted to see it.
+        let other = try #require(s.llama?.models.first { $0.id == "other-chat" })
+        await s.useLocal(other)
+        #expect(s.problem == nil)
+        #expect(s.currentModel?.key == "llama.cpp/other-chat")
+        #expect(s.loadingLocal == nil)
+        let after = try await client.llama().models
+        #expect(after.first { $0.id == "other-chat" }?.status == "loaded")
+        #expect(after.first { $0.id == "tiny-chat" }?.status == "unloaded")
+
+        // The chat still works on the new pi.
+        try await s.send("after the switch")
+        try await waitFor("the reply") { lastAssistantText(s)?.contains("after the switch") == true }
+
+        // A model that fails to load says so and leaves the model alone.
+        let broken = try #require(after.first { $0.id == "broken" })
+        await s.useLocal(broken)
+        #expect(s.problem?.contains("broken") == true)
+        #expect(s.currentModel?.key == "llama.cpp/other-chat")
         s.leave()
     }
 

@@ -75,7 +75,7 @@ public struct ServerAddress: Sendable, Equatable, Codable {
 /// sends nothing but the `X-Pocketpi: 1` header every POST must carry.
 public final class PocketPiClient: Sendable {
     public let server: ServerAddress
-    private let session: URLSession
+    let session: URLSession
 
     public init(server: ServerAddress, session: URLSession = .shared) {
         self.server = server

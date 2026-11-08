@@ -19,15 +19,50 @@ struct PocketPiApp: App {
     }
 }
 
+enum AppMode: String {
+    case work, chat
+}
+
+private extension View {
+    /// One of the top tabs: hidden (to the eye, touch and VoiceOver) when
+    /// the other is showing.
+    func tabLayer(shown: Bool) -> some View {
+        opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+    }
+}
+
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         if model.client == nil {
             ConnectView()
         } else {
-            ChatListView()
-                .task { await model.enablePush() }
+            VStack(spacing: 0) {
+                // Work (projects, workflows, approvals) or Chat (plain
+                // conversations), at the top like a browser's tabs. Hidden on
+                // iPhone while a chat is open, so the chat keeps the screen.
+                if !model.chatOpen || sizeClass == .regular {
+                    Picker("Mode", selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
+                        Text("Work").tag(AppMode.work)
+                        Text("Chat").tag(AppMode.chat)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .accessibilityIdentifier("mode")
+                }
+                // Both stay alive, so switching keeps your place in each.
+                ZStack {
+                    ChatListView().tabLayer(shown: model.mode == .work)
+                    ChatTab().tabLayer(shown: model.mode == .chat)
+                }
+            }
+            .animation(.default, value: model.chatOpen)
+            .task { await model.enablePush() }
         }
     }
 }
@@ -79,6 +114,18 @@ final class AppModel {
     private(set) var projects: [Project] = []
     private(set) var sessions: [SessionInfo] = []
     private(set) var archived: [SessionInfo] = []
+    /// The Chat tab's chats and their folder (pi without tools there).
+    private(set) var chats: [SessionInfo] = []
+    private(set) var chatDir: String?
+    /// Which tab is showing; kept across launches.
+    var mode: AppMode = AppMode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .work {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
+    }
+    /// Each tab has a chat filling the screen (iPhone): the Work/Chat
+    /// switch steps aside while the showing tab does.
+    var workChatOpen = false
+    var chatTabOpen = false
+    var chatOpen: Bool { mode == .work ? workChatOpen : chatTabOpen }
     /// Workflow runs waiting for an approval, newest first.
     private(set) var approvals: [RunInfo] = []
     private(set) var workflows: [WorkflowInfo] = []
@@ -173,7 +220,13 @@ final class AppModel {
             async let a = client.archivedSessions()
             async let r = client.runs()
             async let w = client.workflows()
+            async let c = client.chats()
             let (pr, ss, aa, rr, ww) = try await (p, s, a, r, w)
+            // An older server has no Chat tab; Work still loads.
+            if let cc = try? await c {
+                chats = cc.sessions
+                chatDir = cc.chatDir.isEmpty ? nil : cc.chatDir
+            }
             approvals = rr.filter { $0.waitingApproval != nil }
             runs = rr
             workflows = ww
@@ -225,6 +278,7 @@ final class AppModel {
     }
 
     func projectName(for path: String) -> String {
+        if path == chatDir { return "Chat" }
         if let p = projects.first(where: { $0.path == path }) { return p.name }
         if path == home { return "Home" }
         return Format.baseName(path)

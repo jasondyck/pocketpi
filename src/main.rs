@@ -16,6 +16,7 @@ mod sensors;
 mod apns;
 mod push;
 mod improve;
+mod llama;
 
 use axum::{
     Json, Router,
@@ -83,6 +84,9 @@ pub struct AppState {
     /// pi's own folder (settings.json: the models people picked in pi).
     pub(crate) agent_dir: PathBuf,
     pub(crate) home: PathBuf,
+    /// Where the app's Chat tab keeps its chats: plain conversations, pi
+    /// without tools, left out of the projects and the Work chat list.
+    pub(crate) chat_dir: PathBuf,
     pub(crate) allowed_users: Option<Vec<String>>,
     pub(crate) suggest_model: String,
     pub(crate) suggest_slots: tokio::sync::Semaphore,
@@ -146,7 +150,11 @@ async fn main() {
         .unwrap_or(3457);
 
     std::sync::LazyLock::force(&BUILD_ID);
+    let chat_dir = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share")).join("pocketpi/chat");
+    let _ = std::fs::create_dir_all(&chat_dir);
+    let chat_dir = std::fs::canonicalize(&chat_dir).unwrap_or(chat_dir);
     let app = Arc::new(AppState {
+        chat_dir,
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
         sessions_dir,
         agent_dir: agent_dir.clone(),
@@ -182,6 +190,8 @@ async fn main() {
         .route("/api/projects/save", post(save_project))
         .route("/api/projects/hide", post(hide_project))
         .route("/api/sessions", get(list_sessions))
+        .route("/api/llama", get(llama::list))
+        .route("/api/llama/load", post(llama::load))
         .route("/api/sessions/archive", post(archive_session))
         .route("/api/models/enabled", get(enabled_models))
         .route("/api/dirs", get(list_dirs))
@@ -311,6 +321,14 @@ fn find_live_by_path(app: &AppState, path: &str) -> Option<Arc<Live>> {
         .cloned()
 }
 
+const CHAT_SYSTEM_PROMPT: &str = "You are a helpful, knowledgeable assistant chatting with the user from their phone. \
+Answer directly and conversationally. Use Markdown when it helps (lists, tables, code blocks). \
+You have no tools in this chat: you can't read files, run commands or browse.";
+
+fn is_chat_dir(app: &AppState, cwd: &str) -> bool {
+    std::path::Path::new(cwd) == app.chat_dir
+}
+
 async fn spawn_pi(app: &Arc<AppState>, cwd: &str, session: Option<&str>) -> AppResult<Arc<Live>> {
     spawn_pi_with(app, cwd, session, &[]).await
 }
@@ -320,6 +338,10 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
     cmd.arg("--mode").arg("rpc");
     if let Some(s) = session {
         cmd.arg("--session").arg(s);
+    }
+    // The Chat tab: a conversation, not a coding agent (also on reopen).
+    if is_chat_dir(app, cwd) {
+        cmd.arg("--no-tools").arg("--system-prompt").arg(CHAT_SYSTEM_PROMPT);
     }
     cmd.args(extra);
     cmd.current_dir(cwd)
@@ -598,6 +620,9 @@ struct SessionsQuery {
     /// `?archived=1`: only the archived chats (default: only the others).
     #[serde(default)]
     archived: Option<String>,
+    /// `?chat=1`: only the Chat tab's chats (default: everything else).
+    #[serde(default)]
+    chat: Option<String>,
 }
 
 async fn list_sessions(
@@ -605,10 +630,11 @@ async fn list_sessions(
     axum::extract::Query(q): axum::extract::Query<SessionsQuery>,
 ) -> Json<Value> {
     let want_archived = q.archived.as_deref().is_some_and(|v| v == "1" || v == "true");
+    let want_chat = q.chat.as_deref().is_some_and(|v| v == "1" || v == "true");
     let cfg = projects::load(&app.projects_path);
     let mut list = scan_with_live(&app).await;
-    list.retain(|s| cfg.archived.contains(&s.path) == want_archived);
-    Json(json!({ "sessions": list }))
+    list.retain(|s| cfg.archived.contains(&s.path) == want_archived && is_chat_dir(&app, &s.cwd) == want_chat);
+    Json(json!({ "sessions": list, "chat_dir": app.chat_dir }))
 }
 
 /// The models chosen in pi (`enabledModels` in pi's settings.json, the ones
@@ -658,7 +684,7 @@ async fn list_projects(State(app): State<Arc<AppState>>) -> Json<Value> {
     let mut list = scan_with_live(&app).await;
     let cfg = projects::load(&app.projects_path);
     // Counts and recency leave archived chats out, like the chat list.
-    list.retain(|s| !cfg.archived.contains(&s.path));
+    list.retain(|s| !cfg.archived.contains(&s.path) && !is_chat_dir(&app, &s.cwd));
     let home = app.home.to_string_lossy().to_string();
     Json(json!({ "projects": projects::build(&cfg, &list, &home), "home": home }))
 }

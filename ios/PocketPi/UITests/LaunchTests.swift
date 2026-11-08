@@ -114,6 +114,29 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
         keep(app, "project")
 
+        // The Chat tab at the top: plain chats, any model, local ones too.
+        app.segmentedControls["mode"].buttons["Chat"].tap()
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
+        let plainChat = app.descendants(matching: .any)["chat-tab-row"].firstMatch
+        XCTAssertTrue(plainChat.waitForExistence(timeout: 10))
+        keep(app, "chat-tab")
+        plainChat.tap()
+        XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
+                      || app.textFields["composer"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.segmentedControls["mode"].exists)
+        app.descendants(matching: .any)["model-button"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["local-tiny-chat"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["local-other-chat"].exists)
+        keep(app, "local-models")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        sleep(1)
+        app.navigationBars.firstMatch.buttons["BackButton"].tap()
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
+        // Back to Work, where it was left (natter's chats).
+        app.segmentedControls["mode"].buttons["Work"].tap()
+        XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
+
         // A chat, for the composer and the transcript.
         app.descendants(matching: .any)["chat-row"].firstMatch.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)

@@ -16,8 +16,10 @@ SWIFT_IMAGE=${SWIFT_IMAGE:-swift:6.4}
 PORT=${PORT:-3471}
 SCRATCH=$(mktemp -d)
 SERVER=""
+LLAMA=""
 cleanup() {
   [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null || true
+  [ -n "$LLAMA" ] && kill "$LLAMA" 2>/dev/null || true
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
@@ -58,6 +60,11 @@ w2 = dict(w, id="delete-me", name="Delete me")
 json.dump(w2, open(f"{d}/delete-me.json", "w"))
 PY
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
+  # A stand-in llama.cpp router, logged in the way pi's /login llama.cpp stores it.
+  LLAMA_PORT=$((PORT + 2))
+  export FAKE_LLAMA_STATE="$SCRATCH/llama.json"
+  "$REPO/ios/fake-llama.py" "$LLAMA_PORT" & LLAMA=$!
+  echo "{\"llama.cpp\":{\"type\":\"api_key\",\"env\":{\"LLAMA_BASE_URL\":\"http://127.0.0.1:$LLAMA_PORT\"}}}" > "$SCRATCH/home/.pi/agent/auth.json"
   # A throwaway APNs key, so device registration can be tested. Nothing in the
   # tests makes the server send a notification to Apple.
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \

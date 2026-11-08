@@ -38,6 +38,11 @@ public final class ChatSession {
 
     /// pi's enabled-model patterns (from its settings, via the server).
     public private(set) var enabledPatterns: [String] = []
+    /// The llama.cpp router's models (nil until fetched, or without a router).
+    public private(set) var llama: LlamaRouter?
+    /// A router model being loaded for this chat ("Loading … on arlo").
+    public private(set) var loadingLocal: String?
+
     /// Runs pi started in this chat that are still going, for the
     /// "work in progress" line above the composer.
     public private(set) var activeRuns: [RunInfo] = []
@@ -327,6 +332,63 @@ public final class ChatSession {
 
     /// Put a picked command in the composer, ready for its arguments.
     public func pick(_ c: SlashCommand) { composer = "/\(c.name) " }
+
+    public func refreshLlama() async {
+        llama = try? await client.llama()
+    }
+
+    /// Switch to a model on the llama.cpp router. An unloaded one is loaded
+    /// first (the server unloads the router's others); pi only lists router
+    /// models that were loaded when it started, so this chat's pi restarts
+    /// to see it. Then it's picked like any other model.
+    public func useLocal(_ m: LlamaModel) async {
+        loadingLocal = m.id
+        defer { loadingLocal = nil }
+        do {
+            if !m.isLoaded {
+                try await client.loadLlama(model: m.id)
+                await refreshLlama()
+            }
+            var found = models.first { $0.key == m.key }
+            if found == nil {
+                try await restartPi()
+                // pi asks the router as it starts; give it a moment.
+                for _ in 0..<20 {
+                    let list = ((try? await command(["type": "get_available_models"]))?["models"]?.array ?? []).compactMap(ModelInfo.init)
+                    if let hit = list.first(where: { $0.key == m.key }) {
+                        models = list.sorted { ($0.provider, $0.label) < ($1.provider, $1.label) }
+                        found = hit
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(500))
+                }
+            }
+            guard let found else {
+                problem = "pi doesn't list \(m.id) yet. Try again in a moment."
+                return
+            }
+            await setModel(found)
+        } catch {
+            if let e = error.reportable { problem = "Couldn't load \(m.id): " + e }
+        }
+    }
+
+    /// Start this chat's pi again (it keeps the conversation): pi reads
+    /// what's available as it starts.
+    func restartPi() async throws {
+        streamTask?.cancel()
+        streamTask = nil
+        if let key {
+            self.key = nil
+            try? await client.close(key: key)
+        }
+        if path != nil {
+            try await reopen()
+        } else {
+            try await ensureStarted()
+        }
+        if let s = try? await command(["type": "get_state"]) { state = ChatState(s) }
+    }
 
     public func refreshStats() async {
         if let s = try? await command(["type": "get_session_stats"]) { stats = SessionStats(s) }

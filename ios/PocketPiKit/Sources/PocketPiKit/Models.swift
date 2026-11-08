@@ -266,7 +266,7 @@ public struct ModelInfo: Sendable, Hashable, Identifiable {
             "github-copilot": "GitHub Copilot", "amazon-bedrock": "Amazon Bedrock",
             "azure-openai": "Azure OpenAI", "cerebras": "Cerebras", "zai": "Z.ai",
             "moonshot": "Moonshot", "minimax": "MiniMax", "ollama": "Ollama",
-            "lmstudio": "LM Studio", "huggingface": "Hugging Face", "vercel-ai-gateway": "Vercel AI Gateway",
+            "lmstudio": "LM Studio", "llama.cpp": "llama.cpp", "huggingface": "Hugging Face", "vercel-ai-gateway": "Vercel AI Gateway",
         ]
         if let k = known[p.lowercased()] { return k }
         return p.split(whereSeparator: { "-_ ".contains($0) })

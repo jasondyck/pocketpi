@@ -61,6 +61,12 @@ json.dump({"created": 1794000000000, "run_id": "x", "model": "openai-codex/gpt-6
            "violations": ["changes a shell command"], "workflow": w},
           open(f"{d}/.proposals/clipt-pr.json", "w"))
 PY
+# A stand-in llama.cpp router (two models, one loaded), logged in the way
+# pi's /login llama.cpp stores it, for the model sheet's Local section.
+LLAMA_PORT=$((PORT + 2))
+export FAKE_LLAMA_STATE="$SCRATCH/llama.json"
+nohup "$REPO/ios/fake-llama.py" "$LLAMA_PORT" >/dev/null 2>&1 &
+echo "{\"llama.cpp\":{\"type\":\"api_key\",\"env\":{\"LLAMA_BASE_URL\":\"http://127.0.0.1:$LLAMA_PORT\"}}}" > "$SCRATCH/home/.pi/agent/auth.json"
 HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
   PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
   POCKETPI_PORT="$PORT" nohup "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &
@@ -87,4 +93,7 @@ post /api/workflows/natter-deploy/run '{}' | python3 -c 'import json,sys; print(
 chat "$P/natter" "Check the SFU log with a tool, deploy, and summarize what changed since Monday"
 chat "$P/canopy" "What does the Modbus poller do when a sensor times out?"
 chat "$P/lantern-keep" "Plan the next puzzle room"
+# A Chat-tab chat (plain conversation, in the server's chat folder).
+CHAT_DIR=$(curl -fs "$URL/api/sessions?chat=1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_dir"])')
+chat "$CHAT_DIR" "What's a good way to keep sourdough starter over a long trip?"
 echo "$URL"
