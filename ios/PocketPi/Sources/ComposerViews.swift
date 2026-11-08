@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Stops the composer's running shell command (set by the chat screen).
 extension EnvironmentValues {
-    @Entry var abortBash: (@MainActor () -> Void)?
+    @Entry var abortBash: (@MainActor () -> Void)? = nil
 }
 
 /// A shell command from the composer (`!cmd`), live as it runs and the same
