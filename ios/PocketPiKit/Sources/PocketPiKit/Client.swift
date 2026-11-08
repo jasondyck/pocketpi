@@ -231,6 +231,12 @@ public final class PocketPiClient: Sendable {
     }
 
     /// Archive a chat, or bring it back. The session file stays on disk.
+    /// Delete an archived chat's session file for good (the server stops
+    /// its pi first if it's idle).
+    public func deleteSession(path: String) async throws {
+        _ = try await post("/api/sessions/delete", ["path": .string(path)], as: JSONValue.self)
+    }
+
     public func archiveSession(path: String, archived: Bool = true) async throws {
         _ = try await post("/api/sessions/archive", ["path": .string(path), "archived": .bool(archived)], as: JSONValue.self)
     }

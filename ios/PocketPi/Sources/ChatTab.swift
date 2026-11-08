@@ -9,6 +9,7 @@ import SwiftUI
 enum ChatRoute: Hashable {
     case open(String)
     case new(UUID)
+    case archived
 }
 
 struct ChatTab: View {
@@ -68,6 +69,15 @@ struct ChatTab: View {
             .navigationTitle("Chats")
             // Search and the new-chat button where Work's chat list has them.
             .modifier(ChatsSearch(search: $search, newChat: newChatButton))
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink(value: ChatRoute.archived) {
+                        Image(systemName: "archivebox")
+                    }
+                    .accessibilityLabel("Archived chats")
+                    .accessibilityIdentifier("chat-tab-archived")
+                }
+            }
             .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $newName)
                 Button("Cancel", role: .cancel) {}
@@ -87,6 +97,8 @@ struct ChatTab: View {
                 switch route {
                 case .open(let p):
                     ChatView(path: p, cwd: model.chatDir ?? "~")
+                case .archived:
+                    ArchivedChats()
                 case .new:
                     if let dir = model.chatDir {
                         ChatView(newIn: dir)
@@ -130,6 +142,55 @@ struct ChatTab: View {
             try await model.client?.archiveSession(path: s.path)
         } catch {
             model.problem = "Couldn't archive: " + error.localizedDescription
+        }
+        await model.refresh()
+    }
+}
+
+/// The Chat tab's archived chats: open one to read it, swipe to bring it
+/// back or delete it for good.
+private struct ArchivedChats: View {
+    @Environment(AppModel.self) private var model
+    @State private var deleting: SessionInfo?
+
+    var body: some View {
+        List {
+            ForEach(model.archivedChats) { s in
+                NavigationLink(value: ChatRoute.open(s.path)) {
+                    SessionRow(session: s, showProject: false, showBadge: false)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("archived-chat-row")
+                .swipeActions(edge: .trailing) {
+                    Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                    Button("Unarchive", systemImage: "tray.and.arrow.up") {
+                        Task { await unarchive(s) }
+                    }
+                    .tint(.blue)
+                }
+                .contextMenu {
+                    Button("Unarchive", systemImage: "tray.and.arrow.up") { Task { await unarchive(s) } }
+                    Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                }
+            }
+        }
+        .overlay {
+            if model.archivedChats.isEmpty {
+                ContentUnavailableView("Nothing archived", systemImage: "archivebox",
+                                       description: Text("Swipe left on a chat to archive it."))
+            }
+        }
+        .deleteChatConfirmation($deleting)
+        .refreshable { await model.refresh() }
+        .navigationTitle("Archived")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func unarchive(_ s: SessionInfo) async {
+        do {
+            try await model.client?.archiveSession(path: s.path, archived: false)
+        } catch {
+            model.problem = "Couldn't unarchive: " + error.localizedDescription
         }
         await model.refresh()
     }

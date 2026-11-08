@@ -193,6 +193,7 @@ async fn main() {
         .route("/api/llama", get(llama::list))
         .route("/api/llama/load", post(llama::load))
         .route("/api/sessions/archive", post(archive_session))
+        .route("/api/sessions/delete", post(delete_session))
         .route("/api/models/enabled", get(enabled_models))
         .route("/api/dirs", get(list_dirs))
         .route("/api/new", post(new_session))
@@ -678,6 +679,49 @@ async fn archive_session(State(app): State<Arc<AppState>>, Json(req): Json<Archi
     }
     projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "path": path, "archived": req.archived })))
+}
+
+#[derive(Deserialize)]
+struct DeleteReq {
+    path: String,
+}
+
+/// Delete an archived chat for good: its pi session file is removed. Only
+/// archived chats (archiving is the step before), and never one whose pi is
+/// running.
+async fn delete_session(State(app): State<Arc<AppState>>, Json(req): Json<DeleteReq>) -> AppResult<Json<Value>> {
+    let path = std::fs::canonicalize(&req.path).map_err(|_| err(StatusCode::NOT_FOUND, "session file not found"))?;
+    let root = std::fs::canonicalize(&app.sessions_dir).unwrap_or(app.sessions_dir.clone());
+    if !path.starts_with(&root) || path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return Err(err(StatusCode::FORBIDDEN, "not a pi session file"));
+    }
+    let path_s = path.to_string_lossy().to_string();
+    if !projects::load(&app.projects_path).archived.contains(&path_s) {
+        return Err(err(StatusCode::CONFLICT, "only archived chats can be deleted"));
+    }
+    // Viewed a moment ago: its pi may still be up (the reaper takes a while).
+    // Stop it first, unless it's in the middle of a reply.
+    if let Some(live) = find_live_by_path(&app, &path_s) {
+        if live.streaming.load(Ordering::Relaxed) {
+            return Err(err(StatusCode::CONFLICT, "pi is replying in this chat; stop it first"));
+        }
+        live.stdin.lock().await.take();
+        for _ in 0..50 {
+            if find_live_by_path(&app, &path_s).is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if find_live_by_path(&app, &path_s).is_some() {
+            return Err(err(StatusCode::CONFLICT, "this chat's pi didn't stop; try again"));
+        }
+    }
+    let _g = app.projects_lock.lock().unwrap();
+    let mut cfg = projects::load(&app.projects_path);
+    std::fs::remove_file(&path).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    cfg.archived.retain(|p| p != &path_s);
+    projects::save(&app.projects_path, &cfg).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "deleted": path_s })))
 }
 
 async fn list_projects(State(app): State<Arc<AppState>>) -> Json<Value> {

@@ -109,6 +109,7 @@ final class AppModel {
     private(set) var archived: [SessionInfo] = []
     /// The Chat tab's chats and their folder (pi without tools there).
     private(set) var chats: [SessionInfo] = []
+    private(set) var archivedChats: [SessionInfo] = []
     private(set) var chatDir: String?
     /// Which tab is showing (a notification can switch it).
     var mode: AppMode = .work
@@ -215,6 +216,7 @@ final class AppModel {
                 chats = cc.sessions
                 chatDir = cc.chatDir.isEmpty ? nil : cc.chatDir
             }
+            if let ac = try? await client.chats(archived: true) { archivedChats = ac.sessions }
             approvals = rr.filter { $0.waitingApproval != nil }
             runs = rr
             workflows = ww
@@ -246,6 +248,20 @@ final class AppModel {
             try await client.archiveSession(path: s.path, archived: on)
         } catch {
             if let m = error.reportable { problem = (on ? "Couldn't archive: " : "Couldn't unarchive: ") + m }
+        }
+        await refresh()
+    }
+
+    /// Delete an archived chat for good: gone from the list at once, then
+    /// from the server; on failure the lists reload and an alert says why.
+    func delete(_ s: SessionInfo) async {
+        guard let client else { return }
+        archived.removeAll { $0.path == s.path }
+        archivedChats.removeAll { $0.path == s.path }
+        do {
+            try await client.deleteSession(path: s.path)
+        } catch {
+            if let m = error.reportable { problem = "Couldn't delete: " + m }
         }
         await refresh()
     }

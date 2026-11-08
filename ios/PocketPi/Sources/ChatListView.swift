@@ -278,6 +278,7 @@ private struct ChatsView: View {
     @State private var search = ""
     @State private var renaming: SessionInfo?
     @State private var newName = ""
+    @State private var deleting: SessionInfo?
 
     private var project: String? {
         if case .project(let p) = scope { return p }
@@ -318,6 +319,9 @@ private struct ChatsView: View {
                     .accessibilityIdentifier("chat-row")
                     // Like Mail: a full swipe left archives.
                     .swipeActions(edge: .trailing) {
+                        if isArchive {
+                            Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                        }
                         archiveButton(s)
                         Button("Rename", systemImage: "pencil") {
                             newName = s.displayTitle
@@ -330,6 +334,9 @@ private struct ChatsView: View {
                             renaming = s
                         }
                         archiveButton(s)
+                        if isArchive {
+                            Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                        }
                     }
             }
             if visible.isEmpty, !model.loading, model.loadError == nil {
@@ -360,6 +367,9 @@ private struct ChatsView: View {
             }
         }
         .refreshable { await model.refresh() }
+        .deleteChatConfirmation($deleting) { s in
+            if case .chat(let path, _) = target, path == s.path { target = nil }
+        }
         .navigationTitle(isArchive ? "Archived" : project.map(model.projectName(for:)) ?? "All chats")
     }
 
@@ -402,6 +412,36 @@ struct ChatsSearch<NewChat: View>: ViewModifier {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { newChat }
             }
+    }
+}
+
+extension View {
+    /// "Delete this chat?" before an archived chat goes for good.
+    func deleteChatConfirmation(_ item: Binding<SessionInfo?>, before: @escaping (SessionInfo) -> Void = { _ in }) -> some View {
+        modifier(DeleteChatConfirmation(item: item, before: before))
+    }
+}
+
+private struct DeleteChatConfirmation: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Binding var item: SessionInfo?
+    let before: (SessionInfo) -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Delete this chat?",
+            isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } }),
+            titleVisibility: .visible,
+            presenting: item
+        ) { s in
+            Button("Delete Chat", role: .destructive) {
+                before(s)
+                Task { await model.delete(s) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { s in
+            Text("“\(s.displayTitle)” will be deleted from the server. This can't be undone.")
+        }
     }
 }
 

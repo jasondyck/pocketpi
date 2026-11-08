@@ -253,6 +253,24 @@ struct IntegrationTests {
         #expect(try await !client.sessions().contains { $0.path == s.path })
     }
 
+    @Test func deletesOnlyArchivedChats() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("delete me later")
+        try await waitFor("the reply") { !s.isStreaming && lastAssistantText(s) != nil }
+        try await waitFor("the session file") { s.path != nil }
+        let path = try #require(s.path)
+        s.leave()
+        // Not archived: refused, and the file stays.
+        await #expect(throws: PocketPiError.self) { try await client.deleteSession(path: path) }
+        #expect(try await client.sessions().contains { $0.path == path })
+        // Archived, its pi still up from a moment ago: stopped, then deleted.
+        try await client.archiveSession(path: path)
+        try await client.deleteSession(path: path)
+        #expect(try await !client.archivedSessions().contains { $0.path == path })
+        #expect(try await !client.sessions().contains { $0.path == path })
+        await #expect(throws: PocketPiError.self) { try await client.open(path: path) }
+    }
+
     @Test func loadsALocalModel() async throws {
         let router = try await client.llama()
         #expect(router.available)
