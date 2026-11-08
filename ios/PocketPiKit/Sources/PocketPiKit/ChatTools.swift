@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // A chat's tools (the "Tools" screen from the chat's title menu;
 // docs/pi-parity-plan.md F5): what pocketpi-control's `/pp-tools` lists,
@@ -94,5 +95,55 @@ public enum ChatTools {
     public static func count(_ tools: [PiTool]) -> String {
         let shown = tools.filter { !$0.isHidden }
         return "\(shown.filter(\.active).count) of \(shown.count) on"
+    }
+}
+
+/// The Tools screen's state: the chat's tools, loaded and switched through
+/// pocketpi-control. One per open screen.
+@MainActor
+@Observable
+public final class ChatToolsModel {
+    public let client: PocketPiClient
+    public let key: String
+    public private(set) var tools: [PiTool] = []
+    public private(set) var loaded = false
+    /// A call is in flight; switches wait.
+    public private(set) var busy = false
+    public var problem: String?
+
+    public init(client: PocketPiClient, key: String) {
+        self.client = client
+        self.key = key
+    }
+
+    public var sections: [(group: PiToolGroup, tools: [PiTool])] { ChatTools.sections(tools) }
+    public var count: String { ChatTools.count(tools) }
+
+    public func load() async {
+        do {
+            tools = try await client.tools(key: key)
+            loaded = true
+        } catch {
+            problem = error.reportable
+        }
+    }
+
+    public func set(_ name: String, on: Bool) async {
+        await apply(ChatTools.active(after: name, on: on, in: tools))
+    }
+
+    public func set(_ group: PiToolGroup, on: Bool) async {
+        await apply(ChatTools.active(setting: group, on: on, in: tools))
+    }
+
+    private func apply(_ active: [String]) async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            tools = try await client.setActiveTools(key: key, active)
+        } catch {
+            problem = error.reportable
+        }
     }
 }

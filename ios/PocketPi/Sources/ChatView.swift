@@ -39,6 +39,7 @@ private struct ChatScreen: View {
     @State private var following = true
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var openedRun: String?
+    @State private var showTools = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -170,7 +171,9 @@ private struct ChatScreen: View {
                 Task { await session.clone() }
             }
             .disabled(session.isStreaming || session.path == nil)
+            ChatToolsMenuButton(session: session, shown: $showTools)
         }
+        .chatToolsSheet(isPresented: $showTools, session: session)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { ContextGauge(session: session) }
         }

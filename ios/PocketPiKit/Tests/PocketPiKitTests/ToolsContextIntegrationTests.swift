@@ -37,7 +37,18 @@ extension IntegrationTests {
         after = try await client.setActiveTools(key: key, ChatTools.active(setting: .mcp, on: false, in: after))
         #expect(!after.contains { $0.group == .mcp && $0.active })
         #expect(ChatTools.count(after) == "4 of 8 on")
+        // The screen's model does the same.
+        let m = ChatToolsModel(client: client, key: key)
+        await m.load()
+        #expect(m.loaded && m.problem == nil && m.count == "4 of 8 on")
+        await m.set("grep", on: true)
+        #expect(m.tools.first { $0.name == "grep" }?.active == true)
+        await m.set(.extensions, on: false)
+        #expect(m.count == "4 of 8 on")
         try await client.close(key: key)
+        let gone = ChatToolsModel(client: client, key: key)
+        await gone.load()
+        #expect(!gone.loaded && gone.problem != nil)
     }
 
     @Test func contextFilesWriteAndRead() async throws {

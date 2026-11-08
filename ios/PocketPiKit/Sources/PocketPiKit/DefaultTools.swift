@@ -2,7 +2,7 @@ import Foundation
 
 // `defaultTools` in pi's settings (docs/settings.md; docs/pi-parity-plan.md
 // F6): the tools a new chat starts with. The web twin is the "Default tools"
-// card in web/manage-settings-tools.js.
+// card in web/manage-settings.js.
 //
 //   - plain names replace the inherited selection: ["read", "grep"]
 //   - a list of only `+name` / `-name` entries changes it: ["+codemode"]
