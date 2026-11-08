@@ -61,6 +61,10 @@ const S = {
   stick: true,
   connecting: null,
   reconnectTimer: null,
+  search: null,      // content-search state: {term, results, total, loading, more, error}
+  searchRole: "",    // role filter, kept across query edits
+  searchSeq: 0,      // bumps to drop a stale response
+  searchFocus: null, // chip to focus after the next render (the render replaces it)
 };
 
 // ---------------------------------------------------------------- api
@@ -264,10 +268,10 @@ function diffBlock(diff) {
 }
 function makeCard(call) {
   const d = el("details", "tool");
-  d.innerHTML = `<summary><span class="ticon">${TOOL_ICON[call.name] || ICON.tool}</span><span class="tname"></span><span class="targ"></span><span class="tmeta"></span></summary><div class="tbody"></div>`;
+  d.innerHTML = `<summary><span class="ticon">${TOOL_ICON[call.name] || ICON.tool}</span><span class="tname"></span><span class="targ"></span><span class="tmeta"></span><span class="ag-inline"></span></summary><div class="tbody"></div>`;
   const q = (s) => d.querySelector(s);
   const api = {
-    el: d, name: call.name, args: call.arguments || {}, result: null, isError: false, partial: null, duration: null,
+    el: d, id: call.id, name: call.name, args: call.arguments || {}, result: null, isError: false, partial: null, duration: null,
     setCall(c) { api.name = c.name || api.name; api.args = c.arguments || api.args; q(".tname").textContent = api.name; q(".targ").textContent = toolArgSummary(api.name, api.args); if (d.open) api.renderBody(); },
     setState(s) { d.classList.toggle("run", s === "run"); d.classList.toggle("err", s === "err"); d.classList.toggle("ok", s === "ok"); },
     setPartial(r) { api.partial = r; if (d.open) api.renderBody(); },
@@ -304,6 +308,7 @@ function makeCard(call) {
         if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text, 6000, api.name === "bash"));
         for (const p of r.content) if (p.type === "image") { const img = el("img"); img.src = `data:${p.mimeType};base64,${p.data}`; sec("Image", img); }
       } else if (!r) sec("Status", el("pre", "", "waiting…"));
+      window.ppAgents?.cardBody?.(body, api);
     },
   };
   d.addEventListener("toggle", () => { if (d.open) api.renderBody(); });
@@ -712,6 +717,7 @@ function onEvent(ev) {
 
 async function afterRun() {
   refreshStats();
+  window.ppAgents?.sync?.();
   maybeSuggest();
   if (!S.path) {
     try { const st = await cmd({ type: "get_state" }); S.state = st; if (st.sessionFile) setPath(st.sessionFile); } catch {}
@@ -782,6 +788,7 @@ async function loadSnapshot() {
     updateHeader(); updateChips();
     refreshStats(); loadLevels();
     maybeSuggest();
+    window.ppAgents?.sync?.();
   } catch (e) { banner(esc(e.message), true); }
 }
 async function refreshStats() {
@@ -1151,6 +1158,7 @@ async function openChatSheet() {
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
     window.ppChatTools?.sheetEntry(b);
+    window.ppAgents?.sheetEntry?.(b);
     window.ppChat?.chatSheet(b);
     window.ppManage?.sheetEntry(b);
     b.append(opt(ICON.power, "Stop pi process", "Frees memory; reopening the chat restarts it", async () => {
@@ -1329,27 +1337,128 @@ function renderDrawer() {
     ? (S.project ? `New workflow in ${sp?.name || base(S.project)}` : "New workflow")
     : (S.project ? `New chat in ${sp?.name || base(S.project)}` : "New chat");
   document.querySelectorAll("#panel-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === S.tab));
-  $("search").placeholder = wfTab ? "Search workflows" : "Search";
-  if (wfTab) renderWorkflowList(); else renderSessionList();
+  $("search").placeholder = wfTab ? "Search workflows" : "Search chats and messages";
+  const term = $("search").value.trim();
+  if (wfTab) renderWorkflowList();
+  else if (term.length >= 2 && (!S.search || S.search.term !== term)) scheduleContentSearch();
+  else renderSessionList();
+}
+// ---------------------------------------------------------------- content search
+// Title filtering is instant and local; matches *inside* messages come from
+// /api/sessions/search (a derived FTS5 index over pi's session files, see
+// src/search.rs). Chats are grouped; each shows its best few snippets.
+const SEARCH_ROLES = [["", "All"], ["user", "You"], ["assistant", "Pi"], ["tool", "Tools"], ["summary", "Summaries"]];
+let searchTimer = null;
+function scheduleContentSearch() {
+  clearTimeout(searchTimer);
+  const term = $("search").value.trim();
+  if (S.tab === "workflows" || term.length < 2) {
+    // A cleared box starts a fresh search: forget the role and any answer
+    // still in flight, or it would install itself for the old term.
+    S.search = null; S.searchRole = ""; S.searchSeq++; renderSessionList(); return;
+  }
+  if (S.search && S.search.term !== term) S.search = null;
+  renderSessionList();
+  searchTimer = setTimeout(() => runContentSearch(term, false), 220);
+}
+async function runContentSearch(term, more = false) {
+  const seq = ++S.searchSeq;
+  const role = S.searchRole;
+  const offset = more ? S.search.results.length : 0;
+  S.search = { term, results: more ? S.search.results : [], total: S.search?.total || 0, loading: true, more: true };
+  renderSessionList();
+  try {
+    const d = await api(`/api/sessions/search?q=${encodeURIComponent(term)}&role=${encodeURIComponent(role)}&limit=20&offset=${offset}`);
+    if (seq !== S.searchSeq) return;
+    const fresh = d.results || [];
+    // A chat can repeat across pages (a session archived between requests):
+    // never list it twice.
+    const seen = new Set(S.search.results.map((r) => r.path));
+    const results = more ? S.search.results.concat(fresh.filter((r) => !seen.has(r.path))) : fresh;
+    S.search = { term, results, total: d.total || 0, loading: false, error: d.error || null, more: fresh.length >= 20 };
+  } catch (e) {
+    if (seq !== S.searchSeq) return;
+    S.search = { term, results: [], total: 0, loading: false, error: e.message || "Search failed", more: false };
+  }
+  renderSessionList();
+}
+function markSnippet(sn) {
+  // The server wraps matches in U+0001 / U+0002, never HTML.
+  return String(sn || "").split(/[\u0001\u0002]/).map((p, i) => (i % 2 ? `<mark>${esc(p)}</mark>` : esc(p))).join("");
+}
+function hitRole(h) { return h.role === "user" ? "You" : h.role === "assistant" ? "Pi" : h.role === "tool" ? (h.tool || "tool") : "Summary"; }
+function renderSearchHits(box, term) {
+  const s = S.search;
+  if (!s || s.term !== term) return false;
+  const wrap = el("div", "search-hits");
+  const head = el("div", "group-label search-head");
+  head.innerHTML = `<span>In messages</span><span class="search-count">${s.loading && !s.results.length ? "…" : s.total ? plural(s.total, "match") : ""}</span>`;
+  wrap.append(head);
+  const chips = el("div", "search-roles");
+  for (const [value, label] of SEARCH_ROLES) {
+    const on = S.searchRole === value;
+    const b = el("button", "chip" + (on ? " on" : ""), label);
+    b.dataset.role = value;
+    b.setAttribute("aria-pressed", String(on));
+    b.onclick = () => { S.searchRole = value; S.searchFocus = value; runContentSearch(term, false); };
+    chips.append(b);
+  }
+  wrap.append(chips);
+  if (s.error) wrap.append(el("div", "list-empty", `Search failed: ${esc(s.error)}`));
+  else if (!s.results.length && !s.loading) wrap.append(el("div", "list-empty", "No matches in messages."));
+  for (const r of s.results) {
+    const b = el("button", "sess hit-sess" + (r.path === S.path ? " active" : ""));
+    // Search spans every project: name the chat's project even when the drawer
+    // is scoped to one, or a hit would look like it belongs to that scope.
+    const meta = [projectName(r.cwd), r.chat ? "Chat" : "", plural(r.count, "match"), ago(r.modified)].filter(Boolean).join(" · ");
+    b.innerHTML = `${S.project ? "" : badge(r.cwd, "badge sm")}<div class="sess-main"><div class="t"><span>${esc(r.name || r.title || "Untitled")}</span></div><div class="m">${esc(meta)}</div>
+      ${r.hits.map((h) => `<div class="hit"><span class="hit-role">${esc(hitRole(h))}</span><span class="hit-text">${markSnippet(h.snippet)}</span></div>`).join("")}</div>`;
+    b.onclick = () => openSession(r.path);
+    wrap.append(b);
+  }
+  if (s.more && s.results.length && !s.loading) {
+    const more = el("button", "btn secondary search-more", "Show more matches");
+    more.onclick = () => { S.searchFocus = "more"; runContentSearch(term, true); };
+    wrap.append(more);
+  }
+  box.append(wrap);
+  // The render above replaced the clicked control; put focus back on it once
+  // the answer is in (the loading render would only lose it again).
+  if (S.searchFocus && !s.loading) {
+    const target = S.searchFocus === "more"
+      ? wrap.querySelector(".search-more")
+      : [...wrap.querySelectorAll(".search-roles .chip")].find((x) => x.dataset.role === S.searchFocus);
+    S.searchFocus = null;
+    target?.focus();
+  }
+  return true;
 }
 function renderSessionList() {
   const box = $("session-list"); box.innerHTML = "";
-  const term = $("search").value.trim().toLowerCase();
-  const list = S.sessions.filter((s) => (!S.project || s.cwd === S.project) && (!term || `${s.name || ""} ${s.title} ${s.cwd}`.toLowerCase().includes(term)));
-  if (!list.length) { box.append(el("div", "list-empty", term ? "No chats match." : S.projects.length ? "No chats here yet." : "No chats yet. Tap + on the left to add a project folder, or just start a new chat.")); return; }
+  const raw = $("search").value.trim();
+  const term = raw.toLowerCase();
+  const searched = S.tab !== "workflows" && term.length >= 2;
+  const hadHits = searched ? renderSearchHits(box, raw) : false;
+  // A chat already listed under message hits isn't repeated under "By title".
+  const shown = new Set(searched ? (S.search?.results || []).map((r) => r.path) : []);
+  const list = S.sessions.filter((s) => !shown.has(s.path) && (!S.project || s.cwd === S.project) && (!term || `${s.name || ""} ${s.title} ${s.cwd}`.toLowerCase().includes(term)));
+  if (!list.length) {
+    if (hadHits) return;
+    box.append(el("div", "list-empty", term ? "No chats match." : S.projects.length ? "No chats here yet." : "No chats yet. Tap + on the left to add a project folder, or just start a new chat.")); return;
+  }
   const day = 86400000; const today = new Date(); today.setHours(0, 0, 0, 0); const t0 = today.getTime();
   const bucket = (ms) => ms >= t0 ? "Today" : ms >= t0 - day ? "Yesterday" : ms >= t0 - 6 * day ? "This week" : ms >= t0 - 29 * day ? "This month" : "Older";
   let last = null;
   for (const s of list) {
     const g = bucket(s.modified);
-    if (g !== last) { box.append(el("div", "group-label", g)); last = g; }
+    if (g !== last) { box.append(el("div", "group-label", searched && last === null ? "By title" : g)); last = g; }
     const b = el("button", "sess" + (s.path === S.path ? " active" : ""));
     b.innerHTML = `${S.project ? "" : badge(s.cwd, "badge sm")}<div class="sess-main"><div class="t">${s.live ? `<i class="live-dot${s.streaming ? " busy" : ""}"></i>` : ""}<span>${esc(s.name || s.title || "Untitled")}</span></div><div class="m">${S.project ? "" : esc(projectName(s.cwd)) + " · "}${ago(s.modified)} · ${s.messages} msgs</div>${forkHint(s)}</div>`;
     b.onclick = () => openSession(s.path);
     box.append(b);
   }
 }
-$("search").addEventListener("input", () => (S.tab === "workflows" ? renderWorkflowList() : renderSessionList()));
+$("search").addEventListener("input", () => (S.tab === "workflows" ? renderWorkflowList() : scheduleContentSearch()));
 function selectProject(path) {
   S.project = path; localStorage.setItem("pp.project", path);
   if (path) localStorage.setItem("pp.lastCwd", path);
@@ -1357,7 +1466,12 @@ function selectProject(path) {
   if (!S.key && !S.path) { updateEmpty(); updateHeader(); updateSend(); }
 }
 document.querySelector(".rail-all").onclick = () => selectProject("");
-function openDrawer() { document.body.classList.add("drawer-open"); loadProjects(); loadWorkflows(); }
+function openDrawer() {
+  document.body.classList.add("drawer-open");
+  // Re-open means "show me now": drop cached hits (renderDrawer re-asks).
+  S.search = null; S.searchSeq++; S.searchFocus = null;
+  loadProjects(); loadWorkflows();
+}
 function closeDrawer() { document.body.classList.remove("drawer-open"); }
 $("menu").onclick = openDrawer; $("title-btn").onclick = openDrawer; $("scrim").onclick = closeDrawer;
 $("new-chat").onclick = () => {

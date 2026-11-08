@@ -13,6 +13,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Fork from an earlier message of yours (it comes back into the message box to edit and resend) and clone a chat; both carry on in a new session file, listed as "Forked from …"
 - Session tree (pi's `/tree`): every branch of a chat with its labels, compactions and branch summaries; go back to any point in the same session file (a prompt comes back into the message box), optionally summarizing the branch you leave; label entries. Session info: file, id, parent, counts by role, cost per model
 - Export a chat as pi's HTML page (open or download; Quick Look and share on iOS) or download its session JSONL; compact with an optional "Focus the summary on…" (`src/exports.rs`, `web/chat-more.js`)
+- **Search** (`src/search.rs`): full-text search across every chat's messages (a derived SQLite FTS5 index, grouped by chat, filter by You / Pi / Tools / Summaries) beside the instant title filter in the drawer; `GET /api/sessions/search?q=&role=&limit=&offset=&hits=`
 - **Settings › Usage** (`src/usage.rs`): cost and tokens per day, model, provider and project over 7/30/90 days, from every session file (cached by mtime + size); subscription costs (OAuth logins, Codex, Copilot) shown as the API-rate equivalent and kept out of "spent", OpenCode Go's pool on its own
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
 - **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs with `--no-tools` and a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
@@ -104,6 +105,40 @@ broadcasts `{"type":"pocketpi_session","file":...}`. `cycle_model`,
 | `GET /api/exports/{name}` | `?download=1&title=` | the export, `text/html` with `Content-Security-Policy: sandbox` (its scripts can't call the API); only names the server made |
 | `GET /api/sessions/file` | `?path=<session file>&title=` | the session JSONL as an attachment, streamed; only `.jsonl` files that resolve inside the sessions or Chat-tab folder |
 | `GET /api/usage` | `?days=7\|30\|90&tz=<minutes east of UTC>` | `{totals, billing: {api, subscription, pool}, byDay, byModel, byProvider, byProject, files, ms}`; usage from assistant messages, `usage` entries and compaction / branch summaries, fork copies counted once |
+
+## Search (`src/search.rs`)
+
+The drawer's search box filters chat titles locally as you type and, from two
+characters on, asks the server for matches *inside* messages. The server keeps
+a **derived** SQLite FTS5 index (`$XDG_DATA_HOME/pocketpi/search.sqlite`,
+WAL) beside pi's session files and never writes to a session: delete the
+database and it rebuilds on the next start. Files are reconciled by (mtime,
+size), so a search parses only the sessions that changed since the last one
+(the first one warms in the background at startup). What is indexed, per
+`message` entry: `user`, `assistant` and `toolResult` text blocks (a tool
+result keeps its tool name; thinking, tool-call arguments and images are left
+out), plus `compactionSummary` / `branchSummary` summaries. The `system` prompt
+is skipped, and each entry is capped at 40k characters: the index finds a
+message, it doesn't serve it.
+
+| Route | Query | Answer |
+|---|---|---|
+| `GET /api/sessions/search` | `q=` (required), `role=user,assistant,tool,summary`, `limit` (chats, ≤50), `offset` (chats), `hits` (per chat, ≤20), `archived=1` | `{q, total, took_ms, indexed: {files, entries, reindexed, removed}, results: [{path, id, title, name, cwd, modified, messages, chat, live, streaming, count, hits: [{entry, role, tool, ts, snippet}]}]}` |
+
+Queries are AND of prefix terms (`foo bar` → `"foo"* AND "bar"*`) with an OR
+fallback when the AND finds nothing; ranking is FTS5's `bm25`, results are
+grouped by chat and ordered by their best match. Results span every project
+(each hit names its own project) even when the drawer is scoped to one chat's
+project. `snippet` marks matches with U+0001 / U+0002 — never HTML — and the
+client escapes then highlights them. Archived chats are left out unless
+`archived=1`; they and the workflow-stage sessions never consume a page slot,
+so `offset`/`limit` and `total` count what the drawer can actually show. Known
+limits: tokens and phrases, not arbitrary substrings (`entry` doesn't match
+`entries`; a substring would need a trigram index), CJK text is one `unicode61`
+token per run so short CJK queries need the full word, forked chats carry copies
+of the pre-fork entries (both can match the same old message), and only the best
+2000 matching messages are grouped per request — a very common word can stop
+after roughly 600 chats at the default `hits=3`.
 
 ## Safety (`src/safety.rs`, `src/dialogs.rs`)
 
