@@ -141,8 +141,9 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(app.buttons["local-tiny-chat"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["local-other-chat"].waitForExistence(timeout: 5))
         keep(app, "local-models")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
-        sleep(1)
+        // Full height now, so nothing above it to tap: its close button.
+        app.buttons["close-sheet"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Select model"].waitForNonExistence(timeout: 5))
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).

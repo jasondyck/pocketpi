@@ -154,6 +154,8 @@ final class AppModel {
         // UI tests start with a clean slate and an address to type.
         if ProcessInfo.processInfo.arguments.contains("-reset") {
             UserDefaults.standard.removeObject(forKey: Self.serverKey)
+            UserDefaults.standard.removeObject(forKey: "mode")
+            mode = .work
         }
         if let s = UserDefaults.standard.string(forKey: Self.serverKey),
            let url = URL(string: s) {

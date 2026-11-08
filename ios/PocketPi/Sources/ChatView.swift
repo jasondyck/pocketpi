@@ -630,6 +630,10 @@ private struct EffortList: View {
 private struct CloseButton: View {
     let action: () -> Void
     var body: some View {
+        button.accessibilityIdentifier("close-sheet")
+    }
+
+    @ViewBuilder private var button: some View {
         #if compiler(>=6.2)
         if #available(iOS 26, *) {
             Button(role: .close, action: action)
