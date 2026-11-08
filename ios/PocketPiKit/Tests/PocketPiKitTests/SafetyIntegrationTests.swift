@@ -135,7 +135,8 @@ extension IntegrationTests {
         // The stage policy is pocketpi's own file.
         let stages = try await client.useRecommendedPolicy(.stages)
         #expect(stages.path.hasSuffix("pocketpi/safety/stage-policy.json"))
-        #expect(stages.rules(for: "bash").contains { $0.pattern == "git push *" && $0.action == .deny })
+        #expect(stages.rules(for: "bash").contains { $0.pattern == "git push *--force*" && $0.action == .deny })
+        #expect(!stages.rules(for: "bash").contains { $0.pattern == "git push *" })
         let info = try await client.safetyInfo()
         #expect(info["stage_policy_active"]?.bool == true)
         #expect(info["package"]?.string == Safety.package)
