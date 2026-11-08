@@ -257,7 +257,7 @@ fn remove_at(v: &mut Value, parts: &[String]) {
     let Some(o) = v.as_object_mut() else { return };
     match parts {
         [last] => {
-            o.remove(last.as_str());
+            o.shift_remove(last.as_str());
         }
         [first, rest @ ..] => {
             if let Some(next) = o.get_mut(first.as_str()) {
