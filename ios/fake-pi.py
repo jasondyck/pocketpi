@@ -6,7 +6,8 @@ It speaks enough of pi's RPC protocol for pocketpi and PocketPiKit: the state
 and message commands, prompts that stream back an echo (thinking, text, and a
 tool call when the prompt says "tool", a workflow_run call for the run id in
 ~/.fake-pi-run when it says "deploy"), an extension confirm dialog when the
-prompt says "ask", session names, abort. Sessions are written in pi's format
+prompt says "ask" (with a 1.5 s timeout when it says "timeout"),
+setStatus / setWidget / setTitle when it says "widgets", session names, abort. Sessions are written in pi's format
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
 Also the commands pocketpi allows since the pi-parity work: fork, clone,
@@ -166,6 +167,26 @@ def stream_assistant(blocks, stop_reason):
     out({"type": "message_end", "message": msg})
 
 
+def ext_ui(prompt, cmd_id):
+    """setStatus / setWidget / setTitle, like an extension's ctx.ui. "clear
+    widgets" takes the lint status and the below-editor widget away again."""
+    def req(**kw):
+        out({"type": "extension_ui_request", "id": f"ui-{cmd_id}-{uuid.uuid4().hex[:6]}", **kw})
+    if "clear" in prompt:
+        req(method="setStatus", statusKey="lint")
+        req(method="setWidget", widgetKey="hint", widgetPlacement="belowEditor")
+        return
+    req(method="setStatus", statusKey="fake", statusText="\x1b[32mready\x1b[0m")
+    req(method="setStatus", statusKey="lint", statusText="2 warnings")
+    # As pi-permission-modes sends it: SGR colours for the terminal.
+    req(method="setStatus", statusKey="mode", statusText="\x1b[38;5;5mBuild\x1b[39m \x1b[2m(sandboxed in project dir, alt+m)"
+        "\x1b[22;39m  \x1b[38;5;2mNetwork: filtered (alt+n)\x1b[39m")
+    req(method="setWidget", widgetKey="todo", widgetLines=["TODO", "[x] status chips", "[ ] widgets"],
+        widgetPlacement="aboveEditor")
+    req(method="setWidget", widgetKey="hint", widgetLines=["tip: say 'clear widgets'"], widgetPlacement="belowEditor")
+    req(method="setTitle", title="pi - fake project")
+
+
 def run(prompt, cmd_id):
     global streaming
     streaming = True
@@ -183,6 +204,17 @@ def run(prompt, cmd_id):
             answered.wait_for(lambda: rid in answers, timeout=20)
             a = answers.pop(rid, {})
         reply += " · confirmed" if a.get("confirmed") else " · declined"
+    if "widgets" in prompt:
+        ext_ui(prompt, cmd_id)
+    if "timeout" in prompt:
+        # pi resolves a dialog with a timeout itself; the client only shows it.
+        rid = f"ui-{cmd_id}"
+        out({"type": "extension_ui_request", "id": rid, "method": "confirm", "title": "Quick question",
+             "message": "Answer within a second and a half.", "timeout": 1500})
+        with answered:
+            answered.wait_for(lambda: rid in answers, timeout=1.5)
+            a = answers.pop(rid, None)
+        reply += " · timed out" if a is None else " · confirmed" if a.get("confirmed") else " · declined"
     if "tool" in prompt:
         call = {"type": "toolCall", "id": f"call-{cmd_id}", "name": "bash", "arguments": {"command": "echo hi"}}
         stream_assistant([{"type": "thinking", "thinking": "I should run something"}, call], "toolUse")

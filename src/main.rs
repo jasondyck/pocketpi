@@ -19,6 +19,8 @@ mod improve;
 mod llama;
 mod pi_admin;
 mod pi_cli;
+mod ext_ui;
+use ext_ui::ExtUi;
 
 use axum::{
     Json, Router,
@@ -184,6 +186,10 @@ pub struct Live {
     /// 1 yes, 2 no. Checked once before the first control call, so a failed
     /// extension load can't turn "/pp-tools ..." into a prompt for the model.
     pub(crate) control_ok: std::sync::atomic::AtomicU8,
+    /// The extensions' setStatus / setWidget / setTitle requests still in
+    /// effect, replayed in `pocketpi_hello`: extensions often set them at
+    /// startup, before any client is listening.
+    pub(crate) ext_ui: StdMutex<ExtUi>,
 }
 
 impl Live {
@@ -522,6 +528,7 @@ async fn spawn_live(
         exited: AtomicBool::new(false),
         control,
         control_ok: std::sync::atomic::AtomicU8::new(0),
+        ext_ui: StdMutex::new(ExtUi::default()),
     });
     app.live.lock().unwrap().insert(key.clone(), live.clone());
 
@@ -633,6 +640,9 @@ fn handle_record(live: &Live, line: &str, v: Value) {
             }
         }
         return;
+    }
+    if ty == "extension_ui_request" {
+        live.ext_ui.lock().unwrap().record(&v);
     }
     match ty {
         "agent_start" => live.streaming.store(true, Ordering::Relaxed),
@@ -767,6 +777,7 @@ async fn events(State(app): State<Arc<AppState>>, Path(key): Path<String>) -> Ap
         "config_epoch": config_epoch,
         "stale": epoch < config_epoch,
         "kind": live.kind,
+        "ui": live.ext_ui.lock().unwrap().replay(),
     })
     .to_string();
     drop(live);

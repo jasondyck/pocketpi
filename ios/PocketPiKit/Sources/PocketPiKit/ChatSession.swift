@@ -247,7 +247,7 @@ public final class ChatSession {
             case .sessionFileChanged(let f):
                 path = f
             case .extensionRequest(let r):
-                pendingRequest = r
+                show(r)
             case .setComposer(let t):
                 composer = t
             case .problem(let t):
@@ -478,6 +478,28 @@ public final class ChatSession {
         case confirmed(Bool)
         case value(String)
         case cancelled
+    }
+
+    /// Show an extension's dialog. One with a timeout goes away by itself
+    /// when it runs out, unanswered: pi answers it then.
+    func show(_ r: ExtensionRequest) {
+        pendingRequest = r
+        guard let left = r.remaining() else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(left))
+            self?.expire(r)
+        }
+    }
+
+    /// The dialog's time ran out: drop it without answering.
+    public func expire(_ request: ExtensionRequest) {
+        if pendingRequest?.id == request.id { pendingRequest = nil }
+    }
+
+    /// The extension's title (setTitle) when it set one, else `fallback`
+    /// (the project's name).
+    public func subtitle(fallback: String) -> String {
+        transcript.extensionUI.title ?? fallback
     }
 
     public func respond(to request: ExtensionRequest, _ answer: Answer) async {

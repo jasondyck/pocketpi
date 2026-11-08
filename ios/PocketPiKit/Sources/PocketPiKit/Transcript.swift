@@ -10,6 +10,23 @@ public struct ExtensionRequest: Sendable, Equatable, Identifiable {
     public var options: [String]
     public var prefill: String?
     public var placeholder: String?
+    /// The dialog's `timeout`, in seconds: pi answers it itself after this.
+    public var timeout: TimeInterval?
+    /// When it arrived plus `timeout`: the sheet closes then, unanswered.
+    public var deadline: Date?
+
+    public init(id: String, method: Method, title: String, message: String? = nil, options: [String] = [],
+                prefill: String? = nil, placeholder: String? = nil, timeout: TimeInterval? = nil, deadline: Date? = nil) {
+        self.id = id
+        self.method = method
+        self.title = title
+        self.message = message
+        self.options = options
+        self.prefill = prefill
+        self.placeholder = placeholder
+        self.timeout = timeout
+        self.deadline = deadline
+    }
 }
 
 /// Something the transcript can't do itself, for whoever owns it to act on.
@@ -70,6 +87,8 @@ public struct Transcript: Sendable, Equatable {
     public private(set) var activity = "Working"
     public private(set) var steering: [String] = []
     public private(set) var followUp: [String] = []
+    /// Extensions' status chips, widgets and title (setStatus, setWidget, setTitle).
+    public private(set) var extensionUI = ExtensionUIState()
 
     private var nextId = 0
     private var liveIndex: Int?
@@ -148,11 +167,15 @@ public struct Transcript: Sendable, Equatable {
     @discardableResult
     public mutating func apply(_ ev: JSONValue, now: Date = Date()) -> [TranscriptEffect] {
         switch ev["type"]?.string ?? "" {
-        case "pocketpi_hello", "pocketpi_resync":
+        case "pocketpi_hello":
+            extensionUI.reset(replaying: ev["ui"]?.array ?? [])
+            return [.reloadSnapshot]
+        case "pocketpi_resync":
             return [.reloadSnapshot]
         case "pocketpi_exit":
             setStreaming(false)
             liveIndex = nil
+            extensionUI.reset()
             if ev["restarting"]?.bool == true { return [.restarting] }
             return [.exited(stderr: (ev["stderr"]?.array ?? []).compactMap(\.string))]
         case "pocketpi_session":
@@ -206,7 +229,7 @@ public struct Transcript: Sendable, Equatable {
         case "session_info_changed":
             return [.sessionNameChanged(ev["name"]?.string)]
         case "extension_ui_request":
-            return extensionRequest(ev)
+            return extensionRequest(ev, now: now)
         case "extension_error":
             return [.problem("Extension error: \(ev["error"]?.string ?? "")")]
         default:
@@ -286,7 +309,8 @@ public struct Transcript: Sendable, Equatable {
         }
     }
 
-    private mutating func extensionRequest(_ ev: JSONValue) -> [TranscriptEffect] {
+    private mutating func extensionRequest(_ ev: JSONValue, now: Date) -> [TranscriptEffect] {
+        if extensionUI.apply(ev) { return [] }
         let method = ev["method"]?.string ?? ""
         switch method {
         case "notify":
@@ -300,10 +324,12 @@ public struct Transcript: Sendable, Equatable {
             return [.setComposer(ev["text"]?.string ?? "")]
         default:
             guard let m = ExtensionRequest.Method(rawValue: method), let id = ev["id"]?.string else { return [] }
+            let timeout = ev["timeout"]?.double.flatMap { $0 > 0 ? $0 / 1000 : nil }
             return [.extensionRequest(ExtensionRequest(
                 id: id, method: m, title: ev["title"]?.string ?? "pi needs input",
                 message: ev["message"]?.string, options: (ev["options"]?.array ?? []).compactMap(\.string),
-                prefill: ev["prefill"]?.string, placeholder: ev["placeholder"]?.string))]
+                prefill: ev["prefill"]?.string, placeholder: ev["placeholder"]?.string,
+                timeout: timeout, deadline: timeout.map { now.addingTimeInterval($0) }))]
         }
     }
 }

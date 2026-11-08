@@ -594,12 +594,12 @@ function renderQueue(steering = [], followUp = []) {
 
 function onEvent(ev) {
   switch (ev.type) {
-    case "pocketpi_hello": return loadSnapshot();
+    case "pocketpi_hello": resetExtUI(ev.ui); return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
     case "pocketpi_exit": {
       setStreaming(false);
       const tail = (ev.stderr || []).slice(-8).join("\n");
-      S.key = null;
+      S.key = null; resetExtUI();
       if (tail) banner(`pi stopped.<pre>${esc(tail)}</pre>`, true);
       break;
     }
@@ -718,7 +718,7 @@ function chatTitle() {
 function updateHeader() {
   const cwd = S.cwd || newChatCwd();
   $("title").textContent = chatTitle();
-  $("subtitle").textContent = projectName(cwd);
+  $("subtitle").textContent = S.extUI?.title || projectName(cwd);
   $("project-badge").outerHTML = `<span id="project-badge" class="badge" style="--h:${hue(cwd)}">${esc(initials(projectName(cwd)))}</span>`;
   document.title = `${chatTitle()} · pocketpi`;
 }
@@ -967,6 +967,7 @@ $("model-chip").onclick = openChatSheet;
 let pendingUI = null;
 function respondUI(id, payload) { pendingUI = null; cmd({ type: "extension_ui_response", id, ...payload }).catch(() => {}); }
 function extensionUI(ev) {
+  if (setExtUI(ev)) return;
   const m = ev.method;
   if (m === "notify") return toast(ev.message, ev.notifyType === "error");
   if (m === "set_editor_text") { input.value = ev.text || ""; autosize(); updateSend(); return; }
@@ -975,6 +976,7 @@ function extensionUI(ev) {
   openSheet((b) => {
     b.append(el("div", "sheet-title", esc(ev.title || "pi needs input")));
     if (ev.message) b.append(el("div", "sheet-msg", esc(ev.message)));
+    dialogCountdown(b, ev);
     const finish = (payload) => { const id = pendingUI; pendingUI = null; document.body.classList.remove("sheet-open"); if (id) respondUI(id, payload); };
     if (m === "confirm") {
       const row = el("div", "btn-row"); const no = el("button", "btn secondary", "Cancel"); const yes = el("button", "btn", "Confirm");
@@ -987,6 +989,69 @@ function extensionUI(ev) {
       no.onclick = () => finish({ cancelled: true }); yes.onclick = () => finish({ value: i.value }); row.append(no, yes); b.append(row);
     }
   });
+}
+
+// ---------------------------------------------------------------- extension UI: status, widgets, title
+// setStatus / setWidget / setTitle are fire-and-forget and last as long as
+// the pi does: pocketpi replays what's in effect in pocketpi_hello (`ui`),
+// and a pi that exits takes it all with it.
+S.extUI = { status: new Map(), widgets: new Map(), title: null };
+// Extensions colour their text for the terminal: drop the escapes.
+function stripAnsi(t) { return String(t ?? "").replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b./g, ""); }
+function resetExtUI(replay = []) {
+  S.extUI = { status: new Map(), widgets: new Map(), title: null };
+  for (const r of replay || []) setExtUI(r, false);
+  renderExtUI();
+}
+/** Apply one setStatus / setWidget / setTitle; false for any other method. */
+function setExtUI(ev, render = true) {
+  const u = S.extUI;
+  if (ev.method === "setStatus") {
+    if (ev.statusText == null) u.status.delete(ev.statusKey); else u.status.set(ev.statusKey, stripAnsi(ev.statusText));
+  } else if (ev.method === "setWidget") {
+    if (!Array.isArray(ev.widgetLines)) u.widgets.delete(ev.widgetKey);
+    else u.widgets.set(ev.widgetKey, { lines: ev.widgetLines.map(stripAnsi), below: ev.widgetPlacement === "belowEditor" });
+  } else if (ev.method === "setTitle") {
+    u.title = stripAnsi(ev.title).trim() || null;
+  } else return false;
+  if (render) renderExtUI();
+  return true;
+}
+function renderExtUI() {
+  const u = S.extUI;
+  const above = $("ext-above"), below = $("ext-below");
+  above.innerHTML = ""; below.innerHTML = "";
+  if (u.status.size) {
+    const row = el("div", "ext-status");
+    for (const [k, t] of u.status) { const c = el("span", "ext-chip", esc(t)); c.dataset.key = k; c.title = t; row.append(c); }
+    above.append(row);
+  }
+  for (const [k, w] of u.widgets) {
+    const box = el("pre", "ext-widget", esc(w.lines.join("\n"))); box.dataset.key = k;
+    (w.below ? below : above).append(box);
+  }
+  above.hidden = !above.children.length; below.hidden = !below.children.length;
+  if (S.view === "chat") updateHeader();
+}
+// A dialog with a timeout: pi answers it itself when the time is up, so the
+// sheet counts down and then just closes, without answering.
+let dialogTimer = null;
+function dialogCountdown(b, ev) {
+  clearInterval(dialogTimer); dialogTimer = null;
+  if (!(ev.timeout > 0)) return;
+  const end = Date.now() + ev.timeout, id = ev.id;
+  const line = el("div", "sheet-countdown"); b.append(line);
+  const tick = () => {
+    const left = end - Date.now();
+    if (pendingUI !== id) { clearInterval(dialogTimer); dialogTimer = null; return; }
+    if (left <= 0) {
+      clearInterval(dialogTimer); dialogTimer = null;
+      pendingUI = null; document.body.classList.remove("sheet-open");
+      return;
+    }
+    line.textContent = `Closes in ${Math.ceil(left / 1000)} s`;
+  };
+  tick(); dialogTimer = setInterval(tick, 250);
 }
 
 // ---------------------------------------------------------------- projects + drawer
@@ -1118,7 +1183,7 @@ async function openProjectPicker(adding = false) {
 function resetChat() {
   disconnect(); clearSuggestions();
   Object.assign(S, { key: null, path: null, cwd: null, state: null, stats: null, msgs: [], cur: null, commands: null, levels: [] });
-  S.cards.clear(); setStreaming(false); renderQueue(); banner(null);
+  S.cards.clear(); setStreaming(false); renderQueue(); resetExtUI(); banner(null);
   $("messages").innerHTML = "";
 }
 function newChat() {
