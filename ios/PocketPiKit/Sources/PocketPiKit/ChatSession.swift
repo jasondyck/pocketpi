@@ -426,38 +426,91 @@ public final class ChatSession {
 
     /// A pi RPC command, reopening the session once if its process is gone.
     @discardableResult
-    public func command(_ c: JSONValue) async throws -> JSONValue {
+    public func command(_ c: JSONValue, timeout: TimeInterval = 30) async throws -> JSONValue {
         if key == nil, path != nil { try await reopen() }
         guard let key else { throw PocketPiError.unexpected("no session") }
         do {
-            return try await client.command(key: key, c)
+            return try await client.command(key: key, c, timeout: timeout)
         } catch let e as PocketPiError where e.isSessionGone && path != nil {
             self.key = nil
             try await reopen()
             guard let k = self.key else { throw e }
-            return try await client.command(key: k, c)
+            return try await client.command(key: k, c, timeout: timeout)
         }
     }
 
+    /// What sending the composer's text would do (`!cmd` runs a command).
+    public var composerIntent: ComposerIntent { ComposerIntent(composer) }
+
+    /// The line under the composer: what a `!`/`!!` command will do, or
+    /// why it can't run yet.
+    public var composerHint: String? {
+        if transcript.bashRunning { return "A shell command is running" }
+        return composerIntent.hint(streaming: isStreaming)
+    }
+
+    /// Whether the composer's text can go now: a shell command waits for
+    /// pi to finish, and only one runs at a time.
+    public var canSendComposer: Bool {
+        if transcript.bashRunning { return false }
+        return !(composerIntent.isBash && isStreaming)
+    }
+
     /// Send what's in the composer (or `text`). While pi works, the message
-    /// steers it instead of waiting for the turn to end.
-    public func send(_ text: String, images: [ImageAttachment] = []) async throws {
+    /// steers it (the default) or waits for the whole turn to end
+    /// (`.followUp`). `!cmd` and `!!cmd` run a shell command instead.
+    public func send(_ text: String, images: [ImageAttachment] = [], delivery: Delivery = .steer) async throws {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !images.isEmpty else { return }
+        if images.isEmpty, case .bash(let command, let excluded) = ComposerIntent(text) {
+            try await runBash(command, excludeFromContext: excluded)
+            return
+        }
         sentAny = true
         try await ensureStarted()
-        var c: [String: JSONValue] = ["type": "prompt", "message": .string(text)]
+        let queue = transcript.isStreaming && delivery == .followUp
+        var c: [String: JSONValue] = ["type": queue ? "follow_up" : "prompt", "message": .string(text)]
         if !images.isEmpty {
             c["images"] = .array(images.map {
                 ["type": "image", "data": .string($0.base64), "mimeType": .string($0.mimeType)]
             })
         }
-        if transcript.isStreaming { c["streamingBehavior"] = "steer" }
+        if transcript.isStreaming, !queue { c["streamingBehavior"] = "steer" }
         let r = try await command(.object(c))
         // Slash commands pi handled itself don't stream; show what they did.
         if r["disposition"]?.string == "handled" {
             await loadSnapshot()
         }
+    }
+
+    /// Run a shell command through pi (`bash`), streaming its output into a
+    /// card. pi adds the result to the session; unless `excludeFromContext`,
+    /// the model sees it with the next prompt. Only while pi is idle.
+    public func runBash(_ command: String, excludeFromContext: Bool = false) async throws {
+        if isStreaming { throw PocketPiError.unexpected("Shell commands run once pi has finished.") }
+        if transcript.bashRunning { throw PocketPiError.unexpected("A shell command is already running.") }
+        sentAny = true
+        try await ensureStarted()
+        transcript.beginBash(command: command, excludeFromContext: excludeFromContext)
+        do {
+            let r = try await self.command(
+                ["type": "bash", "command": .string(command), "excludeFromContext": .bool(excludeFromContext)],
+                timeout: 905)
+            transcript.finishBash(r)
+        } catch {
+            transcript.failBash(error.reportable ?? "Cancelled")
+        }
+        onTurnFinished?()
+    }
+
+    /// Stop the running shell command; its card ends "cancelled".
+    public func abortBash() async {
+        do { try await command(["type": "abort_bash"]) } catch { problem = error.reportable }
+    }
+
+    /// Stop pi's automatic retry after a model error (abort_retry).
+    public func stopRetrying() async {
+        do { try await command(["type": "abort_retry"]) } catch { problem = error.reportable }
     }
 
     /// Stop pi. Messages still queued come back into the composer.

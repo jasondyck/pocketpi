@@ -82,7 +82,7 @@ import Testing
         #expect(t.toolResults["c1"]?.text == "a\nb")
         #expect(t.items[2].kind == .compaction(summary: "earlier", tokensBefore: 5000))
         #expect(t.items[3].kind == .custom("shown"))
-        #expect(t.items[4].kind == .bash(command: "pwd", output: "/x", exitCode: 0))
+        #expect(t.items[4].kind == .bash(BashRun(command: "pwd", output: "/x", exitCode: 0)))
     }
 
     @Test func streamsATurn() {
