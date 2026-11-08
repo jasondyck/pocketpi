@@ -239,7 +239,11 @@ mod tests {
         assert_eq!(chat["promptTimeoutMs"], 600000);
         assert_eq!(chat["permission"]["bash"]["rm *"], "ask");
         let stage: Value = serde_json::from_str(STAGE_POLICY).unwrap();
-        assert_eq!(stage["permission"]["bash"]["git push *"]["action"], "deny");
+        // Stages push their own branch (clipt-fix-pr's open-pr stage does), never forced or to main.
+        assert!(stage["permission"]["bash"]["git push *"].is_null());
+        assert_eq!(stage["permission"]["bash"]["git push *--force*"]["action"], "deny");
+        assert_eq!(stage["permission"]["bash"]["git push * main"]["action"], "deny");
+        assert_eq!(stage["permission"]["bash"]["gh pr merge*"]["action"], "deny");
         // Nothing in a stage asks: an ask would be declined there anyway.
         assert!(!STAGE_POLICY.contains("\"ask\""));
     }

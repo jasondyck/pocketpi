@@ -446,7 +446,7 @@ checks them against the package's `schemas/permissions.schema.json`):
 - `stage-policy.json`: the same hard denies; `yoloMode: true` so nothing
   asks (gotgenes' wrapper floors would otherwise deny `env X=1 cmd`,
   `xargs`, `find -exec` in a stage), with explicit denies for `git push`
-  (also inside `sh -c`/`bash -c`/`eval`), `gh pr create/merge`, `gh release`,
+  forced or to main/master (a stage may push its own branch and `gh pr create`: clipt-fix-pr's open-pr stage does), `gh pr merge`, `gh release`,
   `gh repo`, publishing, piping into a shell, root, `mkfs`; reads outside the
   worktree are allowed, writes outside it are denied except `/tmp` and the
   package caches.

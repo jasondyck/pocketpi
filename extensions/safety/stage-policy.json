@@ -7,21 +7,54 @@
     "*": "allow",
     "path": {
       "*": "allow",
-      "~/.ssh": { "action": "deny", "reason": "SSH keys are off limits" },
-      "~/.ssh/*": { "action": "deny", "reason": "SSH keys are off limits" },
-      "~/.aws": { "action": "deny", "reason": "AWS credentials are off limits" },
-      "~/.aws/*": { "action": "deny", "reason": "AWS credentials are off limits" },
-      "~/.gnupg/*": { "action": "deny", "reason": "GPG keys are off limits" },
-      "~/.config/gh/hosts.yml": { "action": "deny", "reason": "GitHub CLI tokens are off limits" },
-      "~/.pi/agent/auth.json": { "action": "deny", "reason": "pi's credentials are off limits" },
-      "~/.config/pocketpi/apns/*": { "action": "deny", "reason": "pocketpi's push key is off limits" },
-      "*.env": { "action": "deny", "reason": ".env files hold secrets; use .env.example" },
-      "*.env.*": { "action": "deny", "reason": ".env files hold secrets; use .env.example" },
+      "~/.ssh": {
+        "action": "deny",
+        "reason": "SSH keys are off limits"
+      },
+      "~/.ssh/*": {
+        "action": "deny",
+        "reason": "SSH keys are off limits"
+      },
+      "~/.aws": {
+        "action": "deny",
+        "reason": "AWS credentials are off limits"
+      },
+      "~/.aws/*": {
+        "action": "deny",
+        "reason": "AWS credentials are off limits"
+      },
+      "~/.gnupg/*": {
+        "action": "deny",
+        "reason": "GPG keys are off limits"
+      },
+      "~/.config/gh/hosts.yml": {
+        "action": "deny",
+        "reason": "GitHub CLI tokens are off limits"
+      },
+      "~/.pi/agent/auth.json": {
+        "action": "deny",
+        "reason": "pi's credentials are off limits"
+      },
+      "~/.config/pocketpi/apns/*": {
+        "action": "deny",
+        "reason": "pocketpi's push key is off limits"
+      },
+      "*.env": {
+        "action": "deny",
+        "reason": ".env files hold secrets; use .env.example"
+      },
+      "*.env.*": {
+        "action": "deny",
+        "reason": ".env files hold secrets; use .env.example"
+      },
       "*.env.example": "allow"
     },
     "external_directory_read": "allow",
     "external_directory_write": {
-      "*": { "action": "deny", "reason": "a workflow stage only writes inside its worktree" },
+      "*": {
+        "action": "deny",
+        "reason": "a workflow stage only writes inside its worktree"
+      },
       "/tmp/*": "allow",
       "~/.cargo/registry/*": "allow",
       "~/.cargo/git/*": "allow",
@@ -31,29 +64,122 @@
     },
     "bash": {
       "*": "allow",
-      "git push": { "action": "deny", "reason": "pocketpi pushes and opens the pull request after the run" },
-      "git push *": { "action": "deny", "reason": "pocketpi pushes and opens the pull request after the run" },
-      "sh -c *git push*": { "action": "deny", "reason": "pocketpi pushes and opens the pull request after the run" },
-      "bash -c *git push*": { "action": "deny", "reason": "pocketpi pushes and opens the pull request after the run" },
-      "eval *git push*": { "action": "deny", "reason": "pocketpi pushes and opens the pull request after the run" },
-      "gh pr create*": { "action": "deny", "reason": "pocketpi opens the pull request after the run" },
-      "gh pr merge*": { "action": "deny", "reason": "merging is for a person" },
-      "gh release *": { "action": "deny", "reason": "releases are for a person" },
-      "gh repo *": { "action": "deny", "reason": "repository settings are for a person" },
-      "npm publish*": { "action": "deny", "reason": "publishing is for a person" },
-      "cargo publish*": { "action": "deny", "reason": "publishing is for a person" },
-      "sh": { "action": "deny", "reason": "don't pipe downloads into a shell" },
-      "bash": { "action": "deny", "reason": "don't pipe downloads into a shell" },
-      "sh -s*": { "action": "deny", "reason": "don't pipe downloads into a shell" },
-      "bash -s*": { "action": "deny", "reason": "don't pipe downloads into a shell" },
-      "sudo *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "sh -c *sudo *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "bash -c *sudo *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "doas *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "su": { "action": "deny", "reason": "no root in a workflow stage" },
-      "su *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "pkexec *": { "action": "deny", "reason": "no root in a workflow stage" },
-      "mkfs*": { "action": "deny", "reason": "formatting disks is never pi's job" }
+      "git push -f*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * -f*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push *--force*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * +*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * main": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * main:*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * master": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * master:*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * HEAD:main*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "git push * HEAD:master*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "sh -c *git push*--force*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "bash -c *git push*--force*": {
+        "action": "deny",
+        "reason": "workflow runs push their own branch only; never force or push to main"
+      },
+      "gh pr merge*": {
+        "action": "deny",
+        "reason": "merging is for a person"
+      },
+      "gh release *": {
+        "action": "deny",
+        "reason": "releases are for a person"
+      },
+      "gh repo *": {
+        "action": "deny",
+        "reason": "repository settings are for a person"
+      },
+      "npm publish*": {
+        "action": "deny",
+        "reason": "publishing is for a person"
+      },
+      "cargo publish*": {
+        "action": "deny",
+        "reason": "publishing is for a person"
+      },
+      "sh": {
+        "action": "deny",
+        "reason": "don't pipe downloads into a shell"
+      },
+      "bash": {
+        "action": "deny",
+        "reason": "don't pipe downloads into a shell"
+      },
+      "sh -s*": {
+        "action": "deny",
+        "reason": "don't pipe downloads into a shell"
+      },
+      "bash -s*": {
+        "action": "deny",
+        "reason": "don't pipe downloads into a shell"
+      },
+      "sudo *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "sh -c *sudo *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "bash -c *sudo *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "doas *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "su": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "su *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "pkexec *": {
+        "action": "deny",
+        "reason": "no root in a workflow stage"
+      },
+      "mkfs*": {
+        "action": "deny",
+        "reason": "formatting disks is never pi's job"
+      }
     }
   }
 }
