@@ -149,7 +149,10 @@ private struct ChatScreen: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            StatusBanner(status: session.status)
+            VStack(spacing: 0) {
+                StatusBanner(status: session.status)
+                ChatRestartBanner(session: session)
+            }
         }
         // The chat's name as the title: tapping it opens the system title
         // menu (rename in place, compact). The project underneath.
@@ -310,6 +313,34 @@ private struct WorkingLine: View {
             Text(activity).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
         }
         .accessibilityIdentifier("working")
+    }
+}
+
+/// "Restart to apply" when pi's config changed after this chat's pi started
+/// (the hub's status or the chat's hello, whichever is newer).
+private struct ChatRestartBanner: View {
+    @Environment(AppModel.self) private var model
+    let session: ChatSession
+    @State private var restarting = false
+
+    var body: some View {
+        if session.status == .connected, model.hub?.needsRestart(session) == true {
+            RestartBanner(text: session.isStreaming ? "pi's settings changed. Restart when this reply finishes."
+                                                    : "pi's settings changed since this chat started.",
+                          busy: restarting || session.isStreaming) {
+                Task {
+                    restarting = true
+                    await session.restart()
+                    await model.hub?.refresh()
+                    restarting = false
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+        }
     }
 }
 
@@ -761,6 +792,8 @@ private struct Composer: View {
         .onChange(of: session.composer) { _, _ in
             Task { await session.composerChanged() }
         }
+        // A fork put the message back in the box: bring the keyboard up for it.
+        .onChange(of: session.composerFocusRequests) { _, _ in focused = true }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task {
