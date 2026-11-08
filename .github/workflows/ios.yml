@@ -6,7 +6,7 @@
 #   app  - on a macOS runner, alongside kit: generate the Xcode project from project.yml,
 #          build for the simulator, run the UI tests, upload their screenshots.
 #   testflight - (only with the testflight input) archive a signed build and
-#          upload it to App Store Connect. Signed with the Apple Distribution
+#          upload it to App Store Connect, in parallel with kit and app. Signed with the Apple Distribution
 #          certificate (DIST_P12, DIST_P12_PASSWORD) and the "pocketpi App
 #          Store" profile (ASC_PROFILE) from the repo secrets; uploaded with the
 #          App Store Connect API key. The build number is 1000 + the run number:
@@ -122,7 +122,9 @@ jobs:
     if: ${{ inputs.testflight }}
     runs-on: ${{ inputs.runner || 'macos-26' }}
     timeout-minutes: 45
-    needs: [kit, app]
+    # Archives and uploads alongside kit and app instead of after them: a
+    # TestFlight build is internal only, and the UI walkthrough mostly fails on
+    # test timing rather than app bugs. Check kit/app before installing it.
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
