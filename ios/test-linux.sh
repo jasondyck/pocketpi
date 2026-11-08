@@ -38,6 +38,15 @@ if [ "${1:-}" != "--unit" ]; then
   printf -- '---\nname: review\ndescription: Review the staged diff\n---\nReview it.\n' > "$A/skills/review/SKILL.md"
   printf -- '---\ndescription: Fix failing tests\nargument-hint: "<file>"\n---\nFix $1\n' > "$A/prompts/fix-tests.md"
   printf -- '---\ndescription: Deploy this project\n---\nDeploy.\n' > "$SCRATCH/home/project/.pi/prompts/deploy.md"
+  # Settings › Resources switches turn this one off and on; Packages
+  # installs, filters and removes the local package.
+  printf -- '---\ndescription: For the switch test\n---\nToggle.\n' > "$A/prompts/toggle-me.md"
+  PKG="$SCRATCH/home/pkg-demo"
+  mkdir -p "$PKG/skills/demo-skill" "$PKG/prompts" "$PKG/extensions"
+  echo '{"name":"pkg-demo","version":"1.0.0","keywords":["pi-package"]}' > "$PKG/package.json"
+  printf -- '---\nname: demo-skill\ndescription: From the demo package\n---\nDo it.\n' > "$PKG/skills/demo-skill/SKILL.md"
+  printf -- '---\ndescription: Hello from the package\n---\nHello\n' > "$PKG/prompts/hello-pkg.md"
+  echo 'export default function () {}' > "$PKG/extensions/demo.ts"
   mkdir -p "$SCRATCH/home/.config/pocketpi/workflows"
   cat > "$SCRATCH/home/.config/pocketpi/workflows/approve-test.json" <<JSON
 {"id":"approve-test","name":"Approve test","project":"$SCRATCH/home/project","worktree":false,"enabled":true,
@@ -87,7 +96,7 @@ PY
     sleep 0.25
   done
   curl -fs "http://127.0.0.1:$PORT/api/version" >/dev/null || { cat "$SCRATCH/server.log"; exit 1; }
-  ENVS=(-e "POCKETPI_TEST_URL=http://127.0.0.1:$PORT" -e "POCKETPI_TEST_CWD=$SCRATCH/home/project")
+  ENVS=(-e "POCKETPI_TEST_URL=http://127.0.0.1:$PORT" -e "POCKETPI_TEST_CWD=$SCRATCH/home/project" -e "POCKETPI_TEST_PKG=$PKG")
 fi
 
 # As you rather than root, so nothing it writes into the checkout (.build)

@@ -255,14 +255,14 @@ struct IntegrationTests {
         #expect(s.slashMatches.isEmpty)
         s.composer = "/fix"
         await s.composerChanged()
-        #expect(s.commands?.count == 3)
+        #expect(s.commands?.count == 4)
         #expect(s.slashMatches.map(\.name) == ["fix-tests"])
         #expect(s.slashMatches.first?.description == "Fix failing tests")
         s.pick(s.slashMatches[0])
         #expect(s.composer == "/fix-tests ")
         #expect(s.slashMatches.isEmpty)
         s.composer = "/"
-        #expect(s.slashMatches.map(\.name) == ["fix-tests", "skill:review", "workflows"])
+        #expect(s.slashMatches.map(\.name) == ["fix-tests", "skill:review", "workflows", "mcp"])
         s.leave()
     }
 
