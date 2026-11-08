@@ -10,10 +10,17 @@ prompt says "ask", session names, abort. Sessions are written in pi's format
 to $PI_CODING_AGENT_SESSION_DIR so pocketpi lists and reopens them.
 
 Also the commands pocketpi allows since the pi-parity work: fork, clone,
-get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never
-run), abort_bash, get_last_assistant_text and the global setters; and, when
+get_fork_messages, get_tree, get_entries, export_html, bash (echoed, never run: streamed line by line as
+bash_execution_update, slowly when the command says "slow", exit 1 when it
+says "fail", truncated when it says "long"), abort_bash,
+get_last_assistant_text and the global setters; and, when
 started with `-e .../pocketpi-control.ts`, the extension's /pp-tools, which
 answers like the real one with an `entry_appended` custom entry.
+
+Steering and follow-ups queue while it streams (queue_update) and are answered
+after the reply, steering first; "pause" in a prompt makes the reply wait a
+moment so there is time to queue. "retry" fails the first attempt with an
+auto-retry (auto_retry_start, a 2 s wait that abort_retry cuts short).
 
     POCKETPI_PI=ios/fake-pi.py pocketpi
 """
@@ -28,6 +35,11 @@ lock = threading.Lock()
 answers = {}
 answered = threading.Condition(lock)
 aborted = threading.Event()
+bash_aborted = threading.Event()
+retry_aborted = threading.Event()
+# Messages queued while streaming: steer and follow_up.
+steer_q = []
+follow_q = []
 
 
 def out(obj):
@@ -144,7 +156,13 @@ def control_command(line):
     out({"type": "entry_appended", "entry": entry})
 
 
-def stream_assistant(blocks, stop_reason):
+def queue_update():
+    with lock:
+        steering, follow = list(steer_q), list(follow_q)
+    out({"type": "queue_update", "steering": steering, "followUp": follow})
+
+
+def stream_assistant(blocks, stop_reason, error=None):
     """Stream an assistant message block by block, then end it."""
     out({"type": "message_start", "message": {"role": "assistant", "content": []}})
     for i, b in enumerate(blocks):
@@ -162,6 +180,8 @@ def stream_assistant(blocks, stop_reason):
             out({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_start", "contentIndex": i, "id": b["id"], "toolName": b["name"]}})
             out({"type": "message_update", "assistantMessageEvent": {"type": "toolcall_end", "contentIndex": i, "toolCall": b}})
     msg = {"role": "assistant", "content": blocks, "stopReason": stop_reason}
+    if error:
+        msg["errorMessage"] = error
     add(msg)
     out({"type": "message_end", "message": msg})
 
@@ -213,13 +233,71 @@ def run(prompt, cmd_id):
             if aborted.is_set():
                 break
             time.sleep(0.05)
+    if "pause" in prompt:
+        time.sleep(1.5)
+    if "retry" in prompt and not aborted.is_set():
+        # Like pi: the failed attempt ends as an error, then a wait.
+        stream_assistant([], "error", "529 overloaded")
+        retry_aborted.clear()
+        out({"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "529 overloaded"})
+        if retry_aborted.wait(2.0) or aborted.is_set():
+            out({"type": "auto_retry_end", "success": False, "attempt": 1, "finalError": "Retry cancelled"})
+            finish()
+            return
+        reply += " · retried"
     if aborted.is_set():
         stream_assistant([{"type": "text", "text": "Stopped"}], "aborted")
     else:
         stream_assistant([{"type": "thinking", "thinking": "Thinking about it"}, {"type": "text", "text": reply}], "stop")
+        if "retry" in prompt:
+            out({"type": "auto_retry_end", "success": True, "attempt": 1})
+    # What was queued meanwhile: steering first, then follow-ups.
+    while not aborted.is_set():
+        with lock:
+            nxt = steer_q.pop(0) if steer_q else follow_q.pop(0) if follow_q else None
+        if nxt is None:
+            break
+        queue_update()
+        queued = {"role": "user", "content": [{"type": "text", "text": nxt}]}
+        out({"type": "message_start", "message": queued})
+        add(queued)
+        out({"type": "message_end", "message": queued})
+        stream_assistant([{"type": "text", "text": f"Echo: {nxt}"}], "stop")
+    finish()
+
+
+def finish():
+    global streaming
     streaming = False
     out({"type": "agent_end"})
     out({"type": "agent_settled"})
+
+
+def bash(cmd):
+    """The RPC bash command, never actually run: its "output" streams as
+    bash_execution_update deltas and it ends up a bashExecution message."""
+    command = cmd.get("command", "")
+    bash_aborted.clear()
+    lines = [f"fake: {command}"] + [f"line {i}" for i in range(1, (40 if "slow" in command else 3) + 1)]
+    sent = []
+    cancelled = False
+    for ln in lines:
+        if bash_aborted.is_set():
+            cancelled = True
+            break
+        sent.append(ln + "\n")
+        out({"type": "bash_execution_update", "id": cmd.get("id"), "delta": ln + "\n"})
+        time.sleep(0.1 if "slow" in command else 0.01)
+    output = "".join(sent)
+    result = {"output": output, "exitCode": None if cancelled else 1 if "fail" in command else 0,
+              "cancelled": cancelled, "truncated": False}
+    if "long" in command:
+        result.update(truncated=True, fullOutputPath="/tmp/fake-pi-bash.log")
+    msg = {"role": "bashExecution", "command": command, **result, "timestamp": int(time.time() * 1000)}
+    if cmd.get("excludeFromContext"):
+        msg["excludeFromContext"] = True
+    add(msg)
+    respond(cmd, result)
 
 
 MODELS = [
@@ -271,12 +349,19 @@ for line in sys.stdin:
     if t == "prompt" and control and cmd.get("message", "").startswith("/pp-"):
         control_command(cmd["message"])
         respond(cmd, {"disposition": "handled"})
-    elif t == "prompt":
-        if streaming and cmd.get("streamingBehavior") != "steer":
-            respond(cmd, ok=False, error="already streaming")
-            continue
-        respond(cmd, {})
-        if not streaming:
+    elif t in ("prompt", "steer", "follow_up"):
+        behavior = {"steer": "steer", "follow_up": "followUp"}.get(t, cmd.get("streamingBehavior"))
+        if streaming:
+            if behavior not in ("steer", "followUp"):
+                respond(cmd, ok=False, error="already streaming")
+                continue
+            with lock:
+                (steer_q if behavior == "steer" else follow_q).append(cmd.get("message", ""))
+            respond(cmd, {"disposition": "queued"})
+            queue_update()
+        else:
+            respond(cmd, {"disposition": "started"})
+            streaming = True  # before the thread starts, so a quick second prompt queues
             threading.Thread(target=run, args=(cmd.get("message", ""), cmd.get("id")), daemon=True).start()
     elif t == "get_state":
         respond(cmd, state())
@@ -334,9 +419,13 @@ for line in sys.stdin:
             f.write("<html><body>" + "".join(f"<p>{text_of(m)}</p>" for m in messages) + "</body></html>")
         respond(cmd, {"path": path})
     elif t == "bash":
-        output = f"fake: {cmd.get('command', '')}\n"
-        out({"type": "bash_execution_update", "id": cmd.get("id"), "output": output})
-        respond(cmd, {"output": output, "exitCode": 0, "cancelled": False, "truncated": False})
+        threading.Thread(target=bash, args=(cmd,), daemon=True).start()
+    elif t == "abort_bash":
+        bash_aborted.set()
+        respond(cmd, {})
+    elif t == "abort_retry":
+        retry_aborted.set()
+        respond(cmd, {})
     elif t in ("set_steering_mode", "set_follow_up_mode"):
         settings["steeringMode" if t == "set_steering_mode" else "followUpMode"] = cmd.get("mode")
         respond(cmd, {})
@@ -358,7 +447,12 @@ for line in sys.stdin:
         respond(cmd, {})
         out({"type": "session_info_changed", "name": name})
     elif t == "clear_queue":
-        respond(cmd, {"steering": [], "followUp": []})
+        with lock:
+            steering, follow = list(steer_q), list(follow_q)
+            steer_q.clear()
+            follow_q.clear()
+        respond(cmd, {"steering": steering, "followUp": follow})
+        queue_update()
     elif t == "abort":
         aborted.set()
         respond(cmd, {})
