@@ -33,6 +33,8 @@ const ICON = {
   spark: '<svg viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z"/><path d="M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>',
   bell: '<svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  branch: '<svg viewBox="0 0 24 24"><circle cx="6.5" cy="5.5" r="2"/><circle cx="6.5" cy="18.5" r="2"/><circle cx="17.5" cy="7.5" r="2"/><path d="M6.5 7.5v9M17.5 9.5c0 4.5-5 4-10 7.5"/></svg>',
+  clone: '<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8M14 11v6M11 14h6"/></svg>',
 };
 const TOOL_ICON = { bash: ICON.term, read: ICON.file, write: ICON.pen, edit: ICON.pen, grep: ICON.search, find: ICON.search, ls: ICON.folder, web_search: ICON.globe, web_fetch: ICON.globe };
 
@@ -374,7 +376,88 @@ function renderUser(m) {
   if (Array.isArray(m.content)) for (const p of m.content) if (p.type === "image") { const img = el("img"); img.src = `data:${p.mimeType};base64,${p.data}`; b.append(img); }
   b.append(document.createTextNode(textOf(m.content)));
   wrap.append(b);
+  const a = userActions(m); if (a) { wrap.append(a); b.onclick = () => { if (!getSelection().toString()) wrap.classList.toggle("show-actions"); }; }
   return wrap;
+}
+// ---------------------------------------------------------------- fork and clone
+// Fork needs pi's entry id for a user message, but get_messages (what the
+// transcript is drawn from) has none. get_fork_messages has them, as a
+// different list: every user message with text in the session file, oldest
+// first, including ones compacted away and abandoned branches, its text the
+// text blocks joined with nothing. So the two are lined up from the end: the
+// newest message on screen takes the newest fork point with the same text, the
+// one before it the closest earlier one with its text, and so on. Repeated
+// prompts ("go on") get their own entries, and what only one side has
+// (compacted history; image-only messages) is skipped. Same as PocketPiKit's
+// ForkMap.
+function forkText(content) {
+  if (typeof content === "string") return content;
+  return (content || []).filter((p) => p.type === "text").map((p) => p.text).join("");
+}
+function forkEntryIds(shown, points) {
+  const out = shown.map(() => null);
+  let next = points.length - 1;
+  for (let i = shown.length - 1; i >= 0; i--) {
+    if (!shown[i]) continue;
+    let k = next;
+    while (k >= 0 && points[k].text !== shown[i]) k--;
+    if (k < 0) continue; // not on pi's side: keep the cursor where it was
+    out[i] = points[k].entryId; next = k - 1;
+  }
+  return out;
+}
+function userActions(m) {
+  const text = textOf(m.content);
+  const row = el("div", "actions user-actions");
+  if (text.trim()) { const c = el("button", "copy", `${ICON.copy}<span>Copy</span>`); c.onclick = () => copyText(text, c); row.append(c); }
+  if (forkText(m.content)) {
+    const f = el("button", "copy fork", `${ICON.branch}<span>Fork from here</span>`);
+    f.title = "Start a new chat from before this message, with it back in the message box";
+    f.onclick = () => forkFrom(m);
+    row.append(f);
+  }
+  return row.children.length ? row : null;
+}
+async function forkFrom(m) {
+  if (S.streaming) return toast("Wait for pi to finish first.", true);
+  const users = S.msgs.filter((x) => x.role === "user");
+  const n = users.indexOf(m);
+  if (n < 0) return;
+  try {
+    const shown = users.map((x) => forkText(x.content));
+    const points = (await cmd({ type: "get_fork_messages" })).messages || [];
+    const entryId = forkEntryIds(shown, points)[n];
+    if (!entryId) return toast("pi can't fork from this message.", true);
+    const r = await cmd({ type: "fork", entryId });
+    if (r.cancelled) return toast("An extension cancelled the fork.", true);
+    await loadSnapshot();
+    input.value = r.text ?? shown[n]; autosize(); updateSend(); input.focus();
+    toast("Forked: edit and send");
+    loadSessions();
+  } catch (e) { toast(e.message, true); }
+}
+async function cloneChat() {
+  closeSheet();
+  if (S.streaming) return toast("Wait for pi to finish first.", true);
+  try {
+    const r = await cmd({ type: "clone" });
+    if (r.cancelled) return toast("An extension cancelled the copy.", true);
+    await loadSnapshot();
+    toast("Cloned: you're in the copy now");
+    loadSessions();
+  } catch (e) { toast(e.message, true); }
+}
+// pi writes to another file after a fork or clone: that file is the chat now
+// (?s= and the last-opened chat). A fork from the first message leaves pi on
+// a file it only writes with the next message; until then it's a new chat.
+function followSessionFile(st) {
+  if (!st.sessionFile || st.sessionFile === S.path) return;
+  if (st.messageCount) setPath(st.sessionFile); else if (S.path) setPath(null);
+}
+function forkHint(s) {
+  if (!s.parent) return "";
+  const p = S.sessions.find((x) => x.path === s.parent);
+  return `<div class="m fork-hint">${ICON.branch}<span>${p ? "Forked from " + esc(p.name || p.title || "Untitled") : "Forked"}</span></div>`;
 }
 function renderOther(m) {
   if (m.role === "compactionSummary" || m.role === "branchSummary") {
@@ -596,6 +679,7 @@ function onEvent(ev) {
   switch (ev.type) {
     case "pocketpi_hello": return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
+    case "pocketpi_session": loadSnapshot(); break;
     case "pocketpi_exit": {
       setStreaming(false);
       const tail = (ev.stderr || []).slice(-8).join("\n");
@@ -692,7 +776,7 @@ async function loadSnapshot() {
     const [m, st] = await Promise.all([cmd({ type: "get_messages" }), cmd({ type: "get_state" })]);
     if (seq !== snapshotSeq) return;
     S.msgs = m.messages || []; S.state = st;
-    if (st.sessionFile && !S.path && st.messageCount) setPath(st.sessionFile);
+    followSessionFile(st);
     setStreaming(!!st.isStreaming);
     renderAll();
     updateHeader(); updateChips();
@@ -900,6 +984,7 @@ async function openChatSheet() {
     b.append(opt(ICON.chip, `<span class="mono">${esc(modelLabel(S.state?.model))}</span>`, esc(S.state?.model?.provider || ""), () => openModelSheet()));
     b.append(el("div", "sheet-section", "Chat"));
     b.append(opt(ICON.rename, "Rename", null, () => renameChat()));
+    if (S.path && !S.streaming) b.append(opt(ICON.clone, "Clone chat", "Copy this chat and carry on in the copy", () => cloneChat()));
     const sugOn = suggestionsOn();
     const sug = opt(ICON.spark, "Suggested replies", sugOn ? "On · quick answers when pi asks you something" : "Off", () => {
       localStorage.setItem("pp.suggest", sugOn ? "0" : "1"); closeSheet();
@@ -1034,7 +1119,7 @@ function renderSessionList() {
     const g = bucket(s.modified);
     if (g !== last) { box.append(el("div", "group-label", g)); last = g; }
     const b = el("button", "sess" + (s.path === S.path ? " active" : ""));
-    b.innerHTML = `${S.project ? "" : badge(s.cwd, "badge sm")}<div class="sess-main"><div class="t">${s.live ? `<i class="live-dot${s.streaming ? " busy" : ""}"></i>` : ""}<span>${esc(s.name || s.title || "Untitled")}</span></div><div class="m">${S.project ? "" : esc(projectName(s.cwd)) + " · "}${ago(s.modified)} · ${s.messages} msgs</div></div>`;
+    b.innerHTML = `${S.project ? "" : badge(s.cwd, "badge sm")}<div class="sess-main"><div class="t">${s.live ? `<i class="live-dot${s.streaming ? " busy" : ""}"></i>` : ""}<span>${esc(s.name || s.title || "Untitled")}</span></div><div class="m">${S.project ? "" : esc(projectName(s.cwd)) + " · "}${ago(s.modified)} · ${s.messages} msgs</div>${forkHint(s)}</div>`;
     b.onclick = () => openSession(s.path);
     box.append(b);
   }
