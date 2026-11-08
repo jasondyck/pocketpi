@@ -24,7 +24,12 @@ message); a prompt containing "no-fork" makes them answer `cancelled`, as an
 extension's session_before_fork would.
 
 `pi auth check --provider X --json` answers from auth.json for a few
-providers (see auth_check), like pi's CLI does.
+providers (see auth_check), like pi's CLI does. `pi install|remove <src> [-l]`
+edit the global or project settings' packages ("fail" in the source fails),
+`pi update` reports, and `pi mcp list --json|add|remove|logout` work on the
+mcp.json files (see mcp_cli). In a chat, `/mcp login|logout|reconnect <srv>`
+behaves like pi's built-in mcp extension outside the TUI (mcp_command), and
+get_commands lists `mcp` unless settings say `-builtin:mcp`.
 
 Steering and follow-ups queue while it streams (queue_update) and are answered
 after the reply, steering first; "pause" in a prompt makes the reply wait a
