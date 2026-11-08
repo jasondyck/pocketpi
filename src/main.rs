@@ -27,6 +27,8 @@ mod safety;
 mod json_schema;
 mod pi_context;
 mod pi_settings_raw;
+mod exports;
+mod usage;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -154,6 +156,8 @@ pub struct AppState {
     pub(crate) control_ext: Option<PathBuf>,
     /// Where `export_html` writes (never a path a client picks).
     pub(crate) exports_dir: PathBuf,
+    /// Token and cost records per session file, for `/api/usage`.
+    pub(crate) usage_cache: Arc<usage::Cache>,
 }
 
 /// What a live pi is for; restarts, reloads and the control extension only
@@ -268,6 +272,7 @@ async fn main() {
         live: StdMutex::new(HashMap::new()),
         next_key: AtomicU64::new(1),
         meta_cache: sessions::Cache::default(),
+        usage_cache: Arc::new(usage::Cache::default()),
     });
 
     tokio::spawn(reaper(app.clone()));
@@ -280,6 +285,7 @@ async fn main() {
         .route("/manage.js", get(|| async { static_file("manage.js") }))
         .route("/tree.js", get(|| async { static_file("tree.js") }))
         .route("/chat-tools.js", get(|| async { static_file("chat-tools.js") }))
+        .route("/chat-more.js", get(|| async { static_file("chat-more.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -352,6 +358,10 @@ async fn main() {
         .merge(pi_settings_raw::router())
         .route("/api/safety", get(safety::info))
         .route("/api/safety/recommended", post(safety::use_recommended))
+        .route("/api/s/{key}/export", post(exports::export))
+        .route("/api/exports/{name}", get(exports::serve_export))
+        .route("/api/sessions/file", get(exports::download_session))
+        .route("/api/usage", get(usage::route))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -423,6 +433,7 @@ const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("resources"),
     manage_page!("safety"),
     manage_page!("context"),
+    manage_page!("usage"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {
@@ -444,6 +455,7 @@ fn static_file(name: &str) -> Response {
         "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
         "tree.js" => (include_bytes!("../web/tree.js"), "text/javascript; charset=utf-8"),
         "chat-tools.js" => (include_bytes!("../web/chat-tools.js"), "text/javascript; charset=utf-8"),
+        "chat-more.js" => (include_bytes!("../web/chat-more.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
@@ -783,10 +795,7 @@ async fn send_command(
     }
     // pi writes the export wherever it's told: only ever into our folder.
     if ty == "export_html" {
-        let _ = std::fs::create_dir_all(&app.exports_dir);
-        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
-        let name = format!("{}-{ms}.html", live.key);
-        cmd["outputPath"] = json!(app.exports_dir.join(name));
+        cmd["outputPath"] = json!(exports::prepare(&app.exports_dir, &live.key));
     }
     if ty == "extension_ui_response" {
         if let Some(id) = cmd.get("id").and_then(Value::as_str) {

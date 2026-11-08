@@ -12,9 +12,11 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works or queueing a message until the turn ends (long-press or right-click send; Alt+Enter), `!cmd` / `!!cmd` shell commands (output into or kept out of the context) with a live card and Stop, a retry countdown with "Stop retrying", stop, image attachments, slash commands, extension dialogs
 - Fork from an earlier message of yours (it comes back into the message box to edit and resend) and clone a chat; both carry on in a new session file, listed as "Forked from …"
 - Session tree (pi's `/tree`): every branch of a chat with its labels, compactions and branch summaries; go back to any point in the same session file (a prompt comes back into the message box), optionally summarizing the branch you leave; label entries. Session info: file, id, parent, counts by role, cost per model
+- Export a chat as pi's HTML page (open or download; Quick Look and share on iOS) or download its session JSONL; compact with an optional "Focus the summary on…" (`src/exports.rs`, `web/chat-more.js`)
+- **Settings › Usage** (`src/usage.rs`): cost and tokens per day, model, provider and project over 7/30/90 days, from every session file (cached by mtime + size); subscription costs (OAuth logins, Codex, Copilot) shown as the API-rate equivalent and kept out of "spent", OpenCode Go's pool on its own
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
 - **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs with `--no-tools` and a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
-- **llama.cpp router** (`src/llama.rs`): `/api/llama` lists the router pi is logged in to (`/login llama.cpp`) and `/api/llama/load` loads a model on it (unloading the others), so the app can pick local models
+- **llama.cpp router** (`src/llama.rs`): `/api/llama` lists the router pi is logged in to (`/login llama.cpp`) and `/api/llama/load` loads a model on it (unloading the others), so the app can pick local models (iOS and the web's model sheet, under *Local*)
 - **iOS app** (`ios/`, early): native SwiftUI client for the same API; see `ios/README.md`
 - **APNs** (`src/apns.rs`): the same notifications go to the iOS app when `~/.config/pocketpi/apns/AuthKey_<KEYID>.p8` exists (team/topic: `POCKETPI_APNS_TEAM`, `POCKETPI_APNS_TOPIC`)
 
@@ -89,6 +91,15 @@ The RPC allowlist also has `fork`, `clone`, `get_fork_messages`, `get_tree`,
 epoch). After a fork or clone the server asks pi for its new session file and
 broadcasts `{"type":"pocketpi_session","file":...}`. `cycle_model`,
 `new_session` and `switch_session` are never allowed.
+
+## Export and usage (`src/exports.rs`, `src/usage.rs`)
+
+| Route | Body / query | Answer |
+|---|---|---|
+| `POST /api/s/{key}/export` | | pi writes the chat's HTML (`export_html`) to a path the server picks in `$XDG_DATA_HOME/pocketpi/exports/` (exports older than a day, or beyond 30, are pruned): `{name, url}` |
+| `GET /api/exports/{name}` | `?download=1&title=` | the export, `text/html` with `Content-Security-Policy: sandbox` (its scripts can't call the API); only names the server made |
+| `GET /api/sessions/file` | `?path=<session file>&title=` | the session JSONL as an attachment, streamed; only `.jsonl` files that resolve inside the sessions or Chat-tab folder |
+| `GET /api/usage` | `?days=7\|30\|90&tz=<minutes east of UTC>` | `{totals, billing: {api, subscription, pool}, byDay, byModel, byProvider, byProject, files, ms}`; usage from assistant messages, `usage` entries and compaction / branch summaries, fork copies counted once |
 
 ## Safety (`src/safety.rs`, `src/dialogs.rs`)
 

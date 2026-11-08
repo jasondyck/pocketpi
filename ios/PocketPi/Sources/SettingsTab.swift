@@ -55,6 +55,7 @@ enum SettingsPages {
         .resources,
         .safety,
         .context,
+        .usage,
     ]
 
     static var sorted: [SettingsPage] {

@@ -70,6 +70,30 @@ json.dump({"created": 1794000000000, "run_id": "x", "model": "fake/echo-1",
 w2 = dict(w, id="delete-me", name="Delete me")
 json.dump(w2, open(f"{d}/delete-me.json", "w"))
 PY
+  # A session with known usage for /api/usage (project "/usage-seed"):
+  # billed, pool, subscription and a usage entry this week; one reply 40 days ago.
+  mkdir -p "$SCRATCH/sessions/--usage-seed--"
+  python3 - "$SCRATCH/sessions/--usage-seed--/seed.jsonl" <<'PY'
+import json, sys, time
+now = int(time.time() * 1000)
+def iso(ms): return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ms / 1000))
+def reply(i, ms, provider, model, inp, out, cost):
+    return {"type": "message", "id": f"seed{i}", "parentId": None, "timestamp": iso(ms), "message": {
+        "role": "assistant", "content": [{"type": "text", "text": "ok"}], "provider": provider, "model": model,
+        "usage": {"input": inp, "output": out, "cacheRead": 0, "cacheWrite": 0, "totalTokens": inp + out,
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": cost}},
+        "stopReason": "stop", "timestamp": ms}}
+h = 3_600_000
+recs = [{"type": "session", "version": 3, "id": "usage-seed", "timestamp": iso(now), "cwd": "/usage-seed"},
+        reply(1, now - 40 * 24 * h, "anthropic", "claude-x", 5, 5, 9.0),
+        reply(2, now - h, "anthropic", "claude-x", 1000, 100, 1.0),
+        reply(3, now - 2 * h, "opencode-go", "glm-5.2", 2000, 10, 0.25),
+        reply(4, now - 3 * h, "openai-codex", "gpt-5.5", 300, 30, 0.0),
+        {"type": "usage", "id": "seed5", "parentId": "seed4", "timestamp": iso(now - h), "kind": "cache_warm",
+         "provider": "anthropic", "model": "claude-x",
+         "usage": {"input": 0, "output": 0, "cacheRead": 50000, "cacheWrite": 0, "totalTokens": 50000, "cost": {"total": 0.5}}}]
+open(sys.argv[1], "w").write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
+PY
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # A stand-in llama.cpp router, logged in the way pi's /login llama.cpp stores it.
   LLAMA_PORT=$((PORT + 2))

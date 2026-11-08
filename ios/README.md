@@ -19,7 +19,12 @@ switches to it. `fake-llama.py` stands in for the router in the tests.
 
 **Settings** lists pi's configuration pages (one file each, see
 docs/pi-parity-plan.md §7) and shows "Restart to apply" when chats run with
-settings older than the last change; chats show it too.
+settings older than the last change; chats show it too. Settings › Usage
+charts cost and tokens per day with tables by model, provider and project.
+
+A chat's title menu also has Compact context… (with an optional focus for
+the summary), Export as HTML and Download JSONL; the file opens in Quick
+Look, whose share button sends it on.
 
 ## Notifications
 

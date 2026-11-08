@@ -41,6 +41,8 @@ private struct ChatScreen: View {
     @State private var openedRun: String?
     @State private var treeSheet: TreeSheet?
     @State private var showTools = false
+    @State private var compacting = false
+    @State private var exported: URL?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -164,10 +166,7 @@ private struct ChatScreen: View {
         .toolbarTitleMenu {
             RenameButton()
                 .disabled(session.key == nil && session.path == nil)
-            Button("Compact context", systemImage: "arrow.down.right.and.arrow.up.left") {
-                Task { await session.compact() }
-            }
-            .disabled(session.isStreaming || session.path == nil)
+            ChatExtraButtons(session: session, compacting: $compacting, preview: $exported)
             Button("Clone chat", systemImage: "plus.square.on.square") {
                 Task { await session.clone() }
             }
@@ -176,6 +175,7 @@ private struct ChatScreen: View {
             ChatToolsMenuButton(session: session, shown: $showTools)
         }
         .chatToolsSheet(isPresented: $showTools, session: session)
+        .chatExtras(session: session, compacting: $compacting, preview: $exported)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { ContextGauge(session: session) }
         }

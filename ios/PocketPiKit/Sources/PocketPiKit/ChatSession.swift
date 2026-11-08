@@ -611,7 +611,7 @@ public final class ChatSession {
     }
 
     public func compact() async {
-        do { try await command(["type": "compact"]) } catch { problem = error.reportable }
+        await compact(instructions: nil)
     }
 
     // MARK: - fork and clone
