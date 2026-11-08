@@ -38,6 +38,8 @@ if [ "${1:-}" != "--unit" ]; then
   printf -- '---\nname: review\ndescription: Review the staged diff\n---\nReview it.\n' > "$A/skills/review/SKILL.md"
   printf -- '---\ndescription: Fix failing tests\nargument-hint: "<file>"\n---\nFix $1\n' > "$A/prompts/fix-tests.md"
   printf -- '---\ndescription: Deploy this project\n---\nDeploy.\n' > "$SCRATCH/home/project/.pi/prompts/deploy.md"
+  # Settings › Context and project settings: a project of their own with a CLAUDE.md.
+  mkdir -p "$SCRATCH/home/ctx-project" && echo 'Claude notes' > "$SCRATCH/home/ctx-project/CLAUDE.md"
   mkdir -p "$SCRATCH/home/.config/pocketpi/workflows"
   cat > "$SCRATCH/home/.config/pocketpi/workflows/approve-test.json" <<JSON
 {"id":"approve-test","name":"Approve test","project":"$SCRATCH/home/project","worktree":false,"enabled":true,

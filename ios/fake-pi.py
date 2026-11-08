@@ -174,6 +174,17 @@ name = None
 streaming = False
 settings = {"steeringMode": "one-at-a-time", "followUpMode": "one-at-a-time", "autoCompaction": True, "autoRetry": True}
 TOOLS = ["read", "bash", "edit", "write", "grep"]
+# Tools besides the core ones, as pi.getAllTools() reports them: a built-in
+# extension's, an MCP server's, a local extension's, and a withdrawn one.
+EXTRA_TOOLS = [
+    {"name": "codemode", "description": "Run a script that calls tools", "exposure": "direct", "source": "builtin",
+     "path": "builtin:codemode"},
+    {"name": "mcp__docs__search", "description": "Search the docs", "exposure": "direct", "source": "builtin",
+     "path": "builtin:mcp"},
+    {"name": "hello_world", "description": "Say hello", "exposure": "direct", "source": "local",
+     "path": "/ext/hello.ts"},
+    {"name": "old_tool", "description": "Withdrawn", "exposure": "hidden", "source": "local", "path": "/ext/hello.ts"},
+]
 active_tools = ["read", "bash", "edit", "write"]
 
 def now_iso():
@@ -392,12 +403,14 @@ def control_command(line):
         if head != "/pp-tools":
             raise ValueError(f"unknown command {head}")
         if a and isinstance(a.get("active"), list):
-            unknown = [str(n) for n in a["active"] if n not in TOOLS]
+            unknown = [str(n) for n in a["active"] if n not in TOOLS + [t["name"] for t in EXTRA_TOOLS]]
             if unknown:
                 raise ValueError("unknown tools: " + ", ".join(unknown))
-            active_tools = list(a["active"])
+            # pi.setActiveTools ignores hidden tools.
+            active_tools = [n for n in a["active"] if n != "old_tool"]
         data = {"tools": [{"name": t, "description": f"The {t} tool", "exposure": "direct", "source": "builtin",
-                           "path": f"builtin:{t}", "active": t in active_tools} for t in TOOLS],
+                           "path": f"builtin:{t}", "active": t in active_tools} for t in TOOLS]
+                + [dict(t, active=t["name"] in active_tools) for t in EXTRA_TOOLS],
                 "active": active_tools}
         reply = {"reqId": req_id, "ok": True, "data": data}
     except Done as d:

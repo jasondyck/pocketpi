@@ -40,6 +40,7 @@ private struct ChatScreen: View {
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var openedRun: String?
     @State private var treeSheet: TreeSheet?
+    @State private var showTools = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -172,7 +173,9 @@ private struct ChatScreen: View {
             }
             .disabled(session.isStreaming || session.path == nil)
             TreeMenuButtons(session: session, sheet: $treeSheet)
+            ChatToolsMenuButton(session: session, shown: $showTools)
         }
+        .chatToolsSheet(isPresented: $showTools, session: session)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { ContextGauge(session: session) }
         }

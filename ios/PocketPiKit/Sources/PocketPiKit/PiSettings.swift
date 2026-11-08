@@ -94,7 +94,7 @@ public enum EnabledModels {
 
 /// The groups the page shows, in order.
 public enum PiSettingGroup: String, CaseIterable, Sendable {
-    case models, queue, compaction, retry, images, display
+    case models, queue, compaction, retry, images, display, tools
 
     public var title: String {
         switch self {
@@ -104,6 +104,7 @@ public enum PiSettingGroup: String, CaseIterable, Sendable {
         case .retry: "Retry"
         case .images: "Images"
         case .display: "Display"
+        case .tools: "Tools"
         }
     }
 }
@@ -169,6 +170,13 @@ public enum PiSettings {
               detail: "Never send images to models.", kind: .toggle(default: false)),
         .init(key: "hideThinkingBlock", group: .display, title: "Hide thinking",
               detail: "Leave thinking blocks out of the transcript.", kind: .toggle(default: false)),
+        // `defaultTools` has its own editor (DefaultTools.swift).
+        .init(key: "codemode.mode", group: .tools, title: "Codemode",
+              detail: "While the codemode tool is on. On: tools stay declared and codemode lists the rest. Only: the model reaches every tool through codemode scripts.",
+              kind: .choice(["on", "only"], labels: ["On", "Only"], default: "on")),
+        .init(key: "codemode.inlineBudget", group: .tools, title: "Codemode budget",
+              detail: "Tokens codemode's description may spend listing tools; the rest are found with searchTools(). 0 lists only namespaces.",
+              kind: .number(default: 3000, min: 0, max: nil)),
     ]
 
     public static func spec(_ key: String) -> PiSettingSpec? { specs.first { $0.key == key } }

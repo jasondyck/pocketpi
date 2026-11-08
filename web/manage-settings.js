@@ -2,12 +2,33 @@
 // Settings › pi settings: typed controls for the keys in pi's global
 // ~/.pi/agent/settings.json that matter to a pi under pocketpi (models,
 // favourites, thinking per model, queue modes, compaction, retry, images,
-// display). TUI-only keys aren't offered; they and anything else pocketpi
-// doesn't know survive because every write is a patch (POST
-// /api/pi/config/settings {set, unset}). Global: terminal pi and workflow
-// stages see the same file. The iOS twin is SettingsPiPage.swift with
-// PocketPiKit's PiSettings.swift (same keys, same defaults).
+// display, default tools, codemode). TUI-only keys aren't offered; they and
+// anything else pocketpi doesn't know survive because every write is a patch
+// (POST /api/pi/config/settings {set, unset}). Global: terminal pi and
+// workflow stages see the same file. A Global/Project switch edits a
+// project's <cwd>/.pi/settings.json instead (?cwd=), and "Edit as JSON"
+// replaces the whole file through /api/pi/config/settings/raw, which checks
+// it against pi's schema first. The iOS twin is SettingsPiPage.swift with
+// PocketPiKit's PiSettings.swift, DefaultTools.swift and PiContext.swift
+// (same keys, same defaults).
 (() => {
+  // The scope stays picked while the page is reopened ("" = global).
+  let scopeCwd = "";
+  const SCOPE_CSS = `.mp-settings .st-scope { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.mp-settings .st-scope .seg { flex: none; width: 180px; }
+.mp-settings .st-scope .seg button { font-family: var(--font); }
+.mp-settings select.st-proj-pick { flex: 1; max-width: none; min-width: 0; }
+.mp-settings .st-tag.st-proj { color: var(--signal-ink, var(--text)); background: var(--signal); border-color: transparent; }
+.mp-settings .st-warn { color: var(--warn); font-weight: 600; }
+.mp-settings .st-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 12px; border-top: 0 !important; }
+.mp-settings .chip.st-tool { cursor: pointer; padding: 6px 11px; font-size: 12.5px; }
+.mp-settings .chip.st-tool.on { background: var(--text); color: var(--bg); }
+.mp-settings .chip.st-tool svg { width: 12px; height: 12px; stroke-width: 3; }
+.mp-settings .st-code { font: 12px var(--mono); overflow-wrap: anywhere; }
+.mp-settings .st-tools { margin-bottom: 10px; }
+.st-raw textarea { height: 52vh !important; font-size: 13px !important; white-space: pre; }
+.st-raw-msg { margin-top: 10px; font: 12.5px/1.45 var(--mono); }
+.st-raw-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.4; }`;
   const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
   const QUEUE = [["one-at-a-time", "One at a time"], ["all", "All at once"]];
   const choice = (values, def) => ({ type: "choice", values: values.map((v) => (Array.isArray(v) ? v : [v, v])), def });
@@ -24,6 +45,9 @@
     ["images", "images.autoResize", "Resize images", "Shrink images to at most 2000×2000 before sending them.", { type: "toggle", def: true }],
     ["images", "images.blockImages", "Block images", "Never send images to models.", { type: "toggle", def: false }],
     ["display", "hideThinkingBlock", "Hide thinking", "Leave thinking blocks out of the transcript.", { type: "toggle", def: false }],
+    // defaultTools has its own card (DEFAULT TOOLS below).
+    ["tools", "codemode.mode", "Codemode", "While the codemode tool is on. On: tools stay declared and codemode lists the rest. Only: the model reaches every tool through codemode scripts.", choice([["on", "On"], ["only", "Only"]], "on")],
+    ["tools", "codemode.inlineBudget", "Codemode budget", "Tokens codemode's description may spend listing tools; the rest are found with searchTools(). 0 lists only namespaces.", { type: "number", def: 3000, min: 0 }],
   ].map(([group, key, title, detail, kind]) => ({ group, key, title, detail, ...kind }));
 
   const UP = '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>';
@@ -59,6 +83,40 @@
   const glob = (pattern, s) => new RegExp("^" + pattern.toLowerCase().split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$").test(s.toLowerCase());
   const matches = (p, m) => glob(p.pattern, `${m.provider}/${m.id}`) || glob(p.pattern, m.id);
 
+  // ---------------------------------------------------------------- defaultTools (as in DefaultTools.swift)
+  // Plain names replace the inherited selection; a list of only +name/-name
+  // changes it; in one list the plain names come first, then +/- in order.
+  // Project lists apply on top of the global one. Empty: no built-in tools.
+  const PI_TOOLS = ["read", "bash", "edit", "write"];
+  const KNOWN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "powershell", "codemode", "tool_search"];
+  const dtParse = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").map((x) => x.trim()).filter((x) => x && x !== "+" && x !== "-") : null);
+  const dtName = (e) => (e[0] === "+" || e[0] === "-" ? e.slice(1).trim() : e);
+  const dtRelative = (l) => l.length > 0 && l.every((e) => e[0] === "+" || e[0] === "-");
+  function dtResolve(list, inherited = PI_TOOLS) {
+    if (!list) return inherited.slice();
+    let out = list.length && dtRelative(list) ? inherited.slice() : [];
+    for (const e of list) if (e[0] !== "+" && e[0] !== "-" && !out.includes(e)) out.push(e);
+    for (const e of list) if (e[0] === "+" || e[0] === "-") { out = out.filter((x) => x !== dtName(e)); if (e[0] === "+") out.push(dtName(e)); }
+    return out;
+  }
+  function dtToggle(list, name, on, inherited = PI_TOOLS) {
+    if (!list || dtRelative(list)) {
+      const l = (list || []).filter((e) => dtName(e) !== name);
+      if (inherited.includes(name) !== on) l.push((on ? "+" : "-") + name);
+      return l;
+    }
+    let l = list.filter((e) => !(dtName(e) === name && (e[0] === "+" || e[0] === "-")));
+    if (on) { if (!dtResolve(l, inherited).includes(name)) l.push(name); } else l = l.filter((e) => dtName(e) !== name);
+    return l;
+  }
+  function dtExplain(list, project) {
+    const from = project ? "the global selection" : "pi's default (read, bash, edit, write)";
+    if (!list) return `Not set: new chats get ${from}.`;
+    if (!list.length) return "Empty: new chats start with no built-in tools (extension tools still load).";
+    if (dtRelative(list)) return `Only +/− entries: they change ${from}.`;
+    return `Plain names replace ${from}; +/− entries then apply in order.`;
+  }
+
   // The models pi can use: get_available_models from a running chat's pi, or
   // from a pi started for the purpose (no messages, so no session file) and
   // closed again. Kept for a minute.
@@ -86,7 +144,7 @@
   ppManage.register({
     id: "settings",
     title: "pi settings",
-    subtitle: "Models, favourites, queue, compaction, retry",
+    subtitle: "Models, tools, compaction, retry · global or per project",
     icon: SLIDERS,
     order: 10,
     async render(root, ctx) {
@@ -116,17 +174,40 @@
 .mp-settings .opt.switch-row .o-s { white-space: normal; }
 .mp-settings .st-pick { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 11px 14px; }
 .mp-settings .st-pick .st-v { font: 13px var(--mono); color: var(--text-2); max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mp-settings .mp-chev svg { width: 16px; height: 16px; }`);
+.mp-settings .mp-chev svg { width: 16px; height: 16px; }
+${SCOPE_CSS}`);
       root.append(el("div", "wf-loading", "Loading…"));
-      let doc = (await ctx.api("/api/pi/config/settings"));
+      // Global, or one project's <cwd>/.pi/settings.json (pi applies it on
+      // top of the global file once it trusts the project).
+      const scope = { cwd: scopeCwd, projects: [], trust: null, global: null };
+      const q = () => (scope.cwd ? `?cwd=${encodeURIComponent(scope.cwd)}` : "");
+      let doc;
+      async function load() {
+        doc = await ctx.api(`/api/pi/config/settings${q()}`);
+        scope.global = scope.cwd ? await ctx.api("/api/pi/config/settings") : doc;
+        scope.trust = scope.cwd ? (await ctx.api(`/api/pi/context${q()}`).catch(() => null))?.trust || null : null;
+      }
+      try { await load(); } catch (e) {
+        if (!scope.cwd) throw e;
+        ctx.toast(`${e.message}: showing the global settings`, true);
+        scope.cwd = scopeCwd = ""; await load();
+      }
+      ctx.api("/api/projects").then((r) => { scope.projects = (r.projects || []).filter((p) => p.exists !== false); if (root.isConnected) draw(); }).catch(() => {});
       let models = modelCache?.list || null;
       let saving = false;
+
+      async function switchScope(cwd) {
+        scope.cwd = scopeCwd = cwd;
+        try { await load(); } catch (e) { ctx.toast(e.message, true); scope.cwd = scopeCwd = ""; await load(); }
+        draw();
+      }
 
       async function write(patch, done) {
         if (saving) return;
         saving = true;
         try {
-          doc = await ctx.api("/api/pi/config/settings", { set: patch.set || {}, unset: patch.unset || [] });
+          doc = await ctx.api(`/api/pi/config/settings${q()}`, { set: patch.set || {}, unset: patch.unset || [] });
+          if (!scope.cwd) scope.global = doc;
           await ctx.needsRestart();
           if (done) ctx.toast(done);
         } catch (e) { ctx.toast(e.message, true); }
@@ -141,7 +222,7 @@
 
       // ------------------------------------------------------------ controls
       const section = (title) => {
-        const h = el("div", "wf-section", `<span>${esc(title)}</span><span class="st-tag">GLOBAL</span>`);
+        const h = el("div", "wf-section", `<span>${esc(title)}</span><span class="st-tag${scope.cwd ? " st-proj" : ""}">${scope.cwd ? "PROJECT" : "GLOBAL"}</span>`);
         return h;
       };
       function select(options, value, onChange) {
@@ -167,7 +248,7 @@
         }
         if (spec.type === "choice") {
           const defLabel = spec.values.find(([v]) => v === spec.def)[1];
-          const s = select([["", "Default"], ...spec.values], set ? effective(data, spec) : "", (v) =>
+          const s = select([["", scope.cwd ? "Inherit" : "Default"], ...spec.values], set ? effective(data, spec) : "", (v) =>
             write(v ? { set: { [spec.key]: v } } : { unset: [spec.key] }));
           s.dataset.key = spec.key;
           return row(esc(spec.title), `${esc(spec.detail)} Default: ${esc(defLabel.toLowerCase())}.`, s);
@@ -227,8 +308,15 @@
       function draw() {
         const data = doc.data || {};
         root.innerHTML = "";
-        const path = ctx.home && doc.path.startsWith(ctx.home + "/") ? "~" + doc.path.slice(ctx.home.length) : doc.path;
-        root.append(el("div", "st-global", `<b>Global settings.</b> These are pi's own settings in <code>${esc(path)}</code>: terminal pi and workflow stages use them too. Open chats pick changes up after a restart.`));
+        const path = tilde(doc.path);
+        root.append(scopeBar());
+        if (scope.cwd) {
+          const t = scope.trust;
+          const warn = t && !t.trusted ? ` <b class="st-warn">pi doesn't trust this project yet, so it ignores this file</b> (Settings › Project trust).` : "";
+          root.append(el("div", "st-global", `<b>Project settings.</b> <code>${esc(path)}</code> applies on top of the global settings for chats in this project; unset keys inherit them.${warn} Open chats pick changes up after a restart.`));
+        } else {
+          root.append(el("div", "st-global", `<b>Global settings.</b> These are pi's own settings in <code>${esc(path)}</code>: terminal pi and workflow stages use them too. Open chats pick changes up after a restart.`));
+        }
 
         // Models
         root.append(section("Models"));
@@ -308,6 +396,111 @@
         root.append(section("Retry"), card(...specs("retry")));
         root.append(section("Images"), card(...specs("images")));
         root.append(section("Display"), card(...specs("display")));
+        root.append(section("Tools"), toolsCard(), card(...specs("tools")));
+        root.append(section("settings.json"), rawCard());
+      }
+
+      // ------------------------------------------------------------ scope, tools, raw editor
+      function tilde(p) { return ctx.home && p.startsWith(ctx.home + "/") ? "~" + p.slice(ctx.home.length) : p; }
+      function scopeBar() {
+        const bar = el("div", "st-scope");
+        const seg = el("div", "seg");
+        const g = el("button", scope.cwd ? "" : "on", "Global"); g.dataset.scope = "global";
+        const p = el("button", scope.cwd ? "on" : "", "Project"); p.dataset.scope = "project";
+        g.onclick = () => { if (scope.cwd) switchScope(""); };
+        p.onclick = () => {
+          if (scope.cwd) return;
+          const first = ctx.project || scope.projects[0]?.path;
+          if (!first) return ctx.toast("No projects yet", true);
+          switchScope(first);
+        };
+        seg.append(g, p);
+        bar.append(seg);
+        if (scope.cwd) {
+          const list = scope.projects.some((x) => x.path === scope.cwd) ? scope.projects : [{ path: scope.cwd, name: scope.cwd.split("/").pop() }, ...scope.projects];
+          const s = select(list.map((x) => [x.path, x.name || x.path.split("/").pop()]), scope.cwd, (v) => switchScope(v));
+          s.classList.add("st-proj-pick"); s.dataset.key = "project";
+          bar.append(s);
+        }
+        return bar;
+      }
+
+      // defaultTools: a switch per tool for the selection new chats get, on
+      // top of what this file inherits (pi's default, or the global list).
+      function toolsCard() {
+        const list = dtParse(doc.data?.defaultTools);
+        const inherited = scope.cwd ? dtResolve(dtParse(scope.global?.data?.defaultTools)) : PI_TOOLS;
+        const sel = dtResolve(list, inherited);
+        const c = card();
+        c.classList.add("st-tools");
+        c.append(row("Default tools", `What new chats start with. ${esc(dtExplain(list, !!scope.cwd))} A chat's own tools: its sheet › Tools.`));
+        const names = [...KNOWN_TOOLS];
+        for (const n of [...inherited, ...(list || []).map(dtName)]) if (!names.includes(n)) names.push(n);
+        const chips = el("div", "st-chips");
+        for (const n of names) {
+          const on = sel.includes(n);
+          const b = el("button", `chip st-tool${on ? " on" : ""}`, `${on ? ctx.ICON.check : ""}${esc(n)}`);
+          b.dataset.tool = n; b.setAttribute("aria-pressed", String(on));
+          b.onclick = () => {
+            const next = dtToggle(list, n, !on, inherited);
+            write({ set: { defaultTools: next } }, `${n} ${on ? "off" : "on"} for new chats`);
+          };
+          chips.append(b);
+        }
+        c.append(chips);
+        const raw = list ? (list.length ? list.map((e) => `"${e}"`).join(", ") : "[] (none)") : "not set";
+        const foot = el("div", "st-row st-s", `<div class="st-main">In the file: <code class="st-code" data-key="defaultTools">${esc(raw)}</code></div>`);
+        if (list) {
+          const reset = el("button", "btn secondary small", scope.cwd ? "Inherit" : "Reset");
+          reset.onclick = () => write({ unset: ["defaultTools"] }, scope.cwd ? "Default tools: inherited" : "Default tools: pi's default");
+          foot.append(reset);
+        }
+        c.append(foot);
+        return c;
+      }
+
+      function rawCard() {
+        const b = el("button", "st-pick", `<div class="st-main"><div class="st-t">Edit as JSON</div><div class="st-s">The whole file, checked against pi's schema before it's saved. The old version is kept as a backup.</div></div><span class="mp-chev">${ctx.ICON.chev}</span>`);
+        b.dataset.key = "raw";
+        b.onclick = openRaw;
+        return card(b);
+      }
+
+      async function openRaw() {
+        let raw;
+        try { raw = await ctx.api(`/api/pi/config/settings/raw${q()}`); } catch (e) { return ctx.toast(e.message, true); }
+        ctx.openSheet((b) => {
+          b.append(el("div", "sheet-title", `settings.json · ${scope.cwd ? "project" : "global"}`), el("div", "sheet-sub", esc(tilde(raw.path))));
+          const f = el("div", "field st-raw"); const ta = el("textarea"); ta.spellcheck = false; ta.autocapitalize = "off";
+          ta.value = raw.exists && raw.text ? raw.text : "{\n}\n";
+          f.append(ta); b.append(f);
+          const msg = el("div", "st-raw-msg"); b.append(msg);
+          const show = (problems, ok) => {
+            msg.innerHTML = "";
+            if (ok) msg.append(el("div", "errbox soft", esc(ok)));
+            else if (problems.length) msg.append(el("div", "errbox", problems.map((p) => esc(p)).join("<br>")));
+          };
+          const check = el("button", "btn secondary", "Check"); check.dataset.act = "check";
+          const save = el("button", "btn", "Save"); save.dataset.act = "save";
+          check.onclick = async () => {
+            try {
+              const r = await ctx.api(`/api/pi/config/settings/raw${q()}`, { text: ta.value, check: true });
+              show((r.problems || []).map((p) => (p.path ? `${p.path}: ${p.message}` : p.message)), r.valid ? "Looks right to pi's schema." : null);
+            } catch (e) { show([e.message]); }
+          };
+          save.onclick = async () => {
+            save.disabled = true;
+            try {
+              doc = await ctx.api(`/api/pi/config/settings/raw${q()}`, { text: ta.value });
+              if (!scope.cwd) scope.global = doc;
+              await ctx.needsRestart();
+              ctx.closeSheet(); ctx.toast("settings.json saved"); draw();
+            } catch (e) { show(e.message.split("\n")); }
+            save.disabled = false;
+          };
+          const r = el("div", "btn-row"); r.append(check, save); b.append(r);
+          b.append(el("div", "st-raw-note", `Schema: ${esc(raw.schema === "bundled" ? "pi's, as pocketpi was built" : tilde(raw.schema))}. Keys pocketpi doesn't show are fine here.`));
+        });
       }
       draw();
       // Fill in what the favourites' patterns match, without blocking the page.

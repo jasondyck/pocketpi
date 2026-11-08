@@ -2,7 +2,9 @@ import PocketPiKit
 import SwiftUI
 
 // Settings › pi settings: pi's global settings.json (models, favourites,
-// thinking per model, queue, compaction, retry, images, display). The keys,
+// thinking per model, queue, compaction, retry, images, display, default
+// tools, codemode), global or a project's (SettingsPiScope.swift, which also
+// has the default-tools rows and the JSON editor). The keys,
 // defaults, parsing and patches are PocketPiKit's PiSettings.swift; this view
 // only draws them. Every write is a patch, so keys it doesn't show are kept.
 // The web twin is web/manage-settings.js.
@@ -15,9 +17,14 @@ extension SettingsPage {
 
 private struct SettingsPiPage: View {
     @Environment(SettingsHub.self) private var hub
+    @Environment(AppModel.self) private var app
     @State private var doc: PiConfigDocument?
     @State private var models: [ModelInfo]?
     @State private var problem: String?
+    /// Global, or a project's .pi/settings.json (SettingsPiScope.swift).
+    @State private var scope: SettingsScope = .global
+    @State private var globalData: JSONValue = .object([:])
+    @State private var trusted: Bool?
 
     private var data: JSONValue { doc?.data ?? .object([:]) }
     private var favourites: [ModelPattern] { EnabledModels.parse(data["enabledModels"]) }
@@ -25,22 +32,17 @@ private struct SettingsPiPage: View {
     var body: some View {
         List {
             if let doc {
-                Section {
-                    Label {
-                        Text("These are pi's own settings in \(doc.path). Terminal pi and workflow stages use them too; open chats pick changes up after a restart.")
-                            .font(.footnote)
-                    } icon: {
-                        Image(systemName: "globe")
-                    }
-                    .foregroundStyle(.secondary)
-                } header: {
-                    Text("Global")
-                }
+                ScopeSection(scope: $scope, projects: app.projects, path: doc.path, trusted: trusted)
                 modelsSection
                 favouritesSection
                 thinkingSection
-                ForEach([PiSettingGroup.queue, .compaction, .retry, .images, .display], id: \.self) { group in
+                ForEach([PiSettingGroup.queue, .compaction, .retry, .images, .display, .tools], id: \.self) { group in
                     Section {
+                        if group == .tools {
+                            DefaultToolsRows(data: data, globalData: globalData, project: scope.isProject) { p in
+                                Task { await write(p) }
+                            }
+                        }
                         ForEach(PiSettings.specs(in: group)) { spec in control(spec) }
                         if group == .compaction {
                             ForEach(PiSettings.compactionOverrides(data)) { o in
@@ -55,12 +57,14 @@ private struct SettingsPiPage: View {
                         GlobalHeader(title: group.title)
                     }
                 }
+                RawSettingsSection(scope: scope) { await load(); await hub.changed() }
             } else if problem == nil {
                 ProgressView().frame(maxWidth: .infinity)
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        .task { await load() }
+        .environment(\.settingsProjectScope, scope.isProject)
+        .task(id: scope) { await load() }
         .refreshable { await load() }
         .alert("Couldn't save", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK", role: .cancel) {}
@@ -200,7 +204,7 @@ private struct SettingsPiPage: View {
                 get: { PiSettings.selection(data, spec) },
                 set: { v in Task { await write(PiSettings.patch(spec, selection: v)) } }
             )) {
-                Text("Default (\(labels[values.firstIndex(of: def) ?? 0]))").tag("")
+                Text(scope.isProject ? "Inherit" : "Default (\(labels[values.firstIndex(of: def) ?? 0]))").tag("")
                 ForEach(Array(zip(values, labels)), id: \.0) { v, l in Text(l).tag(v) }
             } label: {
                 SettingLabel(spec: spec)
@@ -220,7 +224,14 @@ private struct SettingsPiPage: View {
 
     private func load() async {
         do {
-            doc = try await hub.client.config(.settings)
+            doc = try await hub.client.config(.settings, cwd: scope.cwd)
+            if scope.isProject {
+                globalData = try await hub.client.config(.settings).data
+                trusted = (try? await hub.client.contextOverview(cwd: scope.cwd))?.trusted
+            } else {
+                globalData = data
+                trusted = nil
+            }
         } catch {
             problem = error.reportable
         }
@@ -242,7 +253,8 @@ private struct SettingsPiPage: View {
 
     private func write(_ patch: PiConfigPatch) async {
         do {
-            doc = try await hub.client.patchConfig(.settings, patch)
+            doc = try await hub.client.patchConfig(.settings, patch, cwd: scope.cwd)
+            if !scope.isProject { globalData = data }
             await hub.changed()
         } catch {
             problem = error.reportable
@@ -250,17 +262,18 @@ private struct SettingsPiPage: View {
     }
 }
 
-/// A section header with the "Global" tag.
+/// A section header with the "Global" (or "Project") tag.
 private struct GlobalHeader: View {
     let title: String
+    @Environment(\.settingsProjectScope) private var project
     var body: some View {
         HStack(spacing: 6) {
             Text(title)
-            Text("GLOBAL")
+            Text(project ? "PROJECT" : "GLOBAL")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
+                .foregroundStyle(project ? Color.green : Color.orange)
                 .padding(.horizontal, 5)
-                .overlay(Capsule().stroke(.orange.opacity(0.5)))
+                .overlay(Capsule().stroke((project ? Color.green : .orange).opacity(0.5)))
         }
     }
 }
