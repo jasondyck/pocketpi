@@ -232,7 +232,25 @@ struct IntegrationTests {
         #expect(chats.contains(s.path!))
         #expect(!work.contains(s.path!))
         #expect(try await client.projects().projects.allSatisfy { $0.path != list.chatDir })
+        // Renamed from the Chat tab's list: still a Chat-tab chat.
+        let key = try #require(s.key)
         s.leave()
+        try await client.close(key: key)
+        var row: SessionInfo?
+        for _ in 0..<40 {
+            row = try await client.chats().sessions.first { $0.path == s.path && !$0.live }
+            if row != nil { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await client.renameSession(try #require(row), to: "Sourdough")
+        var named: SessionInfo?
+        for _ in 0..<40 {
+            named = try await client.chats().sessions.first { $0.path == s.path }
+            if named?.displayTitle == "Sourdough" { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(named?.displayTitle == "Sourdough")
+        #expect(try await !client.sessions().contains { $0.path == s.path })
     }
 
     @Test func loadsALocalModel() async throws {

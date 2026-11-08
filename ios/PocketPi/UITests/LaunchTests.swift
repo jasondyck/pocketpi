@@ -120,6 +120,14 @@ final class LaunchTests: XCTestCase {
         let plainChat = app.descendants(matching: .any)["chat-tab-row"].firstMatch
         XCTAssertTrue(plainChat.waitForExistence(timeout: 10))
         keep(app, "chat-tab")
+        // Rename from the row's menu (the alert opens, then cancel).
+        plainChat.press(forDuration: 1.0)
+        XCTAssertTrue(app.buttons["Rename"].waitForExistence(timeout: 5))
+        app.buttons["Rename"].tap()
+        XCTAssertTrue(app.alerts["Rename chat"].waitForExistence(timeout: 5))
+        keep(app, "chat-tab-rename")
+        app.alerts["Rename chat"].buttons["Cancel"].tap()
+        XCTAssertTrue(plainChat.waitForExistence(timeout: 5))
         plainChat.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
                       || app.textFields["composer"].waitForExistence(timeout: 2))

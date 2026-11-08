@@ -407,7 +407,7 @@ private struct ChatsView: View {
 /// as a button that expands when tapped. A search field in the navigation bar
 /// stays behind (cross-fades) while the page slides during the back swipe;
 /// the bottom toolbar moves with the page. iOS 18: the field under the title.
-private struct ChatsSearch<NewChat: View>: ViewModifier {
+struct ChatsSearch<NewChat: View>: ViewModifier {
     @Binding var search: String
     let newChat: NewChat
 

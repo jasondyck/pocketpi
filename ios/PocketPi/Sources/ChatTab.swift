@@ -13,6 +13,13 @@ enum ChatRoute: Hashable {
 
 struct ChatTab: View {
     @Environment(AppModel.self) private var model
+    @State private var search = ""
+    @State private var renaming: SessionInfo?
+    @State private var newName = ""
+
+    private var visible: [SessionInfo] {
+        search.isEmpty ? model.chats : model.chats.filter { $0.displayTitle.localizedCaseInsensitiveContains(search) }
+    }
 
     private var path: Binding<[ChatRoute]> {
         Binding(get: { model.chatPath }, set: { model.chatPath = $0 })
@@ -21,7 +28,7 @@ struct ChatTab: View {
     var body: some View {
         NavigationStack(path: path) {
             List {
-                ForEach(model.chats) { s in
+                ForEach(visible) { s in
                     NavigationLink(value: ChatRoute.open(s.path)) {
                         SessionRow(session: s, showProject: false, showBadge: false)
                     }
@@ -32,11 +39,18 @@ struct ChatTab: View {
                             Task { await archive(s) }
                         }
                         .tint(.indigo)
+                        Button("Rename", systemImage: "pencil") { startRename(s) }
+                    }
+                    .contextMenu {
+                        Button("Rename", systemImage: "pencil") { startRename(s) }
+                        Button("Archive", systemImage: "archivebox") { Task { await archive(s) } }
                     }
                 }
             }
             .overlay {
-                if model.chats.isEmpty {
+                if !search.isEmpty, visible.isEmpty {
+                    ContentUnavailableView.search(text: search)
+                } else if model.chats.isEmpty {
                     ContentUnavailableView {
                         Label("No chats yet", systemImage: "bubble.left.and.bubble.right")
                     } description: {
@@ -52,14 +66,20 @@ struct ChatTab: View {
                 }
             }
             .navigationTitle("Chats")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.chatPath.append(.new(UUID())) } label: {
-                        Image(systemName: "square.and.pencil")
+            // Search and the new-chat button where Work's chat list has them.
+            .modifier(ChatsSearch(search: $search, newChat: newChatButton))
+            .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("Name", text: $newName)
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") {
+                    guard let s = renaming, let client = model.client else { return }
+                    let name = newName
+                    Task {
+                        do { try await client.renameSession(s, to: name) } catch {
+                            model.problem = "Couldn't rename: " + error.localizedDescription
+                        }
+                        await model.refresh()
                     }
-                    .disabled(model.chatDir == nil)
-                    .accessibilityLabel("New chat")
-                    .accessibilityIdentifier("new-chat-tab")
                 }
             }
             .refreshable { await model.refresh() }
@@ -89,6 +109,20 @@ struct ChatTab: View {
             // Back on the list: a chat that was just started now has a row.
             if p.isEmpty { Task { await model.refresh() } }
         }
+    }
+
+    private var newChatButton: some View {
+        Button { model.chatPath.append(.new(UUID())) } label: {
+            Image(systemName: "square.and.pencil")
+        }
+        .disabled(model.chatDir == nil)
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("new-chat-tab")
+    }
+
+    private func startRename(_ s: SessionInfo) {
+        newName = s.displayTitle
+        renaming = s
     }
 
     private func archive(_ s: SessionInfo) async {
