@@ -622,6 +622,9 @@ async fn pick_chat(app: &Arc<AppState>, key: Option<&str>, cwd: Option<&str>, sp
         .max_by_key(|l| *l.last_active.lock().unwrap())
         .cloned();
     match found {
+        // A chat started before the last config change doesn't know a
+        // server added since: restart it first when it's idle.
+        Some(l) if l.epoch.load(Ordering::Relaxed) < app.admin.epoch() && !l.streaming.load(Ordering::Relaxed) => crate::restart_live(app, l).await,
         Some(l) => Ok(l),
         None if spawn => crate::spawn_pi(app, &dir, None).await,
         None => Err(err(StatusCode::CONFLICT, "no chat is open in this project")),
