@@ -20,6 +20,7 @@ mod llama;
 mod pi_admin;
 mod pi_cli;
 mod ext_ui;
+mod pi_resources;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -327,6 +328,7 @@ async fn main() {
         .route("/api/pi/auth/{provider}", get(auth_check))
         .route("/api/pi/mcp", get(mcp_list))
         .route("/api/pi/packages", get(package_list))
+        .merge(pi_resources::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -392,6 +394,8 @@ macro_rules! manage_page {
 /// `order`, so the order here doesn't matter: add new lines at the end.
 const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("about"),
+    manage_page!("trust"),
+    manage_page!("resources"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {

@@ -57,6 +57,35 @@ args = sys.argv[1:]
 if args == ["--version"]:
     print("0.0.0-fake")
     sys.exit(0)
+if args == ["list"]:
+    # Like `pi list`: the settings' packages, each with its path when it exists.
+    def configured(path, base):
+        try:
+            with open(path) as f:
+                pkgs = json.load(f).get("packages") or []
+        except (OSError, ValueError):
+            return []
+        out = []
+        for p in pkgs:
+            src = p if isinstance(p, str) else p.get("source")
+            if not src:
+                continue
+            full = os.path.normpath(os.path.join(base, os.path.expanduser(src)))
+            out.append((src, full if os.path.exists(full) and not src.startswith(("npm:", "git:")) else None))
+        return out
+    agent = os.environ.get("PI_CODING_AGENT_DIR") or os.path.expanduser("~/.pi/agent")
+    user = configured(os.path.join(agent, "settings.json"), agent)
+    proj = configured(os.path.join(os.getcwd(), ".pi", "settings.json"), os.path.join(os.getcwd(), ".pi"))
+    if not user and not proj:
+        print("No packages installed.")
+    for title, pkgs in (("User packages:", user), ("Project packages:", proj)):
+        if pkgs:
+            print(title)
+            for src, full in pkgs:
+                print(f"  {src}")
+                if full:
+                    print(f"    {full}")
+    sys.exit(0)
 session_file = args[args.index("--session") + 1] if "--session" in args else None
 session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or os.path.expanduser("~/.pi/agent/sessions")
 # pocketpi loads its companion extension into normal chats with -e.
