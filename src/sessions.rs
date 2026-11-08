@@ -25,6 +25,10 @@ pub struct SessionInfo {
     /// the list's `config_epoch` for "Restart to apply").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epoch: Option<u64>,
+    /// The session this one was forked or cloned from (pi's
+    /// `parentSession` header field), when pi recorded one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Clone)]
@@ -34,6 +38,7 @@ pub struct Meta {
     pub name: Option<String>,
     pub title: String,
     pub messages: u32,
+    pub parent: Option<String>,
 }
 
 /// Parsed metadata keyed by path, invalidated by (mtime, size).
@@ -63,6 +68,7 @@ pub fn read_meta(path: &Path) -> Option<Meta> {
                 name: None,
                 title: String::new(),
                 messages: 0,
+                parent: v.get("parentSession").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from),
             });
             continue;
         }
@@ -160,10 +166,44 @@ pub fn scan(root: &Path, cache: &Cache) -> Vec<SessionInfo> {
                 live: false,
                 streaming: false,
                 epoch: None,
+                parent: meta.parent,
             });
         }
     }
     cache.0.lock().unwrap().retain(|p, _| seen.contains(p));
     out.sort_by(|a, b| b.modified.cmp(&a.modified));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_reads_parent_session() {
+        let dir = std::env::temp_dir().join(format!("pocketpi-sessions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fork = dir.join("fork.jsonl");
+        std::fs::write(
+            &fork,
+            concat!(
+                r#"{"type":"session","id":"b","cwd":"/p","version":3,"parentSession":"/s/a.jsonl"}"#,
+                "\n",
+                r#"{"type":"message","id":"1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let plain = dir.join("plain.jsonl");
+        std::fs::write(&plain, concat!(r#"{"type":"session","id":"a","cwd":"/p","version":3}"#, "\n")).unwrap();
+        let m = read_meta(&fork).unwrap();
+        assert_eq!(m.parent.as_deref(), Some("/s/a.jsonl"));
+        assert_eq!((m.title.as_str(), m.messages), ("hi", 1));
+        assert_eq!(read_meta(&plain).unwrap().parent, None);
+        let json = serde_json::to_value(scan(&dir, &Cache::default())).unwrap();
+        let by_id = |id: &str| json.as_array().unwrap().iter().find(|s| s["id"] == id).unwrap().clone();
+        assert_eq!(by_id("b")["parent"], "/s/a.jsonl");
+        assert!(by_id("a").get("parent").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
