@@ -260,6 +260,8 @@ private struct ActiveRuns: View {
     private func detail(_ run: RunInfo) -> String {
         if run.status == "waiting" { return "Waiting for you" + (run.currentStage.map { " · \($0.name)" } ?? "") }
         if let s = run.currentStage {
+            // pi's latest step says more than the step count.
+            if let a = s.activity { return "\(s.name) · \(a)" }
             let n = (run.stages.firstIndex { $0.id == s.id } ?? 0) + 1
             return "\(s.name) · step \(n) of \(run.stages.count)"
         }

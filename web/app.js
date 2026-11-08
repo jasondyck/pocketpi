@@ -1440,7 +1440,7 @@ function renderDag(wf, run) {
       <div class="dag-body">
         <div class="dag-top"><span class="dag-name">${esc(s.name || id)}</span><span class="dag-type">${esc(s.type || "")}</span>${rs ? statusPill(st) : ""}</div>
         <div class="dag-sub">${[model && `<span class="mono">${esc(model)}</span>`, s.thinking && esc(s.thinking), s.type === "shell" && s.run && `<span class="mono">${esc(s.run.length > 60 ? s.run.slice(0, 60) + "…" : s.run)}</span>`, needs.length && `after ${needs.map(esc).join(", ")}`, s.on_fail && `↺ on fail → ${esc(s.on_fail.goto)} ×${s.on_fail.max || 2}`].filter(Boolean).join(" · ")}</div>
-        ${rs ? `<div class="dag-run">${rs.attempts > 1 ? `<span class="attempts">attempt ${rs.attempts}</span>` : ""}${rs.started ? `<span>${fmtDur((rs.ended || Date.now()) - rs.started)}</span>` : ""}${rs.cost ? `<span>${fmtCost(rs.cost)}</span>` : ""}</div>${rs.summary ? `<div class="dag-summary">${esc(rs.summary)}</div>` : ""}` : ""}
+        ${rs ? `<div class="dag-run">${rs.attempts > 1 ? `<span class="attempts">attempt ${rs.attempts}</span>` : ""}${rs.started ? `<span>${fmtDur((rs.ended || Date.now()) - rs.started)}</span>` : ""}${rs.cost ? `<span>${fmtCost(rs.cost)}</span>` : ""}</div>${rs.summary ? `<div class="dag-summary">${esc(rs.summary)}</div>` : ""}${rs.status === "running" && rs.activity ? `<div class="dag-activity">${esc(rs.activity)}${rs.activity_at ? ` · ${fmtDur(Date.now() - rs.activity_at)}` : ""}</div>` : ""}` : ""}
       </div>`;
     if (rs) {
       node.classList.add("tappable");

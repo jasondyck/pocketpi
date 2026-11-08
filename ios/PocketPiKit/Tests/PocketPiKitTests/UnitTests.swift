@@ -429,4 +429,14 @@ import Testing
         #expect(try run(["running", "waiting"]).currentStage?.id == "s1")
         #expect(try run(["succeeded", "pending"]).currentStage == nil)
     }
+
+    @Test func stageActivity() throws {
+        let r = try #require(RunInfo(["id": "r", "workflow_id": "w", "stages": [
+            ["id": "impl", "status": "running", "activity": "Reading src/main.rs", "activity_at": 1794100000000],
+            ["id": "checks", "status": "pending"],
+        ]]))
+        #expect(r.currentStage?.activity == "Reading src/main.rs")
+        #expect(r.currentStage?.activityAt == 1794100000000)
+        #expect(r.stages[1].activity == nil)
+    }
 }

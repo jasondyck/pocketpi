@@ -56,6 +56,12 @@ pub struct StageRun {
     pub session_file: Option<String>,
     pub live_key: Option<String>,
     pub prompt: Option<String>,
+    /// While an agent stage runs: what pi is doing now ("Reading src/main.rs")
+    /// and since when (ms), so a quiet stage reads as busy, not stuck.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -111,6 +117,43 @@ fn cap(s: &str, n: usize) -> String {
         start += 1;
     }
     format!("…{}", &s[start..])
+}
+
+/// What a pi event says it's starting, in a few words for the run screen:
+/// a tool with its target, thinking, writing, compacting. None for events
+/// that don't start anything.
+fn activity_of(ev: &Value, cwd: &str) -> Option<String> {
+    let rel = |p: &str| -> String {
+        let p = p.strip_prefix(cwd).map(|r| r.trim_start_matches('/')).unwrap_or(p);
+        if p.is_empty() { ".".into() } else { p.to_string() }
+    };
+    match ev.get("type").and_then(Value::as_str)? {
+        "tool_execution_start" => {
+            let args = &ev["args"];
+            let s = |k: &str| args.get(k).and_then(Value::as_str);
+            let tool = ev["toolName"].as_str().unwrap_or("tool");
+            Some(match tool {
+                "read" => format!("Reading {}", rel(s("path").unwrap_or("a file"))),
+                "edit" => format!("Editing {}", rel(s("path").unwrap_or("a file"))),
+                "write" => format!("Writing {}", rel(s("path").unwrap_or("a file"))),
+                "bash" => {
+                    let c = s("command").unwrap_or("").lines().next().unwrap_or("").trim();
+                    format!("Running {}", first_line(c, 70))
+                }
+                "grep" => format!("Searching for {}", first_line(s("pattern").unwrap_or("text"), 50)),
+                "find" | "ls" => format!("Looking in {}", rel(s("path").unwrap_or(cwd))),
+                other => format!("Using {other}"),
+            })
+        }
+        "message_update" => match ev.pointer("/assistantMessageEvent/type").and_then(Value::as_str)? {
+            "thinking_start" => Some("Thinking".into()),
+            "text_start" => Some("Writing".into()),
+            _ => None,
+        },
+        "compaction_start" => Some("Compacting context".into()),
+        "auto_retry_start" => Some("Retrying after a model error".into()),
+        _ => None,
+    }
 }
 
 fn first_line(s: &str, n: usize) -> String {
@@ -290,6 +333,8 @@ impl Engine {
                 session_file: None,
                 live_key: None,
                 prompt: None,
+                activity: None,
+                activity_at: None,
             })
             .collect();
         let run = Run {
@@ -645,6 +690,13 @@ impl Engine {
                             Err(_) => return Err("pi exited".to_string()),
                         };
                         let Ok(ev) = serde_json::from_str::<Value>(&line) else { continue };
+                        if let Some(a) = activity_of(&ev, cwd) {
+                            self.update(h, |r| {
+                                let s = r.stages.iter_mut().find(|s| s.id == sid).unwrap();
+                                s.activity = Some(a);
+                                s.activity_at = Some(now());
+                            });
+                        }
                         match ev.get("type").and_then(Value::as_str).unwrap_or("") {
                             "agent_settled" => return Ok(ev.get("aborted") == Some(&Value::Bool(true))),
                             "pocketpi_exit" => return Err(format!("pi exited: {}", ev["stderr"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")).unwrap_or_default())),
@@ -689,6 +741,8 @@ impl Engine {
                 s.session_file = file.clone();
             }
             s.live_key = None;
+            s.activity = None;
+            s.activity_at = None;
         });
         match outcome {
             Err(_) => return Err(format!("timed out after {} minutes", limit.as_secs() / 60)),
@@ -847,6 +901,23 @@ async fn commit_all(cwd: &str, msg: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_says_what_pi_started() {
+        let cwd = "/w/run1";
+        let tool = |name: &str, args: Value| json!({"type": "tool_execution_start", "toolName": name, "args": args});
+        assert_eq!(activity_of(&tool("read", json!({"path": "/w/run1/src/main.rs"})), cwd).unwrap(), "Reading src/main.rs");
+        assert_eq!(activity_of(&tool("edit", json!({"path": "src/a.rs"})), cwd).unwrap(), "Editing src/a.rs");
+        assert_eq!(activity_of(&tool("bash", json!({"command": "cargo test\necho done"})), cwd).unwrap(), "Running cargo test");
+        assert_eq!(activity_of(&tool("grep", json!({"pattern": "fn main"})), cwd).unwrap(), "Searching for fn main");
+        assert_eq!(activity_of(&tool("ls", json!({})), cwd).unwrap(), "Looking in .");
+        assert_eq!(activity_of(&tool("workflow_list", json!({})), cwd).unwrap(), "Using workflow_list");
+        let upd = |t: &str| json!({"type": "message_update", "assistantMessageEvent": {"type": t}});
+        assert_eq!(activity_of(&upd("thinking_start"), cwd).unwrap(), "Thinking");
+        assert_eq!(activity_of(&upd("text_start"), cwd).unwrap(), "Writing");
+        assert!(activity_of(&upd("text_delta"), cwd).is_none());
+        assert!(activity_of(&json!({"type": "message_end"}), cwd).is_none());
+    }
 
     #[test]
     fn review_verdicts() {

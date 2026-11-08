@@ -803,6 +803,29 @@ struct RunView: View {
 }
 
 /// A stage: status, name, the last line it printed; opens to all of it.
+/// What a running agent stage is doing and for how long ("Reading
+/// src/main.rs · 20s"), ticking each second, so a quiet stage reads as busy.
+struct StageActivity: View {
+    let activity: String
+    let since: UInt64?
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            Text(since.map { activity + " · " + Self.elapsed(from: $0, to: ctx.date) } ?? activity)
+                .font(.caption)
+                .foregroundStyle(Theme.signalText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .accessibilityIdentifier("stage-activity")
+    }
+
+    static func elapsed(from ms: UInt64, to now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince1970 - Double(ms) / 1000))
+        return s < 60 ? "\(s)s" : s < 3600 ? "\(s / 60)m \(s % 60)s" : "\(s / 3600)h \(s % 3600 / 60)m"
+    }
+}
+
 private struct StageRow: View {
     let stage: RunInfo.Stage
     @State private var open = false
@@ -847,6 +870,9 @@ private struct StageRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                    if stage.status == "running", let a = stage.activity {
+                        StageActivity(activity: a, since: stage.activityAt)
+                    }
                 }
             }
         }

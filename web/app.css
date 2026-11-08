@@ -488,6 +488,7 @@ body.wf-mode #scroller { padding-bottom: calc(var(--safe-b) + 24px); }
 .dag-run { display: flex; gap: 10px; font: 11.5px var(--mono); color: var(--muted); margin-top: 4px; }
 .dag-run .attempts { color: var(--warn); }
 .dag-summary { font-size: 13.5px; color: var(--text-2); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.dag-activity { font-size: 12px; color: var(--signal-text); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .wf-back { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; color: var(--muted); padding: 4px 8px 4px 0; margin: 2px 0 6px -4px; }
 .wf-back svg { width: 18px; height: 18px; }

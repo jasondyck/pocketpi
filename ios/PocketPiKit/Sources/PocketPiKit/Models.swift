@@ -101,6 +101,10 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
         /// Milliseconds since 1970.
         public var started: UInt64?
         public var ended: UInt64?
+        /// While an agent stage runs: what pi is doing ("Reading src/main.rs")
+        /// and since when (ms since 1970).
+        public var activity: String? = nil
+        public var activityAt: UInt64? = nil
     }
 
     public var id: String
@@ -134,7 +138,9 @@ public struct RunInfo: Sendable, Identifiable, Equatable {
                          summary: s["summary"]?.string ?? "", output: s["output"]?.string ?? "",
                          attempts: s["attempts"]?.int ?? 0,
                          started: s["started"]?.double.map { UInt64($0) },
-                         ended: s["ended"]?.double.map { UInt64($0) })
+                         ended: s["ended"]?.double.map { UInt64($0) },
+                         activity: s["activity"]?.string.flatMap { $0.isEmpty ? nil : $0 },
+                         activityAt: s["activity_at"]?.double.map { UInt64($0) })
         }
         inputs = (v["inputs"]?.object ?? [:]).compactMapValues(\.string)
         cost = v["cost"]?.double ?? 0
