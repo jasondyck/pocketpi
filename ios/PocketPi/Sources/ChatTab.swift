@@ -161,8 +161,11 @@ private struct ArchivedChats: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("archived-chat-row")
-                .swipeActions(edge: .trailing) {
-                    Button("Delete", systemImage: "trash", role: .destructive) { deleting = s }
+                // Delete asks first, so no full swipe and no destructive role
+                // (which removes the row before the answer).
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button("Delete", systemImage: "trash") { deleting = s }
+                        .tint(.red)
                     Button("Unarchive", systemImage: "tray.and.arrow.up") {
                         Task { await unarchive(s) }
                     }

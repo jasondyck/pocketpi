@@ -145,8 +145,24 @@ final class LaunchTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Select model"].waitForNonExistence(timeout: 5))
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
+        // The Chat tab's archive: delete a chat for good.
+        app.buttons["chat-tab-archived"].tap()
+        XCTAssertTrue(app.navigationBars["Archived"].waitForExistence(timeout: 5))
+        deleteFirst(app, rows: "archived-chat-row", screenshot: "chat-tab-archived")
+        app.navigationBars["Archived"].buttons["BackButton"].tap()
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).
         showTab(app, "Work")
+        XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
+        // Work's archive: delete a chat for good, then back to natter.
+        app.navigationBars["natter"].buttons["BackButton"].tap()
+        XCTAssertTrue(natter.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["project-archived"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Archived"].waitForExistence(timeout: 5))
+        deleteFirst(app, rows: "chat-row", screenshot: "work-archived")
+        app.navigationBars["Archived"].buttons["BackButton"].tap()
+        XCTAssertTrue(natter.waitForExistence(timeout: 5))
+        natter.tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
 
         // A chat, for the composer and the transcript.
@@ -208,6 +224,24 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
         sleep(1)
         keep(app, "title-menu")
+    }
+
+    /// Swipe the first row, Delete, confirm: the app stays up and the row goes.
+    @MainActor
+    private func deleteFirst(_ app: XCUIApplication, rows id: String, screenshot: String) {
+        let rows = app.descendants(matching: .any).matching(identifier: id)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        let before = rows.count
+        rows.firstMatch.swipeLeft()
+        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 5))
+        app.buttons["Delete"].tap()
+        let confirm = app.buttons["Delete Chat"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        keep(app, screenshot)
+        confirm.tap()
+        sleep(2)
+        XCTAssertEqual(app.state, .runningForeground, "the app crashed deleting a chat")
+        XCTAssertEqual(rows.count, before - 1)
     }
 
     /// The tab bar minimizes on scroll down to just the current tab; a tap
