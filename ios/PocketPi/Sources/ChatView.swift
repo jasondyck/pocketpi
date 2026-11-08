@@ -133,7 +133,9 @@ private struct ChatScreen: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("loading-local")
                 }
+                ExtensionWidgets(ui: session.transcript.extensionUI, below: false)
                 Composer(session: session)
+                ExtensionWidgets(ui: session.transcript.extensionUI, below: true)
             }
             .animation(.default, value: session.activeRuns.map(\.id))
         }
@@ -150,7 +152,7 @@ private struct ChatScreen: View {
         // The chat's name as the title: tapping it opens the system title
         // menu (rename in place, compact). The project underneath.
         .navigationTitle(Binding(get: { session.title }, set: { name in Task { await session.rename(name) } }))
-        .navigationSubtitle(model.projectName(for: session.cwd))
+        .navigationSubtitle(session.subtitle(fallback: model.projectName(for: session.cwd)))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarTitleMenu {
             RenameButton()
@@ -333,6 +335,53 @@ private struct StatusBanner: View {
     }
 }
 
+/// Extensions' status chips (setStatus) and blocks of lines (setWidget),
+/// above or below the composer.
+private struct ExtensionWidgets: View {
+    let ui: ExtensionUIState
+    let below: Bool
+
+    var body: some View {
+        let widgets = below ? ui.belowEditor : ui.aboveEditor
+        if !widgets.isEmpty || (!below && !ui.statuses.isEmpty) {
+            VStack(alignment: .leading, spacing: 5) {
+                if !below, !ui.statuses.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            ForEach(ui.statuses) { s in
+                                Text(s.text)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 3)
+                                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("extension-status")
+                }
+                ForEach(widgets) { w in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(verbatim: w.lines.joined(separator: "\n"))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityIdentifier("extension-widget")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, below ? 4 : 0)
+        }
+    }
+}
+
 /// confirm / select / input / editor dialogs from pi extensions.
 private struct ExtensionSheet: View {
     let request: ExtensionRequest
@@ -345,6 +394,14 @@ private struct ExtensionSheet: View {
         NavigationStack {
             Form {
                 if let m = request.message { Section { Text(m) } }
+                if request.deadline != nil {
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        Text(request.countdown(at: ctx.date) ?? "")
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("dialog-countdown")
+                }
                 switch request.method {
                 case .confirm:
                     Section {
@@ -371,8 +428,9 @@ private struct ExtensionSheet: View {
         }
         .presentationDetents([.medium, .large])
         .onAppear { text = request.prefill ?? "" }
-        // Swiped away: pi is still waiting for an answer.
-        .onDisappear { if !answered { answer(.cancelled) } }
+        // Swiped away: pi is still waiting for an answer. Timed out: pi has
+        // answered it itself.
+        .onDisappear { if !answered, !request.isExpired() { answer(.cancelled) } }
     }
 
     private func finish(_ a: ChatSession.Answer) {

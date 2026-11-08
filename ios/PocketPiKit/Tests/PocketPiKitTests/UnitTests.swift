@@ -154,6 +154,77 @@ import Testing
     }
 }
 
+@Suite struct ExtensionUITests {
+    func ev(_ s: String) -> JSONValue { try! JSONValue.parse(s) }
+    func req(_ body: String) -> JSONValue { ev(#"{"type":"extension_ui_request","id":"x",\#(body)}"#) }
+
+    @Test func statusWidgetsAndTitle() {
+        var t = Transcript()
+        #expect(t.apply(req(#""method":"setStatus","statusKey":"a","statusText":"\u001b[32mone\u001b[0m""#)).isEmpty)
+        #expect(t.extensionUI.statuses == [.init(key: "a", text: "one")])
+        t.apply(req(#""method":"setStatus","statusKey":"b","statusText":"two""#))
+        t.apply(req(#""method":"setStatus","statusKey":"a","statusText":"three""#))
+        #expect(t.extensionUI.statuses.map(\.key) == ["a", "b"])
+        #expect(t.extensionUI.statuses.map(\.text) == ["three", "two"])
+        t.apply(req(#""method":"setWidget","widgetKey":"w","widgetLines":["x","y"]"#))
+        t.apply(req(#""method":"setWidget","widgetKey":"v","widgetLines":["z"],"widgetPlacement":"belowEditor""#))
+        #expect(t.extensionUI.aboveEditor.map(\.lines) == [["x", "y"]])
+        #expect(t.extensionUI.belowEditor.map(\.key) == ["v"])
+        t.apply(req(#""method":"setTitle","title":"pi - demo""#))
+        #expect(t.extensionUI.title == "pi - demo")
+        // Fire-and-forget: none of these is a dialog or a line in the chat.
+        #expect(t.items.isEmpty)
+
+        // Clearing: no statusText / widgetLines.
+        t.apply(req(#""method":"setStatus","statusKey":"a""#))
+        t.apply(req(#""method":"setWidget","widgetKey":"w","widgetLines":null"#))
+        #expect(t.extensionUI.statuses.map(\.key) == ["b"])
+        #expect(t.extensionUI.widgets.map(\.key) == ["v"])
+
+        // pi exits: it all goes.
+        t.apply(ev(#"{"type":"pocketpi_exit","stderr":[]}"#))
+        #expect(t.extensionUI == ExtensionUIState())
+    }
+
+    @Test func helloReplaysWhatIsInEffect() {
+        var t = Transcript()
+        t.apply(req(#""method":"setStatus","statusKey":"old","statusText":"stale""#))
+        let effects = t.apply(ev(#"{"type":"pocketpi_hello","streaming":false,"ui":[{"type":"extension_ui_request","id":"1","method":"setStatus","statusKey":"s","statusText":"on"},{"type":"extension_ui_request","id":"2","method":"setTitle","title":"T"}]}"#))
+        #expect(effects == [.reloadSnapshot])
+        #expect(t.extensionUI.statuses == [.init(key: "s", text: "on")])
+        #expect(t.extensionUI.title == "T")
+        // A resync (dropped events) keeps it.
+        t.apply(ev(#"{"type":"pocketpi_resync"}"#))
+        #expect(t.extensionUI.title == "T")
+        // A restart's new pi says what it has in its own hello.
+        t.apply(ev(#"{"type":"pocketpi_exit","restarting":true,"stderr":[]}"#))
+        #expect(t.extensionUI.isEmpty && t.extensionUI.title == nil)
+    }
+
+    @Test func dialogTimeoutCountsDown() {
+        var t = Transcript()
+        let now = Date(timeIntervalSince1970: 1000)
+        let effects = t.apply(req(#""method":"confirm","title":"Sure?","timeout":5000"#), now: now)
+        guard case .extensionRequest(let r)? = effects.first else { Issue.record("no dialog"); return }
+        #expect(r.timeout == 5)
+        #expect(r.deadline == now.addingTimeInterval(5))
+        #expect(r.countdown(at: now) == "Closes in 5 s")
+        #expect(r.countdown(at: now.addingTimeInterval(3.2)) == "Closes in 2 s")
+        #expect(!r.isExpired(at: now.addingTimeInterval(4.9)))
+        #expect(r.isExpired(at: now.addingTimeInterval(5)))
+        #expect(r.remaining(at: now.addingTimeInterval(9)) == 0)
+        let plain = t.apply(req(#""method":"input","title":"Name""#))
+        guard case .extensionRequest(let q)? = plain.first else { Issue.record("no dialog"); return }
+        #expect(q.deadline == nil && q.countdown() == nil && !q.isExpired())
+    }
+
+    @Test func stripsTerminalEscapes() {
+        #expect(ExtensionUIState.plain("\u{1B}[1;31mred\u{1B}[0m ok") == "red ok")
+        #expect(ExtensionUIState.plain("\u{1B}]8;;https://x\u{07}link\u{1B}]8;;\u{1B}\\") == "link")
+        #expect(ExtensionUIState.plain("plain") == "plain")
+    }
+}
+
 @Suite struct ModelTests {
     @Test func decodesServerShapes() throws {
         let s = try JSONDecoder().decode(SessionsResponse.self, from: Data(#"""

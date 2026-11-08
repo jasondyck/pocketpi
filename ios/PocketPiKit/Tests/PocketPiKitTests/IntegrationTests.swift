@@ -129,6 +129,51 @@ struct IntegrationTests {
         s.leave()
     }
 
+    @Test func showsStatusWidgetsAndTitle() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("show widgets")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: show widgets" && s.path != nil && !s.isStreaming }
+        let ui = s.transcript.extensionUI
+        #expect(ui.statuses == [.init(key: "fake", text: "ready"), .init(key: "lint", text: "2 warnings")])
+        #expect(ui.aboveEditor.map(\.lines) == [["TODO", "[x] status chips", "[ ] widgets"]])
+        #expect(ui.belowEditor.map(\.key) == ["hint"])
+        #expect(s.subtitle(fallback: "project") == "pi - fake project")
+        #expect(s.title == "show widgets")
+        try await s.send("clear widgets")
+        try await waitFor("the clear") { lastAssistantText(s) == "Echo: clear widgets" && !s.isStreaming }
+        #expect(s.transcript.extensionUI.statuses.map(\.key) == ["fake"])
+        #expect(s.transcript.extensionUI.widgets.map(\.key) == ["todo"])
+        let path = try #require(s.path)
+        s.leave()
+
+        // Another client on the same pi gets it from pocketpi's hello.
+        let again = ChatSession(client: client, path: path, cwd: projectDir)
+        await again.start()
+        try await waitFor("the replay") { again.transcript.extensionUI.widgets.map(\.key) == ["todo"] }
+        #expect(again.transcript.extensionUI.statuses.map(\.key) == ["fake"])
+        #expect(again.transcript.extensionUI.title == "pi - fake project")
+
+        // A new pi on the same file starts with none of it.
+        let key = try #require(again.key)
+        _ = try await client.restart(key: key)
+        try await waitFor("the reset") { again.status == .connected && again.transcript.extensionUI.title == nil }
+        #expect(again.transcript.extensionUI.isEmpty)
+        again.leave()
+    }
+
+    @Test func dialogsWithATimeoutCloseByThemselves() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("timeout please")
+        try await waitFor("the dialog") { s.pendingRequest != nil }
+        let r = try #require(s.pendingRequest)
+        #expect(r.timeout == 1.5)
+        #expect(r.countdown() != nil)
+        // Nobody answers: the sheet goes and pi resolves it itself.
+        try await waitFor("the dialog to close", timeout: 4) { s.pendingRequest == nil }
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: timeout please · timed out" }
+        s.leave()
+    }
+
     @Test func stopsAndRenames() async throws {
         let s = ChatSession(client: client, newIn: projectDir)
         try await s.send("be slow")
