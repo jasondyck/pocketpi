@@ -1,0 +1,173 @@
+"use strict";
+// Settings › Resources (plan F1): pi's extensions, skills and prompt
+// templates for a project, with where each comes from (global, project,
+// package, built-in) and whether it loads. Read-only for now; each resource
+// carries `toggle` ({key, scope, entry}) for turning it on and off later.
+// Data: GET /api/pi/resources?cwd= (src/pi_resources.rs), which scans the
+// folders and settings like pi does, asks `pi list` for packages and, when
+// a chat is open in the project, that pi's get_commands.
+ppManage.register({
+  id: "resources",
+  title: "Resources",
+  subtitle: "Extensions, skills and prompt templates",
+  icon: '<svg viewBox="0 0 24 24"><path d="M12 3l8 4.5-8 4.5-8-4.5z"/><path d="M4 12l8 4.5 8-4.5"/><path d="M4 16.5l8 4.5 8-4.5"/></svg>',
+  order: 40,
+  async render(el, ctx) {
+    ctx.style(`.mp-resources .rs-pick { border-radius: 0; padding: 12px 14px; }
+.mp-resources .rs-note { font-size: 13px; color: var(--text-2); line-height: 1.45; margin: 10px 2px 0; }
+.mp-resources .rs-note.warn { color: var(--warn); }
+.mp-resources .rs-note button { color: var(--text); text-decoration: underline; font: inherit; }
+.mp-resources .seg { margin-top: 14px; }
+.mp-resources .seg button { font-family: var(--font); }
+.mp-resources .rs-row { display: block; width: 100%; text-align: left; padding: 11px 14px; }
+.mp-resources .rs-row + .rs-row { border-top: 1px solid var(--line); }
+.mp-resources .rs-row:active { background: var(--surface); }
+.mp-resources .rs-t { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.mp-resources .rs-name { font: 500 14.5px var(--mono); letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-resources .rs-hint { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.mp-resources .rs-row.off .rs-name { color: var(--muted); text-decoration: line-through; }
+.mp-resources .rs-d { font-size: 13px; color: var(--text-2); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mp-resources .rs-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.mp-resources .rs-chips .chip { font-size: 11px; padding: 2px 8px; }
+.mp-resources .chip.on { color: var(--ok); }
+.mp-resources .rs-pkg { padding: 10px 14px; font: 12.5px var(--mono); overflow-wrap: anywhere; }
+.mp-resources .rs-pkg + .rs-pkg { border-top: 1px solid var(--line); }
+.mp-resources .rs-pkg div { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.rs-detail { font-size: 14px; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 6px 0 4px; }
+.rs-detail b { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.rs-detail span { font: 12.5px var(--mono); overflow-wrap: anywhere; }`);
+    const { esc } = ctx;
+    const tilde = (p) => (p && ctx.home && p.startsWith(ctx.home + "/") ? "~" + p.slice(ctx.home.length) : p || "");
+    const KINDS = [["extension", "Extensions", "Extensions"], ["skill", "Skills", "Skills"], ["prompt", "Prompt templates", "Prompts"]];
+    const SCOPES = { global: "global", project: "project", package: "package", builtin: "built-in", temporary: "-e" };
+    let project = ctx.project || "";
+    let filter = "all";
+    let projects = [];
+    let data = null;
+
+    async function load() {
+      el.innerHTML = '<div class="wf-loading">Loading…</div>';
+      try {
+        const q = project ? `?cwd=${encodeURIComponent(project)}` : "";
+        [data, projects] = await Promise.all([
+          ctx.api(`/api/pi/resources${q}`),
+          projects.length ? projects : ctx.api("/api/projects").then((r) => r.projects || []).catch(() => []),
+        ]);
+      } catch (e) { el.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+      draw();
+    }
+
+    function pickProject() {
+      ctx.openSheet((b) => {
+        b.append(ctx.el("div", "sheet-title", "Show resources for"));
+        const choose = (p) => { ctx.closeSheet(); project = p; load(); };
+        b.append(Object.assign(ctx.el("button", "opt", `<div class="o-main"><div class="o-t">No project</div><div class="o-s">Only what every chat loads</div></div>`), { onclick: () => choose("") }));
+        for (const p of projects) {
+          const o = ctx.el("button", "opt", `<div class="o-main"><div class="o-t">${esc(p.name)}</div><div class="o-s">${esc(tilde(p.path))}</div></div>`);
+          o.dataset.path = p.path;
+          o.onclick = () => choose(p.path);
+          b.append(o);
+        }
+      });
+    }
+
+    function details(r) {
+      ctx.openSheet((b) => {
+        b.append(ctx.el("div", "sheet-title", esc(r.name)), ctx.el("div", "sheet-sub", esc(r.kind)));
+        if (r.description) b.append(ctx.el("div", "rs-note", esc(r.description)));
+        const g = ctx.el("div", "rs-detail");
+        const row = (k, v) => { if (v) g.append(ctx.el("b", "", esc(k)), ctx.el("span", "", esc(v))); };
+        row("Command", r.kind === "prompt" ? `/${r.name}${r.argumentHint ? " " + r.argumentHint : ""}` : r.kind === "skill" ? `/skill:${r.name}` : (r.commands || []).map((c) => "/" + c).join(" "));
+        row("Path", tilde(r.path));
+        row("Scope", SCOPES[r.scope] || r.scope);
+        row("Found by", { auto: "folder scan", settings: "settings entry", package: "package", builtin: "built in", live: "the running chat" }[r.origin] || r.origin);
+        if (r.package) row("Package", `${r.package.source} (${r.package.scope})`);
+        row("Loads", r.loads ? "yes" : r.skipped ? `no: ${r.skipped}` : "no: turned off in settings");
+        if (r.disabledBy) row("Turned off by", r.disabledBy);
+        if (r.toggle?.entry && r.toggle.key !== "packages") row("Settings entry", `${r.toggle.scope} ${r.toggle.key}: ${r.toggle.entry}`);
+        b.append(g);
+      });
+    }
+
+    function chips(r) {
+      const c = ctx.el("div", "rs-chips");
+      const add = (t, cls = "") => c.append(ctx.el("span", `chip ${cls}`, esc(t)));
+      add(SCOPES[r.scope] || r.scope);
+      if (r.package) add(r.package.source.replace(/^npm:/, "").split("/").pop());
+      if (!r.enabled) add("off", "warn");
+      else if (r.skipped) add(r.skipped === "project not trusted" ? "skipped: not trusted" : r.skipped, "warn");
+      if (r.live) add("running", "on");
+      for (const cmd of r.commands || []) add("/" + cmd);
+      return c;
+    }
+
+    function draw() {
+      el.innerHTML = "";
+      const pcard = ctx.el("div", "wf-card");
+      const cur = projects.find((p) => p.path === project);
+      const pick = ctx.el("button", "opt rs-pick", `<div class="o-main"><div class="o-t">${esc(cur?.name || (project ? tilde(project) : "No project"))}</div><div class="o-s">${esc(project ? tilde(data.cwd || project) : "Global resources and packages only")}</div></div>`);
+      pick.append(ctx.el("span", "mp-chev", ctx.ICON.chev));
+      pick.dataset.k = "project";
+      pick.onclick = pickProject;
+      pcard.append(pick);
+      el.append(pcard);
+
+      const t = data.trust;
+      if (t && t.needsTrust && !t.trusted) {
+        const n = ctx.el("div", "rs-note warn", `This project isn't trusted, so pi skips its .pi resources${t.decision === null ? ` (no decision; the default is “${esc(data.defaultTrust)}”)` : ""}. `);
+        const go = ctx.el("button", "", "Project trust"); go.onclick = () => ctx.navigate("trust");
+        n.append(go);
+        el.append(n);
+      }
+      if (data.live) el.append(ctx.el("div", "rs-note", `An open chat here reports ${data.live.commands} command${data.live.commands === 1 ? "" : "s"}; “running” marks what its pi loaded.`));
+      else if (data.liveError) el.append(ctx.el("div", "rs-note warn", `Couldn't ask the open chat: ${esc(data.liveError)}`));
+      else if (project) el.append(ctx.el("div", "rs-note", "From the files. Open a chat in this project to also see what pi really loaded."));
+
+      const list = data.resources || [];
+      const seg = ctx.el("div", "seg");
+      for (const [v, label] of [["all", "All"], ...KINDS.map(([k, , short]) => [k, short])]) {
+        const n = v === "all" ? list.length : list.filter((r) => r.kind === v).length;
+        const b = ctx.el("button", v === filter ? "on" : "", `${esc(label)} ${n}`);
+        b.dataset.filter = v;
+        b.onclick = () => { filter = v; draw(); };
+        seg.append(b);
+      }
+      el.append(seg);
+
+      const order = { project: 0, global: 1, package: 2, temporary: 3, builtin: 4 };
+      for (const [kind, label] of KINDS) {
+        if (filter !== "all" && filter !== kind) continue;
+        const rows = list.filter((r) => r.kind === kind).sort((a, z) => (order[a.scope] ?? 9) - (order[z.scope] ?? 9) || a.name.localeCompare(z.name));
+        el.append(ctx.el("div", "wf-section", esc(label)));
+        const card = ctx.el("div", "wf-card");
+        for (const r of rows) {
+          const row = ctx.el("button", `rs-row${r.loads ? "" : " off"}`);
+          row.dataset.kind = r.kind; row.dataset.name = r.name;
+          const shown = r.kind === "prompt" ? `/${r.name}` : r.kind === "skill" ? `/skill:${r.name}` : r.name;
+          row.append(ctx.el("div", "rs-t", `<span class="rs-name">${esc(shown)}</span>${r.argumentHint ? `<span class="rs-hint">${esc(r.argumentHint)}</span>` : ""}`));
+          if (r.description) row.append(ctx.el("div", "rs-d", esc(r.description)));
+          row.append(chips(r));
+          row.onclick = () => details(r);
+          card.append(row);
+        }
+        if (!rows.length) card.append(ctx.el("div", "list-empty", `No ${label.toLowerCase()}.`));
+        el.append(card);
+      }
+
+      if (filter === "all") {
+        el.append(ctx.el("div", "wf-section", "Packages"));
+        const card = ctx.el("div", "wf-card");
+        for (const p of data.packages || []) {
+          const r = ctx.el("div", "rs-pkg", esc(p.source));
+          r.append(ctx.el("div", "", esc(`${p.scope === "project" ? "project" : "global"}${p.filtered ? " · filtered" : ""} · ${p.installedPath ? tilde(p.installedPath) : "not installed"}`)));
+          card.append(r);
+        }
+        if (!(data.packages || []).length) card.append(ctx.el("div", "list-empty", "No packages."));
+        el.append(card);
+        if (data.packagesError) el.append(ctx.el("div", "rs-note warn", `pi list: ${esc(data.packagesError)}`));
+      }
+    }
+
+    await load();
+  },
+});

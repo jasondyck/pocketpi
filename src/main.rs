@@ -21,6 +21,7 @@ mod pi_admin;
 mod pi_cli;
 mod pi_providers;
 mod ext_ui;
+mod pi_resources;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -331,6 +332,7 @@ async fn main() {
         .route("/api/pi/providers", get(pi_providers::list))
         .route("/api/pi/providers/{id}/key", post(pi_providers::set_key))
         .route("/api/pi/providers/{id}/remove", post(pi_providers::remove_key))
+        .merge(pi_resources::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -398,6 +400,8 @@ const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("about"),
     manage_page!("providers"),
     manage_page!("settings"),
+    manage_page!("trust"),
+    manage_page!("resources"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {
