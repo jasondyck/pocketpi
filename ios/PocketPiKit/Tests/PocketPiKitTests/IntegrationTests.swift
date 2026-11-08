@@ -411,4 +411,151 @@ struct IntegrationTests {
         #expect(s.transcript.items.count == 4)
         s.leave()
     }
+
+    // MARK: - pi config, restart, reload, control
+
+    @Test func readsAndPatchesSettingsKeepingOtherKeys() async throws {
+        let before = try await client.config(.settings)
+        #expect(before.scope == "global")
+        #expect(before.data["enabledModels"]?.array?.count == 2)
+        let doc = try await client.patchConfig(.settings, PiConfigPatch(set: [
+            "compaction.enabled": false,
+            PiConfigPatch.path("modelThinkingLevels", "other/glm-5.2"): "high",
+        ]))
+        #expect(doc.epoch > before.epoch)
+        #expect(doc.data["compaction"]?["enabled"]?.bool == false)
+        #expect(doc.data["modelThinkingLevels"]?["other/glm-5.2"]?.string == "high")
+        // Untouched keys survive (the other tests need enabledModels).
+        #expect(doc.data["enabledModels"] == before.data["enabledModels"])
+        let after = try await client.patchConfig(.settings, PiConfigPatch(unset: ["compaction", "modelThinkingLevels"]))
+        #expect(after.data == before.data)
+        // Project settings live in the project.
+        let project = try await client.patchConfig(.settings, PiConfigPatch(set: ["defaultThinkingLevel": "low"]), cwd: projectDir)
+        #expect(project.scope == "project")
+        #expect(project.path.hasSuffix("/.pi/settings.json"))
+        #expect(try await client.config(.settings).data["defaultThinkingLevel"] == nil)
+        _ = try await client.patchConfig(.settings, PiConfigPatch(unset: ["defaultThinkingLevel"]), cwd: projectDir)
+        // A path through a non-object is refused.
+        await #expect(throws: PocketPiError.self) {
+            try await client.patchConfig(.settings, PiConfigPatch(set: ["enabledModels.x": 1]))
+        }
+    }
+
+    @Test func neverReturnsCredentials() async throws {
+        let doc = try await client.patchConfig(.auth, PiConfigPatch(set: ["fakeprov": ["type": "api_key", "key": "sk-test-secret"]]))
+        let raw = String(decoding: try doc.data.encoded(), as: UTF8.self)
+        #expect(!raw.contains("sk-test-secret"))
+        #expect(!raw.contains("LLAMA_BASE_URL"))
+        let providers = Dictionary(uniqueKeysWithValues: doc.authProviders.map { ($0.provider, $0) })
+        #expect(providers["fakeprov"]?.hasKey == true)
+        #expect(providers["fakeprov"]?.type == "api_key")
+        #expect(providers["llama.cpp"] != nil)
+        // The redaction marker can't be written back over a secret.
+        await #expect(throws: PocketPiError.self) {
+            try await client.patchConfig(.auth, PiConfigPatch(set: ["fakeprov.key": "<redacted>"]))
+        }
+        let back = try await client.patchConfig(.auth, PiConfigPatch(unset: ["fakeprov"]))
+        #expect(!back.authProviders.contains { $0.provider == "fakeprov" })
+        #expect(back.authProviders.contains { $0.provider == "llama.cpp" })
+        // Other secrets: models.json values under credential-looking keys.
+        let models = try await client.patchConfig(.models, PiConfigPatch(set: ["providers.mine": ["baseUrl": "http://h", "apiKey": "sk-model-secret"]]))
+        #expect(models.data["providers"]?["mine"]?["apiKey"]?.string == "<redacted>")
+        #expect(models.data["providers"]?["mine"]?["baseUrl"]?.string == "http://h")
+        _ = try await client.patchConfig(.models, PiConfigPatch(unset: ["providers.mine"]))
+    }
+
+    @Test func restartKeepsTheKeyAndTranscript() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("before restart")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: before restart" && s.path != nil && !s.isStreaming }
+        let key = try #require(s.key)
+        let path = s.path
+        let r = try await client.restart(key: key)
+        #expect(r.key == key)
+        #expect(r.file == path)
+        try await waitFor("the reconnect") { s.status == .connected && s.key == key && s.transcript.items.count == 2 }
+        try await s.send("after restart")
+        try await waitFor("the next reply") { lastAssistantText(s) == "Echo: after restart" && !s.isStreaming }
+        #expect(s.key == key)
+        #expect(s.path == path)
+        #expect(s.transcript.items.count == 4)
+        s.leave()
+    }
+
+    @Test func reloadRestartsStaleIdleChats() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("reload me")
+        try await waitFor("the reply") { lastAssistantText(s) == "Echo: reload me" && !s.isStreaming }
+        let key = try #require(s.key)
+        _ = try await client.patchConfig(.settings, PiConfigPatch(set: ["retry.maxRetries": 4]))
+        let status = try await client.piStatus()
+        #expect(status.control)
+        #expect(status.live.first { $0.key == key }?.stale == true)
+        #expect(try await client.sessions().first { $0.path == s.path }.map { ($0.epoch ?? 0) < status.configEpoch } == true)
+        let r = try await client.reload()
+        #expect(r.restarted.contains(key))
+        #expect(r.failed.isEmpty)
+        try await waitFor("the reconnect", timeout: 15) { s.status == .connected && !s.needsRestart && s.transcript.items.count == 2 }
+        #expect(try await client.piStatus().live.first { $0.key == key }?.stale == false)
+        _ = try await client.patchConfig(.settings, PiConfigPatch(unset: ["retry"]))
+        s.leave()
+    }
+
+    @Test func forkMovesTheChatToTheNewFile() async throws {
+        let s = ChatSession(client: client, newIn: projectDir)
+        try await s.send("one")
+        try await waitFor("the first reply") { lastAssistantText(s) == "Echo: one" && s.path != nil && !s.isStreaming }
+        try await s.send("two")
+        try await waitFor("the second reply") { lastAssistantText(s) == "Echo: two" && !s.isStreaming }
+        let key = try #require(s.key)
+        let old = try #require(s.path)
+        let forks = try await client.command(key: key, ["type": "get_fork_messages"])["messages"]?.array ?? []
+        #expect(forks.compactMap { $0["text"]?.string } == ["one", "two"])
+        let entry = try #require(forks.last?["entryId"])
+        let r = try await client.command(key: key, ["type": "fork", "entryId": entry])
+        #expect(r["text"]?.string == "two")
+        try await waitFor("the new session file") { s.path != nil && s.path != old }
+        let state = try await client.command(key: key, ["type": "get_state"])
+        #expect(state["sessionFile"]?.string == s.path)
+        #expect(try await client.piStatus().live.first { $0.key == key }?.file == s.path)
+        s.leave()
+    }
+
+    @Test func controlRoundTrip() async throws {
+        let key = try await client.newChat(cwd: projectDir).key
+        let tools = try await client.tools(key: key)
+        #expect(tools.map(\.name).contains("bash"))
+        #expect(tools.filter(\.active).map(\.name) == ["read", "bash", "edit", "write"])
+        let after = try await client.setActiveTools(key: key, ["read"])
+        #expect(after.filter(\.active).map(\.name) == ["read"])
+        await #expect(throws: PocketPiError.command("unknown tools: nope")) {
+            try await client.setActiveTools(key: key, ["nope"])
+        }
+        // The extension's commands are pocketpi's, not the person's.
+        let commands = try await client.command(key: key, ["type": "get_commands"])["commands"]?.array ?? []
+        #expect(!commands.contains { $0["name"]?.string?.hasPrefix("pp-") == true })
+        await #expect(throws: PocketPiError.self) {
+            try await client.command(key: key, ["type": "prompt", "message": "/pp-tools x"])
+        }
+        // Never allowed: commands that would move pi off its session file.
+        for t in ["new_session", "switch_session", "cycle_model"] {
+            await #expect(throws: PocketPiError.self) { try await client.command(key: key, ["type": .string(t)]) }
+        }
+        try await client.close(key: key)
+    }
+
+    @Test func runsPiCLI() async throws {
+        // fake-pi answers any CLI call like an RPC session would not; only
+        // the plumbing is checked here (real pi was checked by hand).
+        let id = try await client.startJob(.list())
+        var job = try await client.job(id: id)
+        for _ in 0..<40 where job.isRunning {
+            try await Task.sleep(for: .milliseconds(100))
+            job = try await client.job(id: id)
+        }
+        #expect(!job.isRunning)
+        #expect(job.argv == ["list"])
+        #expect(try await client.jobs().contains { $0.id == id })
+        await #expect(throws: PocketPiError.self) { _ = try await client.startJob(.install(source: "--evil")) }
+    }
 }

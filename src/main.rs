@@ -17,6 +17,8 @@ mod apns;
 mod push;
 mod improve;
 mod llama;
+mod pi_admin;
+mod pi_cli;
 
 use axum::{
     Json, Router,
@@ -68,7 +70,42 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "get_commands",
     "abort_retry",
     "extension_ui_response",
+    // Sessions: forking and cloning change the pi's session file, which the
+    // server follows (see `follow_session_file`).
+    "fork",
+    "get_fork_messages",
+    "clone",
+    "get_tree",
+    "get_entries",
+    "export_html",
+    "get_last_assistant_text",
+    // `!cmd` / `!!cmd` from the composer.
+    "bash",
+    "abort_bash",
+    // These four change pi's global settings.json, not just this chat.
+    "set_auto_compaction",
+    "set_auto_retry",
+    "set_steering_mode",
+    "set_follow_up_mode",
+    // Never: cycle_model (changes the default model), new_session and
+    // switch_session (a pi that moves to another file breaks the
+    // live key <-> session file mapping pocketpi's identity rests on).
 ];
+
+/// RPC setters that write pi's global settings.json: after one, every other
+/// pi is running with old settings (see `config_epoch`).
+const GLOBAL_SETTERS: &[&str] = &["set_auto_compaction", "set_auto_retry", "set_steering_mode", "set_follow_up_mode"];
+
+/// `pocketpi-control` commands a client may run through `/api/s/{key}/control`
+/// (each is the extension's `/pp-<name>`).
+const CONTROL_COMMANDS: &[&str] = &["tools"];
+
+/// The `customType` of pocketpi-control's reply entries.
+const CONTROL_REPLY: &str = "pocketpi-control";
+
+/// The companion extension, written to pocketpi's data folder at startup and
+/// loaded into normal chat pis with `-e`.
+const CONTROL_EXTENSION: &str = include_str!("../extensions/pocketpi-control.ts");
 
 /// Changes on every restart (deploy); the page polls it to live-reload.
 static BUILD_ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
@@ -98,6 +135,27 @@ pub struct AppState {
     pub(crate) engine: Arc<engine::Engine>,
     pub(crate) sensors: sensors::Sensors,
     pub(crate) push: push::Push,
+    /// pi's config files; its epoch says which pis run with old settings.
+    pub(crate) admin: pi_admin::Admin,
+    pub(crate) jobs: Arc<pi_cli::Jobs>,
+    /// `pocketpi-control.ts` on disk, or None when turned off
+    /// (`POCKETPI_CONTROL=0`) or it couldn't be written.
+    pub(crate) control_ext: Option<PathBuf>,
+    /// Where `export_html` writes (never a path a client picks).
+    pub(crate) exports_dir: PathBuf,
+}
+
+/// What a live pi is for; restarts, reloads and the control extension only
+/// apply to chats.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// A normal chat (Work tab, the web UI).
+    Chat,
+    /// The app's Chat tab: pi without tools.
+    ChatTab,
+    /// A workflow stage, driven by the engine.
+    Stage,
 }
 
 pub struct Live {
@@ -112,6 +170,20 @@ pub struct Live {
     pub(crate) session_file: StdMutex<Option<String>>,
     pub(crate) stderr_tail: StdMutex<VecDeque<String>>,
     pub(crate) turn_started: StdMutex<Option<Instant>>,
+    pub(crate) kind: Kind,
+    /// The config epoch this pi started with (or caught up to by changing a
+    /// global setting itself). Below the current one: "Restart to apply".
+    pub(crate) epoch: AtomicU64,
+    /// Being replaced by `/restart`: its exit is expected, and requests for
+    /// its key wait for the new process instead of failing.
+    pub(crate) restarting: AtomicBool,
+    pub(crate) exited: AtomicBool,
+    /// Started with `-e pocketpi-control.ts`.
+    pub(crate) control: bool,
+    /// Whether pi actually registered the /pp-* commands: 0 not checked yet,
+    /// 1 yes, 2 no. Checked once before the first control call, so a failed
+    /// extension load can't turn "/pp-tools ..." into a prompt for the model.
+    pub(crate) control_ok: std::sync::atomic::AtomicU8,
 }
 
 impl Live {
@@ -153,7 +225,13 @@ async fn main() {
     let chat_dir = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share")).join("pocketpi/chat");
     let _ = std::fs::create_dir_all(&chat_dir);
     let chat_dir = std::fs::canonicalize(&chat_dir).unwrap_or(chat_dir);
+    let data_dir = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share")).join("pocketpi");
+    let control_ext = install_control_extension(&data_dir);
     let app = Arc::new(AppState {
+        admin: pi_admin::Admin::new(agent_dir.clone()),
+        jobs: Arc::new(pi_cli::Jobs::default()),
+        control_ext,
+        exports_dir: data_dir.join("exports"),
         chat_dir,
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
         sessions_dir,
@@ -229,6 +307,17 @@ async fn main() {
         .route("/api/s/{key}/cmd", post(send_command))
         .route("/api/s/{key}/events", get(events))
         .route("/api/s/{key}/close", post(close_session))
+        .route("/api/s/{key}/restart", post(restart_session))
+        .route("/api/s/{key}/control", post(control))
+        .route("/api/pi/status", get(pi_status))
+        .route("/api/pi/reload", post(reload_pis))
+        .route("/api/pi/config/{file}", get(read_config).post(patch_config))
+        .route("/api/pi/jobs", get(list_jobs).post(start_job))
+        .route("/api/pi/jobs/{id}", get(get_job))
+        .route("/api/pi/version", get(pi_version))
+        .route("/api/pi/auth/{provider}", get(auth_check))
+        .route("/api/pi/mcp", get(mcp_list))
+        .route("/api/pi/packages", get(package_list))
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -313,6 +402,15 @@ fn get_live(app: &AppState, key: &str) -> AppResult<Arc<Live>> {
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "session not running"))
 }
 
+/// Drops `live` from the registry, unless its key already belongs to the pi
+/// that replaced it.
+fn unregister(app: &AppState, live: &Arc<Live>) {
+    let mut map = app.live.lock().unwrap();
+    if map.get(&live.key).is_some_and(|l| Arc::ptr_eq(l, live)) {
+        map.remove(&live.key);
+    }
+}
+
 fn find_live_by_path(app: &AppState, path: &str) -> Option<Arc<Live>> {
     app.live
         .lock()
@@ -330,19 +428,60 @@ fn is_chat_dir(app: &AppState, cwd: &str) -> bool {
     std::path::Path::new(cwd) == app.chat_dir
 }
 
-async fn spawn_pi(app: &Arc<AppState>, cwd: &str, session: Option<&str>) -> AppResult<Arc<Live>> {
-    spawn_pi_with(app, cwd, session, &[]).await
+/// Writes the embedded `pocketpi-control.ts` where chat pis load it from,
+/// only when it changed (pi reads it fresh at each start).
+fn install_control_extension(data_dir: &std::path::Path) -> Option<PathBuf> {
+    if std::env::var("POCKETPI_CONTROL").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let path = data_dir.join("pocketpi-control.ts");
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(CONTROL_EXTENSION) {
+        let tmp = path.with_extension("ts.tmp");
+        let ok = std::fs::create_dir_all(data_dir).is_ok()
+            && std::fs::write(&tmp, CONTROL_EXTENSION).is_ok()
+            && std::fs::rename(&tmp, &path).is_ok();
+        if !ok {
+            eprintln!("couldn't write {}; chats run without pocketpi-control", path.display());
+            return None;
+        }
+    }
+    Some(path)
 }
 
+/// A chat's pi (new or reopened): the Chat tab's without tools, every other
+/// one with the pocketpi-control extension.
+async fn spawn_pi(app: &Arc<AppState>, cwd: &str, session: Option<&str>) -> AppResult<Arc<Live>> {
+    let kind = if is_chat_dir(app, cwd) { Kind::ChatTab } else { Kind::Chat };
+    spawn_live(app, cwd, session, &[], kind, None).await
+}
+
+/// A workflow stage's pi (the engine adds its own flags).
 pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>, extra: &[String]) -> AppResult<Arc<Live>> {
+    spawn_live(app, cwd, session, extra, Kind::Stage, None).await
+}
+
+/// Starts a pi and registers it. `key` reuses a live key (restart), so the
+/// clients that had the chat open reconnect to the same URL.
+async fn spawn_live(
+    app: &Arc<AppState>,
+    cwd: &str,
+    session: Option<&str>,
+    extra: &[String],
+    kind: Kind,
+    key: Option<String>,
+) -> AppResult<Arc<Live>> {
     let mut cmd = Command::new(&app.pi_bin);
     cmd.arg("--mode").arg("rpc");
     if let Some(s) = session {
         cmd.arg("--session").arg(s);
     }
     // The Chat tab: a conversation, not a coding agent (also on reopen).
-    if is_chat_dir(app, cwd) {
+    if kind == Kind::ChatTab {
         cmd.arg("--no-tools").arg("--system-prompt").arg(CHAT_SYSTEM_PROMPT);
+    }
+    let control = kind == Kind::Chat && app.control_ext.is_some();
+    if control {
+        cmd.arg("-e").arg(app.control_ext.as_ref().unwrap());
     }
     cmd.args(extra);
     cmd.current_dir(cwd)
@@ -354,14 +493,16 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
         .spawn()
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("failed to start pi: {e}")))?;
 
-    let key = format!(
-        "{:x}{:x}",
-        app.next_key.fetch_add(1, Ordering::Relaxed),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
-    );
+    let key = key.unwrap_or_else(|| {
+        format!(
+            "{:x}{:x}",
+            app.next_key.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        )
+    });
     let (tx, _) = broadcast::channel(8192);
     let live = Arc::new(Live {
         key: key.clone(),
@@ -375,6 +516,12 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
         session_file: StdMutex::new(session.map(String::from)),
         stderr_tail: StdMutex::new(VecDeque::new()),
         turn_started: StdMutex::new(None),
+        kind,
+        epoch: AtomicU64::new(app.admin.epoch()),
+        restarting: AtomicBool::new(false),
+        exited: AtomicBool::new(false),
+        control,
+        control_ok: std::sync::atomic::AtomicU8::new(0),
     });
     app.live.lock().unwrap().insert(key.clone(), live.clone());
 
@@ -444,10 +591,16 @@ pub async fn spawn_pi_with(app: &Arc<AppState>, cwd: &str, session: Option<&str>
         for (_, tx) in live2.pending.lock().unwrap().drain() {
             let _ = tx.send(json!({"success": false, "error": "pi exited"}));
         }
+        live2.exited.store(true, Ordering::Relaxed);
+        // A restart already told the clients (`restarting: true`) and keeps
+        // the key registered until the new pi takes it over.
+        if live2.restarting.load(Ordering::Relaxed) {
+            return;
+        }
         let tail: Vec<String> = live2.stderr_tail.lock().unwrap().iter().cloned().collect();
         let exit = json!({"type": "pocketpi_exit", "stderr": tail}).to_string();
         let _ = live2.tx.send(Arc::from(exit.as_str()));
-        app2.live.lock().unwrap().remove(&live2.key);
+        unregister(&app2, &live2);
     });
 
     Ok(live)
@@ -469,6 +622,17 @@ fn handle_record(live: &Live, line: &str, v: Value) {
                 return;
             }
         }
+    }
+    // pocketpi-control's answers go to the waiting /control call, not to
+    // the clients' event stream.
+    if ty == "entry_appended" && v.pointer("/entry/customType").and_then(Value::as_str) == Some(CONTROL_REPLY) {
+        let data = v.pointer("/entry/data").cloned().unwrap_or(Value::Null);
+        if let Some(req) = data.get("reqId").and_then(Value::as_str) {
+            if let Some(tx) = live.pending.lock().unwrap().remove(req) {
+                let _ = tx.send(data);
+            }
+        }
+        return;
     }
     match ty {
         "agent_start" => live.streaming.store(true, Ordering::Relaxed),
@@ -523,18 +687,86 @@ pub async fn rpc_internal(live: &Live, mut cmd: Value) -> AppResult<Value> {
 async fn send_command(
     State(app): State<Arc<AppState>>,
     Path(key): Path<String>,
-    Json(cmd): Json<Value>,
+    Json(mut cmd): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    let live = get_live(&app, &key)?;
-    Ok(Json(rpc(&live, cmd).await?))
+    let live = get_live_ready(&app, &key).await?;
+    let ty = cmd.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    // /pp-* is pocketpi's channel to its extension (POST .../control).
+    if ty == "prompt" && cmd.get("message").and_then(Value::as_str).is_some_and(|m| m.trim_start().starts_with("/pp-")) {
+        return Err(err(StatusCode::BAD_REQUEST, "/pp-* commands are pocketpi's own; use /control"));
+    }
+    // pi writes the export wherever it's told: only ever into our folder.
+    if ty == "export_html" {
+        let _ = std::fs::create_dir_all(&app.exports_dir);
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+        let name = format!("{}-{ms}.html", live.key);
+        cmd["outputPath"] = json!(app.exports_dir.join(name));
+    }
+    let epoch_before = app.admin.epoch();
+    let mut resp = rpc(&live, cmd).await?;
+    let ok = resp.get("success") != Some(&Value::Bool(false));
+    match ty.as_str() {
+        "get_commands" => {
+            if let Some(list) = resp.pointer_mut("/data/commands").and_then(Value::as_array_mut) {
+                list.retain(|c| !c.get("name").and_then(Value::as_str).is_some_and(|n| n.starts_with("pp-")));
+            }
+        }
+        "get_entries" => {
+            if let Some(list) = resp.pointer_mut("/data/entries").and_then(Value::as_array_mut) {
+                list.retain(|e| e.get("customType").and_then(Value::as_str) != Some(CONTROL_REPLY));
+            }
+        }
+        "fork" | "clone" if ok && resp.pointer("/data/cancelled") != Some(&Value::Bool(true)) => {
+            follow_session_file(&live).await;
+        }
+        t if ok && GLOBAL_SETTERS.contains(&t) => {
+            // pi rewrote settings.json: every other pi is now behind; this
+            // one has the change already.
+            let now = app.admin.bump();
+            let _ = live.epoch.compare_exchange(epoch_before, now, Ordering::Relaxed, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+    Ok(Json(resp))
+}
+
+/// After `fork` or `clone` pi writes to a new session file. Ask it which,
+/// remember it (it is this chat's identity now) and tell the clients, which
+/// re-key their view of the chat to the new file.
+async fn follow_session_file(live: &Live) {
+    let _ = rpc_internal(live, json!({"type": "get_state"})).await;
+    if let Some(file) = live.session_file() {
+        let msg = json!({"type": "pocketpi_session", "file": file}).to_string();
+        let _ = live.tx.send(Arc::from(msg.as_str()));
+    }
+}
+
+/// Like `get_live`, but a chat in the middle of `/restart` is waited for, so
+/// a client that reconnects at once gets the new pi rather than a 404.
+async fn get_live_ready(app: &AppState, key: &str) -> AppResult<Arc<Live>> {
+    for _ in 0..150 {
+        let live = get_live(app, key)?;
+        if !live.restarting.load(Ordering::Relaxed) {
+            return Ok(live);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(err(StatusCode::SERVICE_UNAVAILABLE, "pi is restarting"))
 }
 
 async fn events(State(app): State<Arc<AppState>>, Path(key): Path<String>) -> AppResult<impl IntoResponse> {
-    let live = get_live(&app, &key)?;
+    let live = get_live_ready(&app, &key).await?;
     let rx = live.tx.subscribe();
+    let epoch = live.epoch.load(Ordering::Relaxed);
+    let config_epoch = app.admin.epoch();
     let hello = json!({
         "type": "pocketpi_hello",
         "streaming": live.streaming.load(Ordering::Relaxed),
+        // Below config_epoch: settings changed since this pi started.
+        "epoch": epoch,
+        "config_epoch": config_epoch,
+        "stale": epoch < config_epoch,
+        "kind": live.kind,
     })
     .to_string();
     drop(live);
@@ -598,6 +830,278 @@ async fn close_session(State(app): State<Arc<AppState>>, Path(key): Path<String>
     Ok(Json(json!({"ok": true})))
 }
 
+// ---------------------------------------------------------------- restart, reload, control
+
+/// Replaces a chat's pi with a fresh one on the same session file and the
+/// same key, so it picks up changed settings, credentials, packages, MCP
+/// servers or models. Clients get `pocketpi_exit` with `restarting: true`
+/// and reconnect to the same key; requests in between wait for the new pi.
+async fn restart_live(app: &Arc<AppState>, live: Arc<Live>) -> AppResult<Arc<Live>> {
+    if live.kind == Kind::Stage {
+        return Err(err(StatusCode::CONFLICT, "workflow stages can't be restarted"));
+    }
+    if live.streaming.load(Ordering::Relaxed) {
+        return Err(err(StatusCode::CONFLICT, "pi is replying in this chat; stop it first"));
+    }
+    if live.restarting.swap(true, Ordering::Relaxed) {
+        return Err(err(StatusCode::CONFLICT, "already restarting"));
+    }
+    let file = live.session_file();
+    let msg = json!({"type": "pocketpi_exit", "restarting": true, "stderr": []}).to_string();
+    let _ = live.tx.send(Arc::from(msg.as_str()));
+    live.stdin.lock().await.take();
+    for _ in 0..100 {
+        if live.exited.load(Ordering::Relaxed) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let fail = |e: (StatusCode, String)| {
+        // Nothing will take the key over: let it go like a normal exit.
+        unregister(app, &live);
+        e
+    };
+    if !live.exited.load(Ordering::Relaxed) {
+        return Err(fail(err(StatusCode::GATEWAY_TIMEOUT, "pi didn't stop")));
+    }
+    spawn_live(app, &live.cwd, file.as_deref(), &[], live.kind, Some(live.key.clone())).await.map_err(fail)
+}
+
+async fn restart_session(State(app): State<Arc<AppState>>, Path(key): Path<String>) -> AppResult<Json<Value>> {
+    let live = get_live_ready(&app, &key).await?;
+    let new = restart_live(&app, live).await?;
+    Ok(Json(json!({ "key": new.key, "file": new.session_file(), "epoch": new.epoch.load(Ordering::Relaxed) })))
+}
+
+#[derive(Deserialize, Default)]
+struct ReloadReq {
+    /// Restart every idle chat, not only the ones behind the config epoch.
+    #[serde(default)]
+    all: bool,
+}
+
+/// "Apply": restarts the idle chat pis that started before the last config
+/// change (or all idle ones with `all`). Busy ones are listed so the clients
+/// can keep showing "Restart to apply" on them. Workflow stages are left be.
+async fn reload_pis(State(app): State<Arc<AppState>>, body: Option<Json<ReloadReq>>) -> Json<Value> {
+    let all = body.map(|b| b.0.all).unwrap_or(false);
+    let current = app.admin.epoch();
+    let lives: Vec<Arc<Live>> = app.live.lock().unwrap().values().filter(|l| l.kind != Kind::Stage).cloned().collect();
+    let (mut busy, mut tasks) = (Vec::new(), Vec::new());
+    for l in lives {
+        if l.restarting.load(Ordering::Relaxed) || !(all || l.epoch.load(Ordering::Relaxed) < current) {
+            continue;
+        }
+        if l.streaming.load(Ordering::Relaxed) {
+            busy.push(l.key.clone());
+            continue;
+        }
+        let app = app.clone();
+        tasks.push(tokio::spawn(async move { (l.key.clone(), restart_live(&app, l).await.map(|_| ())) }));
+    }
+    let (mut restarted, mut failed) = (Vec::new(), Vec::new());
+    for t in tasks {
+        if let Ok((key, r)) = t.await {
+            match r {
+                Ok(()) => restarted.push(json!(key)),
+                Err((StatusCode::CONFLICT, _)) => busy.push(key),
+                Err((_, e)) => failed.push(json!({ "key": key, "error": e })),
+            }
+        }
+    }
+    Json(json!({ "restarted": restarted, "busy": busy, "failed": failed, "config_epoch": app.admin.epoch() }))
+}
+
+/// Which pis are running and whether each has the latest config.
+async fn pi_status(State(app): State<Arc<AppState>>) -> Json<Value> {
+    let current = app.admin.epoch();
+    let live: Vec<Value> = app
+        .live
+        .lock()
+        .unwrap()
+        .values()
+        .map(|l| {
+            let epoch = l.epoch.load(Ordering::Relaxed);
+            json!({
+                "key": l.key, "file": l.session_file(), "cwd": l.cwd, "kind": l.kind,
+                "streaming": l.streaming.load(Ordering::Relaxed), "epoch": epoch, "stale": epoch < current,
+            })
+        })
+        .collect();
+    Json(json!({ "config_epoch": current, "live": live, "control": app.control_ext.is_some() }))
+}
+
+#[derive(Deserialize)]
+struct ControlReq {
+    command: String,
+    #[serde(default)]
+    args: Option<Value>,
+}
+
+/// Runs a pocketpi-control command (`/pp-<command> <reqId> [args]`) in the
+/// chat's pi and waits for its reply entry. Answers like `/cmd`:
+/// `{success, data}` or `{success: false, error}`.
+async fn control(State(app): State<Arc<AppState>>, Path(key): Path<String>, Json(req): Json<ControlReq>) -> AppResult<Json<Value>> {
+    let live = get_live_ready(&app, &key).await?;
+    if !CONTROL_COMMANDS.contains(&req.command.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, format!("unknown control command: {}", req.command)));
+    }
+    if !live.control {
+        return Err(err(StatusCode::CONFLICT, "this pi runs without pocketpi-control (Chat tab, workflow stage, or turned off)"));
+    }
+    let name = format!("pp-{}", req.command);
+    if live.control_ok.load(Ordering::Relaxed) == 0 {
+        let r = rpc_internal(&live, json!({"type": "get_commands"})).await?;
+        let has = r
+            .pointer("/data/commands")
+            .and_then(Value::as_array)
+            .is_some_and(|l| l.iter().any(|c| c.get("name").and_then(Value::as_str) == Some(name.as_str())));
+        live.control_ok.store(if has { 1 } else { 2 }, Ordering::Relaxed);
+    }
+    if live.control_ok.load(Ordering::Relaxed) != 1 {
+        return Err(err(StatusCode::CONFLICT, "pocketpi-control didn't load in this pi (see the server log)"));
+    }
+    let req_id = format!("ctl-{}", live.seq.fetch_add(1, Ordering::Relaxed));
+    let (tx, rx) = oneshot::channel();
+    live.pending.lock().unwrap().insert(req_id.clone(), tx);
+    let mut message = format!("/{name} {req_id}");
+    if let Some(args) = req.args.filter(|a| !a.is_null()) {
+        message.push(' ');
+        message.push_str(&args.to_string());
+    }
+    let sent = rpc_internal(&live, json!({"type": "prompt", "message": message})).await;
+    let drop_waiter = || live.pending.lock().unwrap().remove(&req_id);
+    match sent {
+        Err(e) => {
+            drop_waiter();
+            return Err(e);
+        }
+        Ok(r) if r.get("success") == Some(&Value::Bool(false)) => {
+            drop_waiter();
+            return Ok(Json(json!({ "success": false, "error": r.get("error").cloned().unwrap_or(json!("pi refused the command")) })));
+        }
+        Ok(_) => {}
+    }
+    let reply = match tokio::time::timeout(Duration::from_secs(30), rx).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(_)) => return Err(err(StatusCode::GONE, "pi exited")),
+        Err(_) => {
+            drop_waiter();
+            return Err(err(StatusCode::GATEWAY_TIMEOUT, "pocketpi-control did not answer"));
+        }
+    };
+    // The reply entry's {reqId, ok, data|error}, or the {success:false}
+    // every waiter gets when pi exits.
+    let ok = reply.get("ok").or(reply.get("success")).and_then(Value::as_bool).unwrap_or(false);
+    Ok(Json(if ok {
+        json!({ "success": true, "data": reply.get("data").cloned().unwrap_or(Value::Null) })
+    } else {
+        json!({ "success": false, "error": reply.get("error").cloned().unwrap_or(json!("failed")) })
+    }))
+}
+
+// ---------------------------------------------------------------- pi's config files and CLI
+
+#[derive(Deserialize)]
+struct ConfigQuery {
+    /// A project folder: its `.pi/settings.json` / `.pi/mcp.json`.
+    #[serde(default)]
+    cwd: Option<String>,
+}
+
+fn admin_err(e: pi_admin::AdminError) -> (StatusCode, String) {
+    match e {
+        pi_admin::AdminError::Bad(m) => err(StatusCode::BAD_REQUEST, m),
+        pi_admin::AdminError::Unreadable(m) => err(StatusCode::UNPROCESSABLE_ENTITY, m),
+        pi_admin::AdminError::Io(m) => err(StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
+fn config_file(name: &str) -> AppResult<pi_admin::File> {
+    pi_admin::File::parse(name).ok_or_else(|| err(StatusCode::NOT_FOUND, format!("unknown config file: {name}")))
+}
+
+async fn read_config(
+    State(app): State<Arc<AppState>>,
+    Path(file): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
+) -> AppResult<Json<Value>> {
+    let file = config_file(&file)?;
+    Ok(Json(app.admin.read(file, q.cwd.as_deref()).map_err(admin_err)?))
+}
+
+async fn patch_config(
+    State(app): State<Arc<AppState>>,
+    Path(file): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ConfigQuery>,
+    Json(patch): Json<pi_admin::Patch>,
+) -> AppResult<Json<Value>> {
+    let file = config_file(&file)?;
+    let before = app.admin.epoch();
+    let v = app.admin.patch(file, q.cwd.as_deref(), &patch).map_err(admin_err)?;
+    if app.admin.epoch() != before {
+        config_changed(&app);
+    }
+    Ok(Json(v))
+}
+
+/// Tells the runs stream (every client listens) that pi's config changed, so
+/// chats can show "Restart to apply".
+fn config_changed(app: &AppState) {
+    let msg = json!({"type": "config_changed", "config_epoch": app.admin.epoch()}).to_string();
+    let _ = app.engine.tx.send(Arc::from(msg.as_str()));
+}
+
+async fn start_job(State(app): State<Arc<AppState>>, Json(action): Json<pi_cli::Action>) -> AppResult<Json<Value>> {
+    let cwd = pi_cli::resolve_cwd(&action, &app.home).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let app2 = app.clone();
+    let id = pi_cli::start(app.jobs.clone(), app.pi_bin.clone(), action, cwd, app.engine.tx.clone(), move |changed| {
+        if changed {
+            app2.admin.bump();
+            config_changed(&app2);
+        }
+    })
+    .map_err(|e| err(if e.contains("another pi job") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST }, e))?;
+    Ok(Json(json!({ "id": id })))
+}
+
+async fn list_jobs(State(app): State<Arc<AppState>>) -> Json<Value> {
+    Json(json!({ "jobs": app.jobs.recent() }))
+}
+
+async fn get_job(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<Json<Value>> {
+    let job = app.jobs.get(&id).ok_or_else(|| err(StatusCode::NOT_FOUND, "job not found"))?;
+    Ok(Json(json!({ "job": job })))
+}
+
+async fn quick(app: &AppState, action: pi_cli::Action) -> AppResult<Json<Value>> {
+    let cwd = pi_cli::resolve_cwd(&action, &app.home).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let v = pi_cli::run_quick(&app.pi_bin, &action, &cwd).await.map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(v))
+}
+
+/// `pi --version`: `{code, stdout, ...}`, plus `version` trimmed.
+async fn pi_version(State(app): State<Arc<AppState>>) -> AppResult<Json<Value>> {
+    let Json(mut v) = quick(&app, pi_cli::Action::Version).await?;
+    v["version"] = json!(v["stdout"].as_str().unwrap_or("").trim());
+    Ok(Json(v))
+}
+
+/// `pi auth check --provider X --json`: `json` is pi's `{status, provider, reason?}`.
+async fn auth_check(State(app): State<Arc<AppState>>, Path(provider): Path<String>) -> AppResult<Json<Value>> {
+    quick(&app, pi_cli::Action::AuthCheck { provider }).await
+}
+
+/// `pi mcp list --json` (connects to every enabled server; can take a while).
+async fn mcp_list(State(app): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<ConfigQuery>) -> AppResult<Json<Value>> {
+    quick(&app, pi_cli::Action::McpList { cwd: q.cwd }).await
+}
+
+/// `pi list` (text; pi has no JSON form of it).
+async fn package_list(State(app): State<Arc<AppState>>, axum::extract::Query(q): axum::extract::Query<ConfigQuery>) -> AppResult<Json<Value>> {
+    quick(&app, pi_cli::Action::List { cwd: q.cwd }).await
+}
+
 async fn scan_with_live(app: &Arc<AppState>) -> Vec<sessions::SessionInfo> {
     let app2 = app.clone();
     let mut list = tokio::task::spawn_blocking(move || sessions::scan(&app2.sessions_dir, &app2.meta_cache))
@@ -611,6 +1115,7 @@ async fn scan_with_live(app: &Arc<AppState>) -> Vec<sessions::SessionInfo> {
         if let Some(l) = live.iter().find(|l| l.session_file().as_deref() == Some(s.path.as_str())) {
             s.live = true;
             s.streaming = l.streaming.load(Ordering::Relaxed);
+            s.epoch = Some(l.epoch.load(Ordering::Relaxed));
         }
     }
     list
@@ -635,7 +1140,7 @@ async fn list_sessions(
     let cfg = projects::load(&app.projects_path);
     let mut list = scan_with_live(&app).await;
     list.retain(|s| cfg.archived.contains(&s.path) == want_archived && is_chat_dir(&app, &s.cwd) == want_chat);
-    Json(json!({ "sessions": list, "chat_dir": app.chat_dir }))
+    Json(json!({ "sessions": list, "chat_dir": app.chat_dir, "config_epoch": app.admin.epoch() }))
 }
 
 /// The models chosen in pi (`enabledModels` in pi's settings.json, the ones

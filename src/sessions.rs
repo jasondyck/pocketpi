@@ -21,6 +21,10 @@ pub struct SessionInfo {
     pub messages: u32,
     pub live: bool,
     pub streaming: bool,
+    /// For a live chat: the config epoch its pi started with (compare with
+    /// the list's `config_epoch` for "Restart to apply").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -155,6 +159,7 @@ pub fn scan(root: &Path, cache: &Cache) -> Vec<SessionInfo> {
                 messages: meta.messages,
                 live: false,
                 streaming: false,
+                epoch: None,
             });
         }
     }

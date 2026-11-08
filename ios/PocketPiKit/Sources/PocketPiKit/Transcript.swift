@@ -20,6 +20,12 @@ public enum TranscriptEffect: Sendable, Equatable {
     case turnFinished
     /// The pi process exited; its key is dead. stderr's tail, if any.
     case exited(stderr: [String])
+    /// The server is replacing the pi (`/restart`, reload) under the same
+    /// key: keep the key and reconnect.
+    case restarting
+    /// pi moved to another session file (fork, clone): it is the chat's
+    /// identity from now on.
+    case sessionFileChanged(String)
     case extensionRequest(ExtensionRequest)
     /// Put this in the composer (extension set_editor_text).
     case setComposer(String)
@@ -147,7 +153,10 @@ public struct Transcript: Sendable, Equatable {
         case "pocketpi_exit":
             setStreaming(false)
             liveIndex = nil
+            if ev["restarting"]?.bool == true { return [.restarting] }
             return [.exited(stderr: (ev["stderr"]?.array ?? []).compactMap(\.string))]
+        case "pocketpi_session":
+            if let f = ev["file"]?.string { return [.sessionFileChanged(f)] }
         case "agent_start":
             setStreaming(true)
         case "agent_settled":

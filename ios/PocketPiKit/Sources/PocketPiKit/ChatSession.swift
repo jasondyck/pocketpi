@@ -71,6 +71,9 @@ public final class ChatSession {
     /// The live pi process's key, while there is one.
     public private(set) var key: String?
     public private(set) var status: Status = .idle
+    /// pi's config changed after this chat's pi started ("Restart to apply").
+    /// From the server's hello; cleared by the reconnect after a restart.
+    public private(set) var needsRestart = false
     /// A dialog an extension asked for, until it is answered.
     public var pendingRequest: ExtensionRequest?
     /// The message box. Here rather than in the view because pi can set it
@@ -223,7 +226,10 @@ public final class ChatSession {
     // MARK: - events
 
     func handle(_ ev: JSONValue) async {
-        if ev["type"]?.string == "pocketpi_hello" { status = .connected }
+        if ev["type"]?.string == "pocketpi_hello" {
+            status = .connected
+            needsRestart = ev["stale"]?.bool ?? false
+        }
         for effect in transcript.apply(ev) {
             switch effect {
             case .reloadSnapshot:
@@ -235,6 +241,11 @@ public final class ChatSession {
                 if !stderr.isEmpty {
                     status = .failed("pi stopped.\n" + stderr.suffix(8).joined(separator: "\n"))
                 }
+            case .restarting:
+                // The key lives on; the stream ends and streamEnded reconnects.
+                status = .reconnecting
+            case .sessionFileChanged(let f):
+                path = f
             case .extensionRequest(let r):
                 pendingRequest = r
             case .setComposer(let t):
@@ -281,6 +292,13 @@ public final class ChatSession {
     private func loadThinkingLevels() async {
         thinkingLevels = ((try? await command(["type": "get_available_thinking_levels"]))?["levels"]?.array ?? [])
             .compactMap(\.string)
+    }
+
+    /// Restart this chat's pi so it picks up changed settings. The server
+    /// keeps the key, so this session reconnects on its own.
+    public func restart() async {
+        guard let key else { return }
+        do { try await client.restart(key: key) } catch { problem = error.reportable }
     }
 
     /// Switch this chat's model. pi keeps the choice in the session; the
