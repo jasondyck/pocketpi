@@ -54,13 +54,7 @@ public final class ChatSession {
 
     /// The models picked in pi, in pi's order: the top of the model sheet.
     public var favorites: [ModelInfo] {
-        var out: [ModelInfo] = []
-        for p in enabledPatterns {
-            for m in models where !out.contains(m) && (ModelInfo.matches(p, m.key) || ModelInfo.matches(p, m.id)) {
-                out.append(m)
-            }
-        }
-        return out
+        EnabledModels.resolve(enabledPatterns.map(ModelPattern.init), in: models)
     }
 
     /// The chat's model as a `ModelInfo`, for the picker's checkmark.

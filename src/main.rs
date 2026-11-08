@@ -397,6 +397,7 @@ macro_rules! manage_page {
 const MANAGE_PAGES: &[(&str, &[u8])] = &[
     manage_page!("about"),
     manage_page!("providers"),
+    manage_page!("settings"),
 ];
 
 async fn manage_page_file(Path(file): Path<String>) -> Response {

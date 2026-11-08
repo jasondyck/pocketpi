@@ -50,6 +50,7 @@ enum SettingsPages {
     static let all: [SettingsPage] = [
         .about,
         .providers,
+        .settings,
     ]
 
     static var sorted: [SettingsPage] {
