@@ -115,7 +115,7 @@ final class LaunchTests: XCTestCase {
         keep(app, "project")
 
         // The Chat tab at the top: plain chats, any model, local ones too.
-        app.segmentedControls.buttons["Chat"].firstMatch.tap()
+        app.tabBars.buttons["Chat"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         let plainChat = app.descendants(matching: .any)["chat-tab-row"].firstMatch
         XCTAssertTrue(plainChat.waitForExistence(timeout: 10))
@@ -131,7 +131,6 @@ final class LaunchTests: XCTestCase {
         plainChat.tap()
         XCTAssertTrue(app.textViews["composer"].waitForExistence(timeout: 10)
                       || app.textFields["composer"].waitForExistence(timeout: 2))
-        XCTAssertFalse(app.segmentedControls.buttons["Chat"].exists)
         app.descendants(matching: .any)["model-button"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Select model"].waitForExistence(timeout: 5))
         // Local is the sheet's last section: up to full height, then to the end.
@@ -147,7 +146,7 @@ final class LaunchTests: XCTestCase {
         app.navigationBars.firstMatch.buttons["BackButton"].tap()
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5))
         // Back to Work, where it was left (natter's chats).
-        app.segmentedControls.buttons["Work"].firstMatch.tap()
+        app.tabBars.buttons["Work"].tap()
         XCTAssertTrue(app.navigationBars["natter"].waitForExistence(timeout: 5))
 
         // A chat, for the composer and the transcript.
@@ -199,10 +198,16 @@ final class LaunchTests: XCTestCase {
         XCTAssertFalse(fixTests.exists)
         composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 11))
 
-        // The chat's "…" menu (context, thinking, rename, compact).
-        app.descendants(matching: .any)["chat-menu"].firstMatch.tap()
+        // The context ring: the chat's numbers and Compact.
+        app.descendants(matching: .any)["context-gauge"].firstMatch.tap()
         sleep(1)
-        keep(app, "chat-menu")
+        keep(app, "context-menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        sleep(1)
+        // The title menu: Rename (in place) and Compact.
+        app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
+        sleep(1)
+        keep(app, "title-menu")
     }
 
     @MainActor

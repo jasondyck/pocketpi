@@ -254,7 +254,7 @@ struct ToolCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Theme.code, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hairline))
     }
 
     @ViewBuilder private var status: some View {
@@ -270,17 +270,37 @@ struct ToolCard: View {
     }
 }
 
+/// An edit's diff. Lazy (an expanded card can hold 400 lines inside the
+/// lazy transcript), and the +/− gutter is bold and coloured, so a change
+/// reads without telling red from green.
 private struct DiffView: View {
     let diff: String
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(400).enumerated()), id: \.offset) { _, line in
-                Text(String(line).isEmpty ? " " : String(line))
-                    .font(.caption.monospaced())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(line.hasPrefix("+") ? Color.green.opacity(0.15) : line.hasPrefix("-") ? Color.red.opacity(0.15) : .clear)
+        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(400).map(String.init)
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                row(line)
             }
         }
+    }
+
+    private func row(_ line: String) -> some View {
+        let kind: Character? = line.hasPrefix("+") && !line.hasPrefix("+++") ? "+"
+            : line.hasPrefix("-") && !line.hasPrefix("---") ? "-" : nil
+        let tint: Color = kind == "+" ? .green : kind == "-" ? .red : .clear
+        let rest = kind == nil ? line : String(line.dropFirst())
+        return HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(kind == "+" ? "+" : kind == "-" ? "−" : " ")
+                .font(.caption.monospaced().bold())
+                .foregroundStyle(kind == "+" ? Color.green : Color.red)
+                .frame(width: 14)
+                .accessibilityLabel(kind == "+" ? "added" : kind == "-" ? "removed" : "")
+            Text(rest.isEmpty ? " " : rest)
+                .font(.caption.monospaced())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.15))
     }
 }
 
@@ -300,14 +320,29 @@ private struct ErrorBox: View {
 /// Block-level Markdown from PocketPiKit, inline markup from Foundation.
 struct MarkdownView: View {
     let text: String
+    @State private var wideCode: WideCode?
 
     var body: some View {
+        let blocks = MarkdownBlock.parse(text)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, b in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { i, b in
                 view(for: b)
+                    // A heading starts a section: room above it, so sections
+                    // don't run together.
+                    .padding(.top, i > 0 && b.isHeading ? 10 : 0)
             }
         }
         .textSelection(.enabled)
+        .sheet(item: $wideCode) { WideCodeSheet(code: $0) }
+    }
+
+    /// Headings step down from the title sizes to the body's bold.
+    static func headingFont(_ level: Int) -> Font {
+        switch level {
+        case 1: .title2.bold()
+        case 2: .title3.bold()
+        default: .headline
+        }
     }
 
     @ViewBuilder private func view(for b: MarkdownBlock) -> some View {
@@ -315,24 +350,34 @@ struct MarkdownView: View {
         case .paragraph(let t):
             Text(Self.inline(t))
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(level == 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
+            Text(Self.inline(t, code: Self.headingFont(level).monospaced()))
+                .font(Self.headingFont(level))
+                .accessibilityAddTraits(.isHeader)
         case .code(let lang, let code):
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(lang ?? "code").font(.caption2.monospaced()).foregroundStyle(.secondary)
                     Spacer()
+                    Button { wideCode = WideCode(lang: lang, code: code) } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right").font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Open code full screen")
                     Button { UIPasteboard.general.string = code } label: { Image(systemName: "doc.on.doc").font(.caption2) }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .accessibilityLabel("Copy code")
                 }
                 // Wrapped rather than scrolled: a sideways scroller inside the
-                // chat fights the vertical swipe.
+                // chat fights the vertical swipe. Full screen scrolls sideways.
                 Text(code).font(.caption.monospaced())
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.code, in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .onTapGesture { wideCode = WideCode(lang: lang, code: code) }
         case .quote(let t):
             HStack(spacing: 8) {
                 Rectangle().fill(Color.secondary.opacity(0.4)).frame(width: 3)
@@ -349,9 +394,52 @@ struct MarkdownView: View {
         }
     }
 
-    static func inline(_ s: String) -> AttributedString {
+    /// Inline Markdown. Code spans get a smaller monospaced font (monospace
+    /// at body size wraps awkwardly) and the code background.
+    static func inline(_ s: String, code: Font = .callout.monospaced()) -> AttributedString {
         let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace,
                                                            failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
+        var a = (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
+        let spans = a.runs.filter { $0.inlinePresentationIntent?.contains(.code) == true }.map(\.range)
+        for r in spans {
+            a[r].swiftUI.font = code
+            a[r].swiftUI.backgroundColor = Theme.code
+        }
+        return a
+    }
+}
+
+/// A code block opened full screen: no wrapping, scrolls both ways.
+struct WideCode: Identifiable {
+    let id = UUID()
+    let lang: String?
+    let code: String
+}
+
+private struct WideCodeSheet: View {
+    let code: WideCode
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView([.horizontal, .vertical]) {
+                Text(code.code)
+                    .font(.footnote.monospaced())
+                    .fixedSize(horizontal: true, vertical: false)
+                    .textSelection(.enabled)
+                    .padding()
+            }
+            .background(Theme.code)
+            .navigationTitle(code.lang ?? "Code")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = code.code }
+                }
+            }
+        }
     }
 }

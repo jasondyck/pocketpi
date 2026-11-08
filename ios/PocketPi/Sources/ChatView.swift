@@ -38,8 +38,6 @@ private struct ChatScreen: View {
     /// Keep the end in view as the reply streams (off once scrolled away).
     @State private var following = true
     @State private var scrollPhase: ScrollPhase = .idle
-    @State private var renaming = false
-    @State private var newName = ""
     @State private var openedRun: String?
 
     var body: some View {
@@ -149,36 +147,34 @@ private struct ChatScreen: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             StatusBanner(status: session.status)
         }
-        .navigationTitle(session.title)
+        // The chat's name as the title: tapping it opens the system title
+        // menu (rename in place, compact). The project underneath.
+        .navigationTitle(Binding(get: { session.title }, set: { name in Task { await session.rename(name) } }))
+        .navigationSubtitle(model.projectName(for: session.cwd))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(session.title).font(.headline).lineLimit(1)
-                    Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
+        .toolbarTitleMenu {
+            RenameButton()
+                .disabled(session.key == nil && session.path == nil)
+            Button("Compact context", systemImage: "arrow.down.right.and.arrow.up.left") {
+                Task { await session.compact() }
             }
-            ToolbarItem(placement: .topBarTrailing) { chatMenu }
+            .disabled(session.isStreaming || session.path == nil)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { ContextGauge(session: session) }
+        }
+        // The conversation keeps the screen, like Messages.
+        .toolbarVisibility(.hidden, for: .tabBar)
         .task {
             await session.start()
             await session.prepare() // a new chat: pi now, so the model picker works
         }
-        .onDisappear {
-            session.leave()
-            model.chatScreens = max(0, model.chatScreens - 1)
-        }
-        .onAppear { model.chatScreens += 1 }
+        .onDisappear { session.leave() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await session.start() } }
         }
         .sheet(item: $session.pendingRequest) { req in
             ExtensionSheet(request: req) { answer in Task { await session.respond(to: req, answer) } }
-        }
-        .alert("Rename chat", isPresented: $renaming) {
-            TextField("Name", text: $newName)
-            Button("Cancel", role: .cancel) {}
-            Button("Rename") { Task { await session.rename(newName) } }
         }
         .alert("Something went wrong", isPresented: Binding(
             get: { session.problem != nil },
@@ -194,15 +190,16 @@ private struct ChatScreen: View {
         if case .activity(_, _, true)? = rows.last { return true }
         return false
     }
+}
 
-    private var subtitle: String {
-        var parts = [model.projectName(for: session.cwd)]
-        if let s = session.state { parts.append(s.modelLabel) }
-        if let p = session.stats?.contextPercent { parts.append("\(Int(p.rounded()))% context") }
-        return parts.joined(separator: " · ")
-    }
+/// How full the chat's context is, as a small ring in the toolbar (lime
+/// until it's getting full). Opens the chat's numbers and Compact.
+private struct ContextGauge: View {
+    @Bindable var session: ChatSession
 
-    private var chatMenu: some View {
+    private var fraction: Double { min(1, max(0, (session.stats?.contextPercent ?? 0) / 100)) }
+
+    var body: some View {
         Menu {
             if let stats = session.stats {
                 let percent = stats.contextPercent.map { String(Int($0.rounded())) + "%" } ?? "–"
@@ -211,20 +208,26 @@ private struct ChatScreen: View {
                     Text(verbatim: Format.tokens(stats.totalTokens) + " tokens · " + Format.cost(stats.cost))
                 }
             }
-            Button("Rename", systemImage: "pencil") {
-                newName = session.state?.sessionName ?? session.title
-                renaming = true
-            }
-            .disabled(session.key == nil && session.path == nil)
             Button("Compact context", systemImage: "arrow.down.right.and.arrow.up.left") {
                 Task { await session.compact() }
             }
             .disabled(session.isStreaming || session.path == nil)
         } label: {
-            Image(systemName: "ellipsis")
+            ZStack {
+                Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 3)
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(fraction > 0.8 ? Color.orange : Theme.signalText,
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 20, height: 20)
+            .padding(4)
+            .contentShape(Rectangle())
         }
-        .accessibilityLabel("Chat options")
-        .accessibilityIdentifier("chat-menu")
+        .accessibilityLabel("Context")
+        .accessibilityValue("\(Int((fraction * 100).rounded())) percent used")
+        .accessibilityIdentifier("context-gauge")
     }
 }
 
@@ -269,8 +272,7 @@ private struct ActiveRuns: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .background(LiquidGlass.available ? Color.clear : Theme.surface, in: Capsule())
-                .modifier(FloatingCapsule())
+                .glass(in: Capsule(), interactive: true)
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("active-run")
             }
@@ -289,16 +291,6 @@ private struct ActiveRuns: View {
             return "\(s.name) · step \(n) of \(run.stages.count)"
         }
         return run.status == "pending" ? "Queued" : "Running"
-    }
-}
-
-private struct FloatingCapsule: ViewModifier {
-    func body(content: Content) -> some View {
-        if LiquidGlass.available {
-            content.glass(in: Capsule(), interactive: true)
-        } else {
-            content
-        }
     }
 }
 
@@ -416,7 +408,7 @@ private struct ModelButton: View {
             .lineLimit(1)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Color.primary.opacity(0.07), in: Capsule())
+            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(session.isStreaming)
@@ -626,63 +618,12 @@ private struct EffortList: View {
     }
 }
 
-/// The system Close button (iOS 26: the glass ✕), else an ✕ button.
+/// The system Close button (the glass ✕).
 private struct CloseButton: View {
     let action: () -> Void
     var body: some View {
-        button.accessibilityIdentifier("close-sheet")
-    }
-
-    @ViewBuilder private var button: some View {
-        #if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            Button(role: .close, action: action)
-        } else {
-            Button("Close", systemImage: "xmark", action: action)
-        }
-        #else
-        Button("Close", systemImage: "xmark", action: action)
-        #endif
-    }
-}
-
-/// iOS 26: the system's prominent glass button, tinted lime (the one
-/// primary action gets the colour, on its background). iOS 18: a lime circle.
-private struct SendButtonStyle: ViewModifier {
-    let ready: Bool
-    func body(content: Content) -> some View {
-        #if compiler(>=6.2)
-        if #available(iOS 26, *) {
-            content
-                .foregroundStyle(ready ? Theme.signalInk : .secondary)
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.circle)
-                // Small, so it sits inside the composer bar.
-                .controlSize(.small)
-                .tint(Theme.signal)
-        } else {
-            fallback(content)
-        }
-        #else
-        fallback(content)
-        #endif
-    }
-
-    private func fallback(_ content: Content) -> some View {
-        content
-            .frame(width: 34, height: 34)
-            .background(ready ? Theme.signal : Theme.surface, in: Circle())
-            .foregroundStyle(Theme.signalInk)
-    }
-}
-
-private struct FloatingBar: ViewModifier {
-    func body(content: Content) -> some View {
-        if LiquidGlass.available {
-            content.glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        } else {
-            content
-        }
+        Button(role: .close, action: action)
+            .accessibilityIdentifier("close-sheet")
     }
 }
 
@@ -736,14 +677,12 @@ private struct Composer: View {
                     sendButton
                 }
             }
-            .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 20))
-            // iOS 26: one floating glass bar over the transcript, like Messages.
-            .padding(LiquidGlass.available ? 6 : 0)
-            .modifier(FloatingBar())
+            // One floating glass bar over the transcript, like Messages.
+            .padding(6)
+            .glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(LiquidGlass.available ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.bar))
         // A chat started with a draft ("Update the workflow …"): the keyboard
         // comes up so it's one step to finish the sentence.
         .task {
@@ -766,24 +705,26 @@ private struct Composer: View {
         }
     }
 
-    @ViewBuilder private var sendButton: some View {
-        if session.isStreaming && !hasText && images.isEmpty {
-            Button { Task { await session.stop() } } label: {
-                Image(systemName: "stop.fill")
-                    .font(.callout)
-                    .frame(width: 34, height: 34)
-                    .background(Color.primary, in: Circle())
-                    .foregroundStyle(Color(uiColor: .systemBackground))
-            }
-            .accessibilityLabel("Stop")
-        } else {
-            Button(action: send) {
-                Image(systemName: "arrow.up").font(.callout.weight(.bold))
-            }
-            .modifier(SendButtonStyle(ready: hasText || !images.isEmpty))
-            .disabled(sending || (!hasText && images.isEmpty))
-            .accessibilityLabel("Send")
+    /// Send and Stop are one control: the same lime circle (a plain fill,
+    /// not glass on the glass bar), its symbol swapping as pi starts and
+    /// stops. Grey while there's nothing to send.
+    private var sendButton: some View {
+        let stop = session.isStreaming && !hasText && images.isEmpty
+        let ready = stop || hasText || !images.isEmpty
+        return Button {
+            if stop { Task { await session.stop() } } else { send() }
+        } label: {
+            Image(systemName: stop ? "stop.fill" : "arrow.up")
+                .font(.callout.weight(.bold))
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundStyle(ready ? Theme.signalInk : Color.secondary)
+                .frame(width: 32, height: 32)
+                .background(ready ? Theme.signal : Color(uiColor: .tertiarySystemFill), in: Circle())
         }
+        .buttonStyle(.plain)
+        .disabled(!ready || (sending && !stop))
+        .animation(.default, value: stop)
+        .accessibilityLabel(stop ? "Stop" : "Send")
     }
 
     private func send() {
@@ -818,8 +759,7 @@ private struct SlashList: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(height: min(max(rowsHeight, 1), 240))
-        .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 16))
-        .modifier(FloatingBar())
+        .glass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var rows: some View {

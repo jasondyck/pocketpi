@@ -26,36 +26,24 @@ enum AppMode: String {
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         if model.client == nil {
             ConnectView()
         } else {
-            VStack(spacing: 0) {
-                // Work (projects, workflows, approvals) or Chat (plain
-                // conversations), at the top like a browser's tabs. Hidden on
-                // iPhone while a chat is open, so the chat keeps the screen.
-                if !model.chatOpen || sizeClass == .regular {
-                    Picker("Mode", selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
-                        Text("Work").tag(AppMode.work)
-                        Text("Chat").tag(AppMode.chat)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
-                    .accessibilityIdentifier("mode")
+            // Work (projects, chats, workflows, approvals) and Chat (plain
+            // conversations). On iOS 26 the tab bar floats as glass and
+            // shrinks while scrolling down; chats hide it.
+            TabView(selection: Binding(get: { model.mode }, set: { model.mode = $0 })) {
+                Tab("Work", systemImage: "hammer", value: AppMode.work) {
+                    ChatListView()
                 }
-                // Only the showing tab exists (a hidden one would still be in
-                // the view hierarchy); each opens where it was left.
-                switch model.mode {
-                case .work: ChatListView(place: model.workPlace)
-                case .chat: ChatTab()
+                .badge(model.approvals.count)
+                Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: AppMode.chat) {
+                    ChatTab()
                 }
             }
-            .animation(.default, value: model.chatOpen)
-            // A tapped notification: a Chat-tab chat opens there, anything
-            // else in Work (which handles the link once it's showing).
+            .tabBarMinimizeBehavior(.onScrollDown)
             .onChange(of: model.pendingLink, initial: true) { _, link in
                 guard let link else { return }
                 if case .chat(let p) = link, model.chats.contains(where: { $0.path == p }) {
@@ -122,16 +110,9 @@ final class AppModel {
     /// The Chat tab's chats and their folder (pi without tools there).
     private(set) var chats: [SessionInfo] = []
     private(set) var chatDir: String?
-    /// Which tab is showing; kept across launches.
-    var mode: AppMode = AppMode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .work {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mode") }
-    }
-    /// Chat screens on screen (each counts itself in and out): while one
-    /// fills an iPhone, the Work/Chat switch steps aside.
-    var chatScreens = 0
-    var chatOpen: Bool { chatScreens > 0 }
-    /// Where each tab was left, for when it's shown again.
-    var workPlace = WorkPlace()
+    /// Which tab is showing (a notification can switch it).
+    var mode: AppMode = .work
+    /// The Chat tab's stack, so a notification can open a chat in it.
     var chatPath: [ChatRoute] = []
     /// Workflow runs waiting for an approval, newest first.
     private(set) var approvals: [RunInfo] = []
@@ -154,8 +135,6 @@ final class AppModel {
         // UI tests start with a clean slate and an address to type.
         if ProcessInfo.processInfo.arguments.contains("-reset") {
             UserDefaults.standard.removeObject(forKey: Self.serverKey)
-            UserDefaults.standard.removeObject(forKey: "mode")
-            mode = .work
         }
         if let s = UserDefaults.standard.string(forKey: Self.serverKey),
            let url = URL(string: s) {

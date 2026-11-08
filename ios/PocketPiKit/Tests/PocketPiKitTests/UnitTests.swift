@@ -169,6 +169,11 @@ import Testing
 }
 
 @Suite struct MarkdownBlockTests {
+    @Test func headingsStartSections() {
+        let b = MarkdownBlock.parse("intro\n\n## Verification caveat\n\nbody")
+        #expect(b.map(\.isHeading) == [false, true, false])
+    }
+
     @Test func splitsBlocks() {
         let src = """
         # Title

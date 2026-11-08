@@ -12,6 +12,12 @@ public enum MarkdownBlock: Sendable, Equatable {
     case listItem(marker: String, indent: Int, text: String)
     case rule
 
+    /// Starts a section (the view gives it room above).
+    public var isHeading: Bool {
+        if case .heading = self { return true }
+        return false
+    }
+
     public static func parse(_ src: String) -> [MarkdownBlock] {
         var out: [MarkdownBlock] = []
         var para: [String] = []
