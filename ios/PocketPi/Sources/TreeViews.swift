@@ -98,7 +98,7 @@ struct TreeRowView: View {
                 Text(row.text)
                     .font(row.kind == .user ? .subheadline : .footnote)
                     .fontWeight(row.isCurrent ? .semibold : .regular)
-                    .foregroundStyle(row.kind == .user || row.isCurrent ? .primary : .secondary)
+                    .foregroundStyle(row.kind == .user || row.isCurrent ? HierarchicalShapeStyle.primary : .secondary)
                     .opacity(row.onPath || row.isCurrent ? 1 : 0.7)
                     .lineLimit(1)
                 if row.label != nil || row.isCurrent || row.toolCalls > 0 {
