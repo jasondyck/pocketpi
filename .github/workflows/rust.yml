@@ -1,0 +1,29 @@
+# The server's own tests (pi_admin's patching, backups and redaction, the pi
+# CLI allowlist, cron, sessions...). Cheap, so it runs on every push and PR,
+# unlike the manual iOS workflow.
+name: Rust
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: cargo test
+        run: cargo test --locked

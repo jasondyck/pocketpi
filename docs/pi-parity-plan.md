@@ -234,6 +234,94 @@ Two agents: "web catches up to iOS" and "iOS catches up to web", using the gap l
 
 - **Global settings side effects.** RPC toggles change `settings.json`, which also affects the terminal TUI and workflow stages. The UI labels them "Global", and `pi_admin` keeps backups.
 - **Restarting a pi mid-chat** loses in-flight state, so reload only touches idle processes.
-- **Whether the `pocketpi-control` reply channel works isn't confirmed yet.** If `entry_appended` doesn't fire for a custom entry made inside a command, fall back to the extension POSTing to pocketpi over HTTP, as `pocketpi-workflows.ts` already does.
+- **Whether the `pocketpi-control` reply channel works isn't confirmed yet.** If `entry_appended` doesn't fire for a custom entry made inside a command, fall back to the extension POSTing to pocketpi over HTTP, as `pocketpi-workflows.ts` already does. *(Confirmed in Wave 0; see §5. No fallback needed.)*
 - **OAuth through a pty** is fragile, so it's held back to Wave 4 as a spike.
 - **iOS SwiftUI can't be compiled on Linux**, so view errors only show up in the macOS CI run. Keep views thin.
+
+## 5. Wave 0 findings
+
+Checked on 2026-11-08 against real pi 1.5.0 (`~/.local/bin/pi`), each time in a
+scratch `HOME` / `PI_CODING_AGENT_DIR` from `mktemp` with `PI_OFFLINE=1` and no
+credentials (no model call was needed). Two ways: driving `pi --mode rpc -e
+extensions/pocketpi-control.ts` directly from a script, and through a scratch
+pocketpi built from `pp/w0-core` (`POCKETPI_PI=~/.local/bin/pi`, its own port)
+with curl.
+
+### The reply channel works (the gate)
+
+- `prompt` with `"/pp-tools r1"` runs the extension command with no model and
+  no credentials. pi prints
+  `{"type":"entry_appended","entry":{"type":"custom","customType":"pocketpi-control","data":{"reqId":"r1","ok":true,"data":{...}},"id":…,"parentId":…,"timestamp":…}}`
+  and **then** the prompt's response, `{"success":true,"data":{"disposition":"handled"}}`.
+  So the server must register its waiter before sending (it does).
+- `pi.getAllTools()`, `pi.getActiveTools()` and `pi.setActiveTools()` all work
+  from a command handler; the change shows in the next `/pp-tools`. A fresh
+  scratch pi has 10 tools, 4 active (`read`, `bash`, `edit`, `write`).
+- A thrown error comes back as `{ok:false, error}` (e.g. `unknown tools: nope`).
+- Through pocketpi: `POST /api/s/{key}/control {"command":"tools"}` →
+  `{success:true, data:{tools, active}}`; with `args:{active:["read","bash"]}`
+  the set changes; after `POST /api/s/{key}/restart` the same key answers
+  again and the tools are back to pi's defaults (active tools are per process).
+- `get_commands` lists `pp-tools` with `source:"extension"`,
+  `sourceInfo.source:"cli"`; pocketpi filters it out of what it relays.
+- The extension loads from an absolute `.ts` path with `-e` when it only uses
+  `import type` (pocketpi writes it to `$XDG_DATA_HOME/pocketpi/` at startup).
+
+### Things later waves need to know
+
+- **Reply entries are persisted.** In a chat with history the custom entry is
+  appended to the session `.jsonl` (a `/pp-tools` reply is ~5–10 KB because it
+  carries tool descriptions). In a new chat with no messages yet, pi keeps it
+  in memory and does **not** create the session file, so a control call never
+  creates a chat. pocketpi drops these entries from relayed `get_entries` and
+  keeps them off the SSE stream; `get_tree` still contains them, so the tree
+  viewer (W3-tree) must skip `customType:"pocketpi-control"` nodes. Commands
+  with big answers should keep their payloads lean.
+- **fork** `{entryId}` answers `{text, cancelled:false}` (the forked user
+  message's text, for the composer); the pi then writes to a new file in the
+  same folder as the original, holding the entries before that message
+  (`messageCount` 4 → 2). **clone** answers `{cancelled:false}` and also moves
+  to a new file. pocketpi re-reads `get_state`, updates the live chat's file and
+  broadcasts `pocketpi_session{file}`; checked through the server.
+- **export_html** honours `outputPath`; pocketpi always overrides it with a
+  file in `$XDG_DATA_HOME/pocketpi/exports/` so a client can't write elsewhere.
+- **Restart** through pocketpi on a session with history: same key, same file,
+  `get_messages` still has all 4 messages.
+- **CLI:** `pi --version` prints `1.5.0`. `pi auth check --provider openai --json`
+  exits 1 with `{"status":"not_ready","provider":"openai","reason":"credentials_not_configured"}`
+  (unknown provider: `reason:"provider_not_found"`). `pi mcp list --json` prints
+  `{servers, errors}` and exits 1 when any enabled server fails (its entry has
+  `state:"failed"`, `error`), so exit codes are information, not failure.
+  `pi mcp add demo -- echo hi` / `pi mcp remove demo` write `mcp.json`
+  (2-space JSON); `pi install <local dir>` adds a *relative* path to
+  `settings.json` `packages`; `pi list` is text only. pi creates `auth.json`
+  as 0600.
+- **Not verified:** running a `/pp-*` command while the agent is streaming (it
+  needs a model). pi's docs say extension commands run immediately even then.
+
+### What W0-core built, and where it differs from §3
+
+- Routes are listed in README.md ("pi's configuration"). Quick read-only CLI
+  calls are GETs (`/api/pi/version`, `/api/pi/auth/{provider}`, `/api/pi/mcp`,
+  `/api/pi/packages`); everything else is a job (`POST /api/pi/jobs`).
+- `pi_admin` also redacts credential-looking values in `models.json` and
+  `mcp.json` (keys containing key/token/secret/password/authorization/
+  headers/env/credential) and refuses to store the `<redacted>` marker, so a
+  raw editor can't overwrite a secret with it. Dotted paths escape a literal
+  dot as `\.` (model ids). A file that isn't valid JSON is never overwritten
+  (422). Symlinked files are written through.
+- `/api/pi/reload` restarts only chats behind the epoch unless `{"all":true}`;
+  it includes Chat-tab chats, never workflow stages. `/restart` refuses (409) a
+  chat that is streaming.
+- The four global RPC setters bump the epoch too (they rewrite settings.json);
+  the pi that made the change keeps its epoch current.
+- Clients can't send `/pp-*` as a prompt (400). Before a pi's first control
+  call the server checks `get_commands` for the command, so a failed extension
+  load can't turn `/pp-tools …` into a prompt for the model.
+- `POCKETPI_CONTROL=0` turns the extension off.
+- Every live pi now has a `kind` (`chat`, `chat_tab`, `stage`), in
+  `/api/pi/status` and `pocketpi_hello`.
+- PocketPiKit: `Admin.swift` (config, status, reload, restart, control/tools,
+  jobs, CLI helpers); `Transcript` emits `.restarting` and
+  `.sessionFileChanged`; `ChatSession` keeps its key across a restart, follows
+  a fork's new file, exposes `needsRestart` and `restart()`.
