@@ -63,7 +63,7 @@ jobs:
   app:
     runs-on: ${{ inputs.runner || 'macos-26' }}
     timeout-minutes: 45
-    # Doesn't wait for kit: the two run side by side; testflight needs both.
+    # Doesn't wait for kit: kit, app and testflight all run side by side.
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
