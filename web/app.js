@@ -1144,9 +1144,11 @@ async function openChatSheet() {
     b.append(sug);
     notificationOption(b);
     b.append(opt(ICON.compact, "Compact context", "Summarize older messages to free up context", async () => {
+      if (window.ppChat) return window.ppChat.compactSheet();
       closeSheet(); setStreaming(true); setWorking("Compacting context");
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
+    window.ppChat?.chatSheet(b);
     window.ppManage?.sheetEntry(b);
     b.append(opt(ICON.power, "Stop pi process", "Frees memory; reopening the chat restarts it", async () => {
       closeSheet(); try { await api(`/api/s/${S.key}/close`, {}); toast("Stopped"); } catch (e) { toast(e.message, true); }
@@ -1177,6 +1179,7 @@ async function openModelSheet() {
       if (!list.children.length) list.append(el("div", "list-empty", "No models match. Is your API key set up in pi?"));
     };
     q.oninput = draw; draw();
+    window.ppChat?.localModels(b, q);
   });
 }
 function openNewChatSettings() {
