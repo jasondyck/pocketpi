@@ -88,6 +88,11 @@ public struct McpReport: Sendable, Equatable {
     public var note: String?
     public var error: String?
 
+    /// pi couldn't be asked at all.
+    public init(error: String) {
+        servers = []; errors = []; self.error = error
+    }
+
     public init(_ r: PiCLIResult) {
         if let j = r.json {
             servers = j["servers"]?.array ?? []

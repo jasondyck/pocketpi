@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // Turning resources on and off, pi packages and the package gallery (plan
 // F2, F3, F4; the server side is src/pi_packages.rs and src/pi_cli.rs).
@@ -187,6 +188,51 @@ public struct PiGallery: Sendable, Equatable {
     public init(_ v: JSONValue) {
         packages = v["packages"]?.array?.compactMap(PiGalleryPackage.init) ?? []
         total = v["total"]?.int ?? packages.count
+    }
+}
+
+/// One pi CLI job at a time for a page, with its output as it comes, for
+/// the Packages and MCP pages' log.
+@MainActor
+@Observable
+public final class PiJobLog {
+    public private(set) var title = ""
+    public private(set) var output = ""
+    /// nil (nothing yet), "running", "ok" or "failed".
+    public private(set) var status: String?
+    public var busy: Bool { status == "running" }
+
+    public init() {}
+
+    /// "Installing x…", "Installing x: done", "Installing x: failed".
+    public var headline: String {
+        switch status {
+        case "running": "\(title)…"
+        case "ok": "\(title): done"
+        case nil: ""
+        default: "\(title): failed"
+        }
+    }
+
+    /// Run `action`; nil when another job of this page is running. A request
+    /// that fails (another client's job holds the runner: 409) ends as
+    /// "failed" with the server's message.
+    @discardableResult
+    public func run(_ title: String, _ action: PiAction, client: PocketPiClient) async -> PiJob? {
+        guard !busy else { return nil }
+        self.title = title
+        output = ""
+        status = "running"
+        do {
+            let job = try await client.runJob(action) { text in await MainActor.run { self.output = text } }
+            output = job.output
+            status = job.status == "ok" ? "ok" : "failed"
+            return job
+        } catch {
+            output = error.localizedDescription
+            status = "failed"
+            return nil
+        }
     }
 }
 

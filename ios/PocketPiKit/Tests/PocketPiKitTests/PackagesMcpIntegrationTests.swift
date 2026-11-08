@@ -110,6 +110,16 @@ struct PackagesMcpIntegrationTests {
         #expect(out.done && out.notices.contains { $0.contains("No stored credentials") })
         job = try await self.job(.mcpLogout(name: "idocs"))
         #expect(job.status == "ok" && job.argv == ["mcp", "logout", "idocs"])
+        // The pages' log: output and a headline.
+        let log = await PiJobLog()
+        var logged: PiJob?
+        for _ in 0..<50 {
+            logged = await log.run("Signing out of idocs", .mcpLogout(name: "idocs"), client: client)
+            if logged != nil { break }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        #expect(await log.headline == "Signing out of idocs: done")
+        #expect(await log.output.contains("No stored credentials"))
         try await client.close(key: si.key)
 
         for n in ["itest", "idocs"] {
