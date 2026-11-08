@@ -345,3 +345,28 @@ Nothing needs to be built for the policy engine or the bash sandbox. pocketpi su
 - **S4 (optional, the strongest layer, not offered by any package):** run each pi process inside bubblewrap, wrapped where `spawn_pi_with` starts it. The project or worktree is writable, `~/.pi/agent` is mounted, and `~/.ssh` and the rest of `$HOME` are hidden. Turn it on per project in `projects.json`. Workflow runs never get push or `gh` credentials; the server does the push and PR step itself.
 
 It goes after Wave 0, because it needs `pi_admin` and restart-to-apply, and runs alongside Wave 2.
+
+### S1 results (2026-11-08, real pi 1.5.0 `--mode rpc`, deepseek-v4.1-flash, script in ~/pi-safety-test)
+
+| | gotgenes v42 (rules: `rm *` ask, `~/.ssh/*` deny, `*.env` ask, external ask, timeout 20s) | pi-permission-modes v2.7 (`--perm build`) | pi-sandbox v0.8 (defaults) |
+|---|---|---|---|
+| Ask over RPC | ✅ `select` "Permission Required" with options Yes / Yes for session / No / No with reason | ✅ `select` with options Allow once / for session / Deny | ❌ no prompts at all, fixed policy only |
+| Approve and deny | ✅ both work | ✅ both work | — |
+| No answer | ✅ denied after `promptTimeoutMs`; the model is told nobody answered | not tested | — |
+| `cancelled:true` | the model never ran the command in this case, so not tested | ✅ network prompt cancelled → denied | — |
+| Read `~/.ssh` | ✅ hard deny, through bash and the read tool | ✅ asks (outside the project) | ❌ read allowed |
+| Writes outside the project | ✅ asks | ✅ asks | ❌ `touch ~/outside.txt` allowed |
+| Network | not restricted | ✅ asks per host; denied → blocked by the sandbox | ✅ blocked (not in allowedDomains) |
+| `rm -rf` inside the project | asks (per rule) | allowed in Build mode (by design) | allowed |
+| `git add -A` | ✅ | ❌ the sandbox masks dotfiles with /dev/null device nodes, so `git add -A` fails | ❌ same problem, and it left a `.env` character device in the project |
+| Status line | setStatus | setStatus with ANSI codes (now stripped, G1) | setStatus |
+
+**Decision:**
+- **Phone chats:** adopt `@gotgenes/pi-permission-system`, installed globally.
+  - Pair it with S2: a push notification for a pending dialog, plus a long `promptTimeoutMs` such as 10 min, so a forgotten prompt ends as a deny.
+- **OS sandbox:** offer `pi-permission-modes` as an optional per-project "Strict" mode, not the default.
+  - Its prompts and network gate work over RPC.
+  - The dotfile masking breaks `git add -A` inside the agent. pocketpi's engine commits stages itself, outside the sandbox, but chats that commit would hit it.
+  - Running both packages together hasn't been tested yet; check it before offering both at once.
+- **Drop `pi-sandbox`:** nothing in it can be approved from the phone, and its defaults allow reads of `~/.ssh` and writes outside the project.
+- **Workflow stages:** dialogs are auto-cancelled, so every "ask" becomes a deny. Stages need their own gotgenes config (allow the usual build commands, deny the dangerous list), loaded through a stage-specific agent dir or a project config. S3 builds the UI for this.
