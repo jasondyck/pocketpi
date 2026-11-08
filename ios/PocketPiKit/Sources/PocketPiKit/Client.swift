@@ -285,8 +285,12 @@ public final class PocketPiClient: Sendable {
     /// Send a pi RPC command and return its `data`. Throws `.command` when pi
     /// says it failed and `.http` (404/410: `isSessionGone`) when the process
     /// is gone.
-    public func command(key: String, _ cmd: JSONValue) async throws -> JSONValue {
-        let r: JSONValue = try await post("/api/s/\(key)/cmd", cmd)
+    /// `timeout` is how long the answer may take: a shell command (`bash`)
+    /// answers only when it ends, and pocketpi waits up to 900 s for it.
+    public func command(key: String, _ cmd: JSONValue, timeout: TimeInterval = 30) async throws -> JSONValue {
+        var req = try request("/api/s/\(key)/cmd", body: cmd)
+        req.timeoutInterval = timeout
+        let r = try JSONDecoder().decode(JSONValue.self, from: try await send(req))
         if r["success"]?.bool == false {
             throw PocketPiError.command(r["error"]?.string ?? "\(cmd["type"]?.string ?? "command") failed")
         }

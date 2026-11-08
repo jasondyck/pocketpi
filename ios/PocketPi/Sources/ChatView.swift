@@ -140,6 +140,7 @@ private struct ChatScreen: View {
             }
             .animation(.default, value: session.activeRuns.map(\.id))
         }
+        .environment(\.abortBash, { Task { await session.abortBash() } })
         .navigationDestination(item: $openedRun) { RunView(runId: $0) }
         // Workflow runs pi started here: poll while any is going.
         .task(id: session.transcript.startedRuns) {
@@ -701,12 +702,11 @@ private struct Composer: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(session.transcript.steering + session.transcript.followUp, id: \.self) { q in
-                Text(q).font(.footnote).lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            if let retry = session.transcript.retry {
+                RetryBanner(retry: retry) { Task { await session.stopRetrying() } }
             }
+            ForEach(session.transcript.steering, id: \.self) { QueuedMessage(text: $0, after: false) }
+            ForEach(session.transcript.followUp, id: \.self) { QueuedMessage(text: $0, after: true) }
             if !session.slashMatches.isEmpty {
                 SlashList(commands: session.slashMatches) { c in
                     session.pick(c)
@@ -730,6 +730,11 @@ private struct Composer: View {
                     .padding(.top, 8)
                     .padding(.bottom, 2)
                     .accessibilityIdentifier("composer")
+                if let hint = session.composerHint {
+                    Text(hint).font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .accessibilityIdentifier("composer-hint")
+                }
                 HStack(spacing: 8) {
                     PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
                         Image(systemName: "plus").font(.title3).frame(width: 34, height: 34)
@@ -785,12 +790,19 @@ private struct Composer: View {
                 .background(ready ? Theme.signal : Color(uiColor: .tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!ready || (sending && !stop))
+        .disabled(!ready || (sending && !stop) || (!stop && !session.canSendComposer))
         .animation(.default, value: stop)
         .accessibilityLabel(stop ? "Stop" : "Send")
+        // While pi works, a long press offers to wait for the whole turn.
+        .contextMenu {
+            if session.isStreaming, hasText || !images.isEmpty, !session.composerIntent.isBash {
+                Button("Steer now", systemImage: "arrow.up") { send() }
+                Button("Queue after turn", systemImage: "text.append") { send(.followUp) }
+            }
+        }
     }
 
-    private func send() {
+    private func send(_ delivery: Delivery = .steer) {
         let text = session.composer
         let imgs = images
         session.composer = ""
@@ -798,7 +810,7 @@ private struct Composer: View {
         sending = true
         Task {
             defer { sending = false }
-            do { try await session.send(text, images: imgs) } catch {
+            do { try await session.send(text, images: imgs, delivery: delivery) } catch {
                 if session.composer.isEmpty { session.composer = text }
                 images = imgs
                 session.problem = "Not sent: " + error.localizedDescription

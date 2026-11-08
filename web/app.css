@@ -574,3 +574,24 @@ body.streaming .user-actions .fork { opacity: .4; pointer-events: none; }
 .sess .m.fork-hint { display: flex; align-items: center; gap: 4px; }
 .sess .m.fork-hint svg { width: 12px; height: 12px; flex: none; }
 .sess .m.fork-hint span { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- composer: shell commands, queue menu, retry ---------- */
+#composer { position: relative; }
+#composer-hint { font: 12px var(--mono); color: var(--muted); padding: 0 10px 4px; letter-spacing: -0.02em; }
+.send-menu { position: absolute; right: 4px; bottom: calc(100% + 8px); z-index: 6; background: var(--bg); border: 1px solid var(--line-2); border-radius: 16px; box-shadow: var(--shadow); padding: 5px; display: flex; flex-direction: column; min-width: 220px; animation: rise .18s var(--ease) both; }
+.send-menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 12px; border-radius: 11px; text-align: left; }
+.send-menu button b { font-size: 14px; font-weight: 600; }
+.send-menu button span { font-size: 12px; color: var(--muted); }
+.send-menu button:active { background: var(--surface); }
+@media (hover: hover) { .send-menu button:hover { background: var(--surface); } }
+.shell-stop { font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
+.shell-stop:disabled { opacity: .5; }
+.shell-stop:active { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+#retry { max-width: 760px; margin: 0 auto 7px; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line-2); }
+.retry-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.retry-text b { font-size: 13.5px; font-weight: 600; }
+.retry-text span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.retry-text span:empty { display: none; }
+#retry button { flex: none; font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 999px; background: var(--text); color: var(--bg); }
+#retry button:disabled { opacity: .5; }
+#send { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }

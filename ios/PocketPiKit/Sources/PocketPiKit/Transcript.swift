@@ -64,7 +64,8 @@ public struct Transcript: Sendable, Equatable {
         case assistant(ChatMessage, live: Bool)
         case compaction(summary: String, tokensBefore: Int?)
         case branchSummary(String)
-        case bash(command: String, output: String, exitCode: Int?)
+        /// A shell command from the composer (`!cmd`), live while it runs.
+        case bash(BashRun)
         case custom(String)
         /// A line in the chat from pocketpi itself, not pi ("Context compacted").
         case note(String)
@@ -89,6 +90,13 @@ public struct Transcript: Sendable, Equatable {
     public private(set) var followUp: [String] = []
     /// Extensions' status chips, widgets and title (setStatus, setWidget, setTitle).
     public private(set) var extensionUI = ExtensionUIState()
+
+    /// pi waiting to retry after a transient model error, for the
+    /// "Retrying in 3s · Stop retrying" banner.
+    public private(set) var retry: RetryState?
+
+    /// The composer's shell command while it runs (an index into items).
+    private var bashIndex: Int?
 
     private var nextId = 0
     private var liveIndex: Int?
@@ -120,6 +128,14 @@ public struct Transcript: Sendable, Equatable {
 
     /// Replace everything with pi's `get_messages`.
     public mutating func load(messages: [JSONValue], isStreaming: Bool) {
+        // A shell command still running isn't in pi's messages yet: keep it
+        // (not another client's, whose command this screen never knew).
+        let runningBash = bashIndex.flatMap { i -> Kind? in
+            guard items.indices.contains(i), case .bash(let r) = items[i].kind, !r.command.isEmpty else { return nil }
+            return items[i].kind
+        }
+        bashIndex = nil
+        if !isStreaming { retry = nil }
         items = []
         toolResults = [:]
         partialResults = [:]
@@ -128,6 +144,10 @@ public struct Transcript: Sendable, Equatable {
         thinkingStarted = [:]
         thinkingSeconds = [:]
         for v in messages { append(ChatMessage(v)) }
+        if let runningBash {
+            push(runningBash)
+            bashIndex = items.count - 1
+        }
         setStreaming(isStreaming)
     }
 
@@ -143,8 +163,7 @@ public struct Transcript: Sendable, Equatable {
             push(.compaction(summary: m.raw["summary"]?.string ?? "", tokensBefore: m.raw["tokensBefore"]?.int))
         case .branchSummary: push(.branchSummary(m.raw["summary"]?.string ?? ""))
         case .bashExecution:
-            push(.bash(command: m.raw["command"]?.string ?? "", output: m.raw["output"]?.string ?? "",
-                       exitCode: m.raw["exitCode"]?.int))
+            push(.bash(BashRun(message: m.raw)))
         case .custom:
             if m.raw["display"]?.bool == true { push(.custom(m.plainText)) }
         case .system, .other: break
@@ -176,15 +195,18 @@ public struct Transcript: Sendable, Equatable {
             setStreaming(false)
             liveIndex = nil
             extensionUI.reset()
+            retry = nil
             if ev["restarting"]?.bool == true { return [.restarting] }
             return [.exited(stderr: (ev["stderr"]?.array ?? []).compactMap(\.string))]
         case "pocketpi_session":
             if let f = ev["file"]?.string { return [.sessionFileChanged(f)] }
         case "agent_start":
             setStreaming(true)
+            settleForeignBash()
         case "agent_settled":
             setStreaming(false)
             runningTools = []
+            retry = nil
             return [.turnFinished]
         case "message_start":
             if let m = ev["message"] { messageStart(ChatMessage(m)) }
@@ -222,8 +244,12 @@ public struct Transcript: Sendable, Equatable {
             let n = ev["attempt"]?.int.map(String.init) ?? "?"
             let of = ev["maxAttempts"]?.int.map(String.init) ?? "?"
             activity = "Retrying \(n)/\(of) · \(ev["errorMessage"]?.string ?? "")"
+            retry = RetryState(ev, now: now)
         case "auto_retry_end":
+            retry = nil
             if ev["success"]?.bool != true { push(.error(ev["finalError"]?.string ?? "Retries failed")) }
+        case "bash_execution_update":
+            bashOutput(ev["delta"]?.string ?? ev["output"]?.string ?? "")
         case "thinking_level_changed":
             if let l = ev["level"]?.string { return [.thinkingLevelChanged(l)] }
         case "session_info_changed":
@@ -331,5 +357,53 @@ public struct Transcript: Sendable, Equatable {
                 prefill: ev["prefill"]?.string, placeholder: ev["placeholder"]?.string,
                 timeout: timeout, deadline: timeout.map { now.addingTimeInterval($0) }))]
         }
+    }
+
+    // MARK: - shell commands from the composer
+
+    /// Whether a composer shell command is running (one at a time).
+    public var bashRunning: Bool { bashIndex != nil }
+
+    /// The composer's `!cmd` was sent: show it running.
+    public mutating func beginBash(command: String, excludeFromContext: Bool) {
+        push(.bash(BashRun(command: command, excludeFromContext: excludeFromContext, running: true)))
+        bashIndex = items.count - 1
+    }
+
+    /// Output from pi as it comes. Another client's command (no card here
+    /// yet) gets a card of its own.
+    private mutating func bashOutput(_ delta: String) {
+        if bashIndex == nil { beginBash(command: "", excludeFromContext: false) }
+        guard let i = bashIndex, case .bash(var run) = items[i].kind else { return }
+        run.output += delta
+        items[i].kind = .bash(run)
+    }
+
+    /// Another client's command never says it ended here; a new turn
+    /// means it has (pi runs no prompt while bash runs).
+    private mutating func settleForeignBash() {
+        guard let i = bashIndex, case .bash(var run) = items[i].kind, run.command.isEmpty else { return }
+        run.running = false
+        items[i].kind = .bash(run)
+        bashIndex = nil
+    }
+
+    /// pi's answer to `bash`: `{output, exitCode, cancelled, truncated,
+    /// fullOutputPath}`, as the `bashExecution` message will have it.
+    public mutating func finishBash(_ result: JSONValue) {
+        guard let i = bashIndex, case .bash(var run) = items[i].kind else { return }
+        run.finish(result)
+        items[i].kind = .bash(run)
+        bashIndex = nil
+    }
+
+    /// The command never ran, or its answer was lost.
+    public mutating func failBash(_ error: String) {
+        guard let i = bashIndex, case .bash(var run) = items[i].kind else { return }
+        run.running = false
+        if run.exitCode == nil, !run.cancelled { run.exitCode = -1 }
+        run.output += (run.output.isEmpty || run.output.hasSuffix("\n") ? "" : "\n") + error
+        items[i].kind = .bash(run)
+        bashIndex = nil
     }
 }

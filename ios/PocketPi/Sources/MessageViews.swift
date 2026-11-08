@@ -28,10 +28,8 @@ struct TranscriptItemView: View {
             } label: {
                 Text("Branch summary").font(.footnote).foregroundStyle(.secondary)
             }
-        case .bash(let command, let output, let exitCode):
-            ToolCard(name: "bash", summary: command, arguments: ["command": .string(command)],
-                     result: ToolResult(text: output, isError: exitCode != nil && exitCode != 0),
-                     partial: nil, running: false)
+        case .bash(let run):
+            BashCard(run: run)
         case .custom(let text):
             MarkdownView(text: text)
         case .note(let text):
