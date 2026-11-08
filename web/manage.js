@@ -221,7 +221,7 @@ window.ppManage = (() => {
   // The chat sheet (and the new-chat sheet): a way in.
   function sheetEntry(b) { b.append(opt(GEAR, "Settings", "pi's settings, providers and resources", () => open(""))); }
   // showView(v): leaving Settings runs the page's cleanup; the banner follows the view.
-  function viewChanged(v) { if (v !== "manage") leave(); renderBanner(); }
+  function viewChanged(v) { if (v !== "manage") leave(); tile.classList.toggle("active", v === "manage"); renderBanner(); }
 
   // ---------------------------------------------------------------- setup
   const css = document.createElement("style");
