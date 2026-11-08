@@ -74,7 +74,7 @@ public final class ChatSession {
     public private(set) var helloConfigEpoch: UInt64?
     /// Bumped when the message box should take the keyboard (after a fork
     /// puts the message back in it). The composer view watches this.
-    public private(set) var composerFocusRequests = 0
+    public internal(set) var composerFocusRequests = 0
     /// A dialog an extension asked for, until it is answered.
     public var pendingRequest: ExtensionRequest?
     /// The message box. Here rather than in the view because pi can set it
@@ -311,7 +311,7 @@ public final class ChatSession {
     /// Reload after pi moved to another file, and wait until the screen
     /// shows it: the server's pocketpi_session event starts a snapshot too,
     /// which can overtake (and so drop) this one.
-    private func reloadAfterSwitch() async {
+    func reloadAfterSwitch() async {
         await loadSnapshot()
         let end = Date().addingTimeInterval(5)
         while appliedSeq < snapshotSeq, Date() < end {
@@ -627,7 +627,7 @@ public final class ChatSession {
         guard let n = transcript.userMessages.firstIndex(where: { $0.id == item.id }) else { return false }
         do {
             let shown = transcript.userMessages.map { ForkMap.text(of: $0.message) }
-            let points = (try await command(["type": "get_fork_messages"])["messages"]?.array ?? []).compactMap(ForkPoint.init)
+            let points = try await activeForkPoints()
             guard let entryId = ForkMap.entryIds(for: shown, in: points)[n] else {
                 problem = "pi can't fork from this message."
                 return false

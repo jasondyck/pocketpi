@@ -258,7 +258,7 @@ def new_file(parent=None, write=True):
     os.makedirs(session_dir, exist_ok=True)
     sid = str(uuid.uuid4())
     path = os.path.join(session_dir, f"{int(time.time() * 1000)}_{sid}.jsonl")
-    header = {"type": "session", "id": sid, "cwd": os.getcwd(), "version": 3}
+    header = {"type": "session", "version": 3, "id": sid, "timestamp": now_iso(), "cwd": os.getcwd()}
     if parent:
         header["parentSession"] = parent
     if write:

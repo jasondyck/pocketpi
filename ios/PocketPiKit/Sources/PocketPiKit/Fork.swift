@@ -29,9 +29,11 @@ public struct ForkPoint: Sendable, Equatable {
 /// with the closest earlier fork point with the same text, and so on. That
 /// skips messages compacted away (only on pi's side) and image-only ones
 /// (only on screen), and gives the right entry for repeated prompts ("go
-/// on"). Abandoned branches only exist after moving around the session tree
-/// (the TUI's /tree, which pocketpi doesn't offer yet); a message there is
-/// matched only if it repeats a later prompt word for word.
+/// on"). Abandoned branches exist once the chat has moved around its session
+/// tree (the tree screen's "Continue from here", or the TUI's /tree), and a
+/// prompt repeated word for word on one of them could be matched instead, so
+/// `ChatSession.fork` first narrows the fork points to the prompts on the
+/// current branch (`SessionTree.pathUserIds`, from `get_tree`).
 public enum ForkMap {
     /// A user message's text the way pi reports it in `get_fork_messages`.
     public static func text(of m: ChatMessage) -> String {
