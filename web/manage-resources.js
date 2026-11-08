@@ -154,9 +154,12 @@ ppManage.register({
     function chips(r) {
       const c = ctx.el("div", "rs-chips");
       const add = (t, cls = "") => c.append(ctx.el("span", `chip ${cls}`, esc(t)));
-      add(SCOPES[r.scope] || r.scope);
+      if (overridden(r)) { add("global"); add(r.enabled ? "on in this project" : "off in this project", r.enabled ? "on" : "warn"); }
+      else add(SCOPES[r.scope] || r.scope);
+      if (r.scope === "builtin" && r.toggle?.scope === "project") add(r.enabled ? "on in this project" : "off in this project", r.enabled ? "on" : "warn");
       if (r.package) add(r.package.source.replace(/^npm:/, "").split("/").pop());
-      if (!r.enabled) add("off", "warn");
+      const here = overridden(r) || (r.scope === "builtin" && r.toggle?.scope === "project");
+      if (!r.enabled && !here) add("off", "warn");
       else if (r.skipped) add(r.skipped === "project not trusted" ? "skipped: not trusted" : r.skipped, "warn");
       if (r.live) add("running", "on");
       for (const cmd of r.commands || []) add("/" + cmd);

@@ -233,7 +233,7 @@ ppManage.register({
       try { r = await viaChat(s, "login"); } catch (e) { ctx.closeSheet(); ctx.toast(e.message, true); return; }
       ctx.openSheet((b) => {
         b.classList.add("mc-sheet");
-        b.dataset.k = "signin";
+        b.dataset.k = "signin-sheet";
         b.append(ctx.el("div", "sheet-title", esc(`Sign in to ${s.name}`)));
         const others = (r.notices || []).filter((n) => !r.url || !n.message.includes(r.url));
         for (const n of others) b.append(ctx.el("div", "mc-text", esc(n.message)));
