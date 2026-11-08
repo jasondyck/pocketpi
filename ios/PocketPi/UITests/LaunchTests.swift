@@ -127,7 +127,8 @@ final class LaunchTests: XCTestCase {
         activeRun.tap()
         XCTAssertTrue(app.navigationBars["natter: deploy check"].waitForExistence(timeout: 5))
         keep(app, "active-run-opened")
-        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        // That page's own Back (the first bar's first button missed in light mode).
+        app.navigationBars["natter: deploy check"].buttons["BackButton"].tap()
         XCTAssertTrue(activeRun.waitForExistence(timeout: 5))
 
         // Thinking and tool calls fold into one line; it opens to the steps.

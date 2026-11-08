@@ -727,14 +727,16 @@ private struct Composer: View {
 private struct SlashList: View {
     let commands: [SlashCommand]
     let pick: (SlashCommand) -> Void
+    @State private var rowsHeight: CGFloat = 0
 
     var body: some View {
-        // Short lists take their own height; long ones scroll in 240pt.
-        ViewThatFits(in: .vertical) {
-            rows
-            ScrollView { rows }.frame(height: 240)
+        // As tall as its rows, up to 240pt (then it scrolls). Measured, since
+        // a flexible frame would take all the space above the keyboard.
+        ScrollView {
+            rows.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
         }
-        .frame(maxHeight: 240)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(max(rowsHeight, 1), 240))
         .background(LiquidGlass.available ? Color.clear : Theme.surface, in: RoundedRectangle(cornerRadius: 16))
         .modifier(FloatingBar())
     }
