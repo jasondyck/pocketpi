@@ -244,9 +244,10 @@ public final class ChatSession {
             case .restarting:
                 // The key lives on; the stream ends and streamEnded reconnects.
                 status = .reconnecting
-            case .sessionFileChanged(let f):
-                path = f
-                await loadSnapshot() // the history changed with the file
+            case .sessionFileChanged:
+                // The history changed with the file; the snapshot follows the
+                // file (or not, while pi hasn't written it yet).
+                await loadSnapshot()
             case .extensionRequest(let r):
                 pendingRequest = r
             case .setComposer(let t):
