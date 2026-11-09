@@ -105,6 +105,7 @@
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
           </label>
           <button type="button" id="think-chip" class="think-chip" aria-label="Thinking level"></button>
+          <span id="chips" class="chips" hidden></span>
           <span class="spacer"></span>
           <button type="button" id="use-ghost" class="use-ghost" hidden>Use<svg viewBox="0 0 24 24"><path d="M5 12h12M13 7l5 5-5 5"/></svg></button>
           <button type="submit" id="send" class="send" aria-label="Send" disabled>
@@ -117,6 +118,16 @@
     </footer>
   </main>
 
+  <aside id="side" aria-label="Side panel" hidden>
+    <header class="side-head">
+      <div id="side-title"></div>
+      <button class="icon-btn" id="side-close" aria-label="Close panel">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div id="side-body"></div>
+  </aside>
+
   <div id="sheet-scrim"></div>
   <div id="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div id="sheet-body"></div></div>
   <div id="toast" hidden></div>
@@ -127,5 +138,8 @@
 <script src="/tree.js"></script>
 <script src="/chat-tools.js"></script>
 <script src="/agents.js"></script>
+<script src="/goal.js"></script>
+<script src="/modes.js"></script>
+<script src="/outline.js"></script>
 </body>
 </html>

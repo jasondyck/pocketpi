@@ -38,6 +38,55 @@ const ICON = {
 };
 const TOOL_ICON = { bash: ICON.term, read: ICON.file, write: ICON.pen, edit: ICON.pen, grep: ICON.search, find: ICON.search, ls: ICON.folder, web_search: ICON.globe, web_fetch: ICON.globe };
 
+// ---------------------------------------------------------------- feature hooks
+// Feature modules (goal.js, modes.js, outline.js, files.js, term.js) plug in
+// here instead of editing app.js:
+//   status[key](value, chat)  draws an extension setStatus key ("pp-goal",
+//                             "pp-todo", …) natively: return an Element to
+//                             show above the composer, null to show nothing.
+//                             Other keys stay generic chips, except "pp-"
+//                             ones (feature JSON), which are never chips.
+//   chips: [fn(chat) -> Element|null]  composer chips (plan, preset, …)
+//   sheet: [fn(body)]                  extra entries in the chat sheet
+//   tools[name](api, body) -> bool     a tool card's body; true = drawn
+//   events: [fn(ev)]                   every chat event, after app.js
+//   chat: [fn(chat)]                   the open chat changed (or closed)
+// `chat` is {key, path, cwd, status: Map, streaming}. pp.control(command,
+// args) runs a pocketpi extension command; pp.panel opens the side panel.
+const pp = window.pp = {
+  status: {}, chips: [], sheet: [], tools: {}, events: [], chat: [],
+  chatInfo() { return { key: S.key, path: S.path, cwd: S.cwd, status: S.extUI?.status || new Map(), streaming: S.streaming }; },
+  async control(command, args) {
+    if (!S.key) await reopen();
+    const r = await api(`/api/s/${S.key}/control`, { command, args: args ?? null });
+    if (r.success === false) throw new Error(typeof r.error === "string" ? r.error : JSON.stringify(r.error));
+    return r.data;
+  },
+  renderChips() { renderChips(); },
+  panel: {
+    /** Shows `body` in the side panel (beside the chat when wide, over it on a phone). */
+    open(title, body, onClose) {
+      const side = $("side");
+      pp.panel._onClose?.(); pp.panel._onClose = onClose || null;
+      $("side-title").textContent = title; const b = $("side-body"); b.innerHTML = ""; b.append(body);
+      side.hidden = false; document.body.classList.add("side-open");
+    },
+    close() {
+      $("side").hidden = true; document.body.classList.remove("side-open");
+      const f = pp.panel._onClose; pp.panel._onClose = null; f?.();
+    },
+    get isOpen() { return !$("side").hidden; },
+    _onClose: null,
+  },
+};
+function ppRun(list, ...a) { for (const f of list) { try { f(...a); } catch (e) { console.warn(e); } } }
+function renderChips() {
+  const row = $("chips"); if (!row) return;
+  row.innerHTML = "";
+  if (S.view === "chat") for (const f of pp.chips) { try { const c = f(pp.chatInfo()); if (c) row.append(c); } catch (e) { console.warn(e); } }
+  row.hidden = !row.children.length;
+}
+
 // ---------------------------------------------------------------- state
 const S = {
   key: null,          // live process key on the server
@@ -289,6 +338,8 @@ function makeCard(call) {
     renderBody() {
       const body = q(".tbody"); body.innerHTML = "";
       const a = api.args || {};
+      const custom = pp.tools[api.name];
+      if (custom) { try { if (custom(api, body)) return; } catch (e) { console.warn(e); body.innerHTML = ""; } }
       const sec = (label, node) => { const s = el("div", "tsec"); s.append(el("div", "tlabel", esc(label)), node); body.append(s); };
       if (api.name === "bash" && a.command) sec("Command", truncBlock(a.command, 4000));
       else if (Array.isArray(a.edits) || a.oldText != null || a.old_string != null) { /* shown via diff below */ }
@@ -677,7 +728,7 @@ function renderQueue(steering = [], followUp = []) {
 
 function onEvent(ev) {
   switch (ev.type) {
-    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); (ev.dialogs || []).forEach(extensionUI); return loadSnapshot();
+    case "pocketpi_hello": resetExtUI(ev.ui); window.ppManage?.chatHello(ev); (ev.dialogs || []).forEach(extensionUI); ppRun(pp.chat, pp.chatInfo()); return loadSnapshot();
     case "pocketpi_resync": loadSnapshot(); break;
     case "pocketpi_session": loadSnapshot(); break;
     case "pocketpi_exit": {
@@ -709,6 +760,7 @@ function onEvent(ev) {
     case "bash_execution_update": onBashUpdate(ev); break;
     case "extension_error": toast(`Extension error: ${ev.error}`, true); break;
   }
+  if (pp.events.length) ppRun(pp.events, ev);
 }
 
 async function afterRun() {
@@ -1154,6 +1206,7 @@ async function openChatSheet() {
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
     window.ppChatTools?.sheetEntry(b);
+    ppRun(pp.sheet, b);
     window.ppAgents?.sheetEntry?.(b);
     window.ppChat?.chatSheet(b);
     window.ppManage?.sheetEntry(b);
@@ -1270,16 +1323,20 @@ function renderExtUI() {
   const u = S.extUI;
   const above = $("ext-above"), below = $("ext-below");
   above.innerHTML = ""; below.innerHTML = "";
-  if (u.status.size) {
-    const row = el("div", "ext-status");
-    for (const [k, t] of u.status) { const c = el("span", "ext-chip", esc(t)); c.dataset.key = k; c.title = t; row.append(c); }
-    above.append(row);
+  const row = el("div", "ext-status");
+  for (const [k, t] of u.status) {
+    const draw = pp.status[k];
+    if (draw) { try { const n = draw(t, pp.chatInfo()); if (n) { n.dataset.key = k; above.append(n); } } catch (e) { console.warn(e); } continue; }
+    if (k.startsWith("pp-")) continue; // pocketpi's own feature state (JSON), drawn only by its module
+    const c = el("span", "ext-chip", esc(t)); c.dataset.key = k; c.title = t; row.append(c);
   }
+  if (row.children.length) above.prepend(row);
   for (const [k, w] of u.widgets) {
     const box = el("pre", "ext-widget", esc(w.lines.join("\n"))); box.dataset.key = k;
     (w.below ? below : above).append(box);
   }
   above.hidden = !above.children.length; below.hidden = !below.children.length;
+  renderChips();
   if (S.view === "chat") updateHeader();
 }
 // A dialog with a timeout: pi answers it itself when the time is up, so the
@@ -1363,6 +1420,7 @@ function selectProject(path) {
 document.querySelector(".rail-all").onclick = () => selectProject("");
 function openDrawer() { document.body.classList.add("drawer-open"); loadProjects(); loadWorkflows(); }
 function closeDrawer() { document.body.classList.remove("drawer-open"); }
+$("side-close").onclick = () => pp.panel.close();
 $("menu").onclick = openDrawer; $("title-btn").onclick = openDrawer; $("scrim").onclick = closeDrawer;
 $("new-chat").onclick = () => {
   closeDrawer();
@@ -1435,6 +1493,7 @@ function resetChat() {
   Object.assign(S, { key: null, path: null, cwd: null, state: null, stats: null, msgs: [], cur: null, commands: null, levels: [] });
   S.cards.clear(); setStreaming(false); renderQueue(); resetExtUI(); banner(null);
   $("messages").innerHTML = "";
+  ppRun(pp.chat, pp.chatInfo());
 }
 function newChat() {
   showView("chat");

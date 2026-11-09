@@ -48,6 +48,7 @@ private struct ChatScreen: View {
     @State private var exported: URL?
     @State private var subagents: SubagentMonitor?
     @State private var showSubagents = false
+    @State private var featureSheet: ChatFeatureSheet?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -146,6 +147,8 @@ private struct ChatScreen: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("loading-local")
                 }
+                GoalStrip(session: session)
+                TodoDock(session: session)
                 ExtensionWidgets(ui: session.transcript.extensionUI, below: false)
                 Composer(session: session)
                 ExtensionWidgets(ui: session.transcript.extensionUI, below: true)
@@ -189,7 +192,12 @@ private struct ChatScreen: View {
             ChatToolsMenuButton(session: session, shown: $showTools)
             Button("Subagents", systemImage: "person.2") { showSubagents = true }
                 .disabled(subagents == nil)
+            GoalMenuButtons(session: session, sheet: $featureSheet)
+            ModesMenuButtons(session: session)
+            OutlineMenuButtons(session: session, sheet: $featureSheet)
+            FilesMenuButtons(session: session, sheet: $featureSheet)
         }
+        .sheet(item: $featureSheet) { ChatFeatureSheetView(kind: $0, session: session) }
         .chatToolsSheet(isPresented: $showTools, session: session)
         .chatExtras(session: session, compacting: $compacting, preview: $exported)
         .toolbar {
@@ -423,12 +431,12 @@ private struct ExtensionWidgets: View {
 
     var body: some View {
         let widgets = below ? ui.belowEditor : ui.aboveEditor
-        if !widgets.isEmpty || (!below && !ui.statuses.isEmpty) {
+        if !widgets.isEmpty || (!below && !ui.genericStatuses.isEmpty) {
             VStack(alignment: .leading, spacing: 5) {
-                if !below, !ui.statuses.isEmpty {
+                if !below, !ui.genericStatuses.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 5) {
-                            ForEach(ui.statuses) { s in
+                            ForEach(ui.genericStatuses) { s in
                                 Text(s.text)
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
@@ -818,6 +826,7 @@ private struct Composer: View {
                     }
                     .accessibilityLabel("Attach images")
                     ModelButton(session: session)
+                    ModeChips(session: session)
                     Spacer(minLength: 0)
                     sendButton
                 }

@@ -31,6 +31,8 @@ mod pi_settings_raw;
 mod exports;
 mod usage;
 mod subagents;
+#[allow(dead_code)] // used from wave D1 on (docs/dsh-features-plan.md)
+mod chat_state;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -112,8 +114,9 @@ const GLOBAL_SETTERS: &[&str] = &["set_auto_compaction", "set_auto_retry", "set_
 /// `pocketpi-control` commands a client may run through `/api/s/{key}/control`
 /// (each is the extension's `/pp-<name>`).
 /// `goto` moves the chat to another point of its session tree (pi's /tree),
-/// `label` sets or clears an entry's label.
-const CONTROL_COMMANDS: &[&str] = &["tools", "goto", "label"];
+/// `label` sets or clears an entry's label. `goal` is pocketpi-goal.ts's,
+/// `mode`, `plan` and `todo` are pocketpi-modes.ts's (same reply convention).
+const CONTROL_COMMANDS: &[&str] = &["tools", "goto", "label", "goal", "mode", "plan", "todo"];
 
 /// The `customType` of pocketpi-control's reply entries.
 const CONTROL_REPLY: &str = "pocketpi-control";
@@ -121,6 +124,14 @@ const CONTROL_REPLY: &str = "pocketpi-control";
 /// The companion extension, written to pocketpi's data folder at startup and
 /// loaded into normal chat pis with `-e`.
 const CONTROL_EXTENSION: &str = include_str!("../extensions/pocketpi-control.ts");
+
+/// Per-chat feature extensions, loaded after pocketpi-control the same way:
+/// (file name, source, env var that turns it off with "0").
+/// Their state lives in the session file, so it survives restarts and forks.
+const FEATURE_EXTENSIONS: &[(&str, &str, &str)] = &[
+    ("pocketpi-goal.ts", include_str!("../extensions/pocketpi-goal.ts"), "POCKETPI_GOAL"),
+    ("pocketpi-modes.ts", include_str!("../extensions/pocketpi-modes.ts"), "POCKETPI_MODES"),
+];
 
 /// Changes on every restart (deploy); the page polls it to live-reload.
 static BUILD_ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
@@ -157,8 +168,14 @@ pub struct AppState {
     /// `pocketpi-control.ts` on disk, or None when turned off
     /// (`POCKETPI_CONTROL=0`) or it couldn't be written.
     pub(crate) control_ext: Option<PathBuf>,
+    /// FEATURE_EXTENSIONS on disk (those turned on and written), loaded with
+    /// `-e` after `control_ext` into the same chats.
+    pub(crate) feature_exts: Vec<PathBuf>,
     /// Where `export_html` writes (never a path a client picks).
     pub(crate) exports_dir: PathBuf,
+    /// Server-side state per chat (src/chat_state.rs).
+    #[allow(dead_code)] // used from wave D1 on
+    pub(crate) chat_state: chat_state::ChatState,
     /// Token and cost records per session file, for `/api/usage`.
     pub(crate) usage_cache: Arc<usage::Cache>,
 }
@@ -199,10 +216,10 @@ pub struct Live {
     pub(crate) exited: AtomicBool,
     /// Started with `-e pocketpi-control.ts`.
     pub(crate) control: bool,
-    /// Whether pi actually registered the /pp-* commands: 0 not checked yet,
-    /// 1 yes, 2 no. Checked once before the first control call, so a failed
-    /// extension load can't turn "/pp-tools ..." into a prompt for the model.
-    pub(crate) control_ok: std::sync::atomic::AtomicU8,
+    /// The /pp-* commands pi actually registered, fetched once before the
+    /// first control call, so a failed extension load can't turn
+    /// "/pp-tools ..." into a prompt for the model.
+    pub(crate) control_cmds: StdMutex<Option<std::collections::HashSet<String>>>,
     /// The extensions' setStatus / setWidget / setTitle requests still in
     /// effect, replayed in `pocketpi_hello`: extensions often set them at
     /// startup, before any client is listening.
@@ -254,12 +271,19 @@ async fn main() {
     let _ = std::fs::create_dir_all(&chat_dir);
     let chat_dir = std::fs::canonicalize(&chat_dir).unwrap_or(chat_dir);
     let data_dir = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share")).join("pocketpi");
-    let control_ext = install_control_extension(&data_dir);
+    let control_ext = install_extension(&data_dir, "pocketpi-control.ts", CONTROL_EXTENSION, "POCKETPI_CONTROL");
+    let feature_exts = if control_ext.is_some() {
+        FEATURE_EXTENSIONS.iter().filter_map(|(file, src, env)| install_extension(&data_dir, file, src, env)).collect()
+    } else {
+        Vec::new()
+    };
     let app = Arc::new(AppState {
         admin: pi_admin::Admin::new(agent_dir.clone()),
         jobs: Arc::new(pi_cli::Jobs::default()),
         control_ext,
+        feature_exts,
         exports_dir: data_dir.join("exports"),
+        chat_state: chat_state::ChatState::new(&data_dir),
         chat_dir,
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
         sessions_dir,
@@ -291,6 +315,9 @@ async fn main() {
         .route("/chat-tools.js", get(|| async { static_file("chat-tools.js") }))
         .route("/agents.js", get(|| async { static_file("agents.js") }))
         .route("/chat-more.js", get(|| async { static_file("chat-more.js") }))
+        .route("/goal.js", get(|| async { static_file("goal.js") }))
+        .route("/modes.js", get(|| async { static_file("modes.js") }))
+        .route("/outline.js", get(|| async { static_file("outline.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -466,6 +493,9 @@ fn static_file(name: &str) -> Response {
         "chat-tools.js" => (include_bytes!("../web/chat-tools.js"), "text/javascript; charset=utf-8"),
         "agents.js" => (include_bytes!("../web/agents.js"), "text/javascript; charset=utf-8"),
         "chat-more.js" => (include_bytes!("../web/chat-more.js"), "text/javascript; charset=utf-8"),
+        "goal.js" => (include_bytes!("../web/goal.js"), "text/javascript; charset=utf-8"),
+        "modes.js" => (include_bytes!("../web/modes.js"), "text/javascript; charset=utf-8"),
+        "outline.js" => (include_bytes!("../web/outline.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
@@ -519,20 +549,21 @@ fn is_chat_dir(app: &AppState, cwd: &str) -> bool {
     std::path::Path::new(cwd) == app.chat_dir
 }
 
-/// Writes the embedded `pocketpi-control.ts` where chat pis load it from,
-/// only when it changed (pi reads it fresh at each start).
-fn install_control_extension(data_dir: &std::path::Path) -> Option<PathBuf> {
-    if std::env::var("POCKETPI_CONTROL").is_ok_and(|v| v == "0") {
+/// Writes an embedded extension where chat pis load it from, only when it
+/// changed (pi reads it fresh at each start). None when `env` is "0" or the
+/// file couldn't be written.
+fn install_extension(data_dir: &std::path::Path, file: &str, source: &str, env: &str) -> Option<PathBuf> {
+    if std::env::var(env).is_ok_and(|v| v == "0") {
         return None;
     }
-    let path = data_dir.join("pocketpi-control.ts");
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(CONTROL_EXTENSION) {
+    let path = data_dir.join(file);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(source) {
         let tmp = path.with_extension("ts.tmp");
         let ok = std::fs::create_dir_all(data_dir).is_ok()
-            && std::fs::write(&tmp, CONTROL_EXTENSION).is_ok()
+            && std::fs::write(&tmp, source).is_ok()
             && std::fs::rename(&tmp, &path).is_ok();
         if !ok {
-            eprintln!("couldn't write {}; chats run without pocketpi-control", path.display());
+            eprintln!("couldn't write {}; chats run without it", path.display());
             return None;
         }
     }
@@ -579,6 +610,9 @@ async fn spawn_live(
     let control = kind == Kind::Chat && app.control_ext.is_some();
     if control {
         cmd.arg("-e").arg(app.control_ext.as_ref().unwrap());
+        for ext in &app.feature_exts {
+            cmd.arg("-e").arg(ext);
+        }
     }
     cmd.args(extra);
     if kind == Kind::Stage {
@@ -621,7 +655,7 @@ async fn spawn_live(
         restarting: AtomicBool::new(false),
         exited: AtomicBool::new(false),
         control,
-        control_ok: std::sync::atomic::AtomicU8::new(0),
+        control_cmds: StdMutex::new(None),
         ext_ui: StdMutex::new(ExtUi::default()),
         titled: AtomicBool::new(false),
     });
@@ -830,7 +864,9 @@ async fn send_command(
         }
         "get_entries" => {
             if let Some(list) = resp.pointer_mut("/data/entries").and_then(Value::as_array_mut) {
-                list.retain(|e| e.get("customType").and_then(Value::as_str) != Some(CONTROL_REPLY));
+                // Control replies and the feature extensions' state entries
+                // (pocketpi-goal, pocketpi-mode, …): never shown as messages.
+                list.retain(|e| !e.get("customType").and_then(Value::as_str).is_some_and(|t| t.starts_with("pocketpi-")));
             }
         }
         "fork" | "clone" if ok && resp.pointer("/data/cancelled") != Some(&Value::Bool(true)) => {
@@ -1070,16 +1106,17 @@ async fn control(State(app): State<Arc<AppState>>, Path(key): Path<String>, Json
         return Err(err(StatusCode::CONFLICT, "this pi runs without pocketpi-control (Chat tab, workflow stage, or turned off)"));
     }
     let name = format!("pp-{}", req.command);
-    if live.control_ok.load(Ordering::Relaxed) == 0 {
+    if live.control_cmds.lock().unwrap().is_none() {
         let r = rpc_internal(&live, json!({"type": "get_commands"})).await?;
-        let has = r
+        let names = r
             .pointer("/data/commands")
             .and_then(Value::as_array)
-            .is_some_and(|l| l.iter().any(|c| c.get("name").and_then(Value::as_str) == Some(name.as_str())));
-        live.control_ok.store(if has { 1 } else { 2 }, Ordering::Relaxed);
+            .map(|l| l.iter().filter_map(|c| c.get("name").and_then(Value::as_str)).filter(|n| n.starts_with("pp-")).map(String::from).collect())
+            .unwrap_or_default();
+        *live.control_cmds.lock().unwrap() = Some(names);
     }
-    if live.control_ok.load(Ordering::Relaxed) != 1 {
-        return Err(err(StatusCode::CONFLICT, "pocketpi-control didn't load in this pi (see the server log)"));
+    if !live.control_cmds.lock().unwrap().as_ref().is_some_and(|c| c.contains(&name)) {
+        return Err(err(StatusCode::CONFLICT, format!("/{name} isn't loaded in this pi (extension turned off or failed to load; see the server log)")));
     }
     let req_id = format!("ctl-{}", live.seq.fetch_add(1, Ordering::Relaxed));
     let (tx, rx) = oneshot::channel();
