@@ -23,7 +23,10 @@ struct ChatView: View {
         .onAppear {
             guard session == nil, let client = model.client else { return }
             let s = path.map { ChatSession(client: client, path: $0, cwd: cwd) } ?? ChatSession(client: client, newIn: cwd)
-            s.onTurnFinished = { [model] in Task { await model.refresh() } }
+            s.onTurnFinished = { [weak s, model] in
+                model.setWorking(s?.path, false)
+                Task { await model.refresh() }
+            }
             if let draft { s.composer = draft }
             session = s
         }
@@ -43,6 +46,8 @@ private struct ChatScreen: View {
     @State private var showTools = false
     @State private var compacting = false
     @State private var exported: URL?
+    @State private var subagents: SubagentMonitor?
+    @State private var showSubagents = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -125,6 +130,9 @@ private struct ChatScreen: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                if let agents = subagents, !agents.active.isEmpty {
+                    ActiveSubagents(runs: agents.active) { showSubagents = true }
+                }
                 if !session.activeRuns.isEmpty {
                     ActiveRuns(runs: session.activeRuns) { openedRun = $0 }
                 }
@@ -145,6 +153,12 @@ private struct ChatScreen: View {
             .animation(.default, value: session.activeRuns.map(\.id))
         }
         .environment(\.abortBash, { Task { await session.abortBash() } })
+        .environment(\.subagents, subagents)
+        .environment(\.openSubagents, { showSubagents = true })
+        // The Work list can stay visible beside a chat (iPad): mark this
+        // chat "working" the moment pi starts, not at the next server refresh.
+        .onChange(of: session.isStreaming, initial: true) { _, on in model.setWorking(session.path, on) }
+        .onChange(of: session.path) { _, _ in model.setWorking(session.path, session.isStreaming) }
         .navigationDestination(item: $openedRun) { RunView(runId: $0) }
         // Workflow runs pi started here: poll while any is going.
         .task(id: session.transcript.startedRuns) {
@@ -173,6 +187,8 @@ private struct ChatScreen: View {
             .disabled(session.isStreaming || session.path == nil)
             TreeMenuButtons(session: session, sheet: $treeSheet)
             ChatToolsMenuButton(session: session, shown: $showTools)
+            Button("Subagents", systemImage: "person.2") { showSubagents = true }
+                .disabled(subagents == nil)
         }
         .chatToolsSheet(isPresented: $showTools, session: session)
         .chatExtras(session: session, compacting: $compacting, preview: $exported)
@@ -185,9 +201,30 @@ private struct ChatScreen: View {
             await session.start()
             await session.prepare() // a new chat: pi now, so the model picker works
         }
-        .onDisappear { session.leave() }
+        // Subagent runs of this chat, for the line above the composer and the
+        // title menu's sheet. A new chat starts once its file exists.
+        .task(id: session.path) {
+            subagents?.stop()
+            subagents = nil
+            guard let path = session.path, let client = model.client else { return }
+            let m = SubagentMonitor(client: client, sessionPath: path)
+            subagents = m
+            m.start()
+        }
+        .sheet(isPresented: $showSubagents) {
+            if let subagents { SubagentsSheet(monitor: subagents) }
+        }
+        .onDisappear {
+            subagents?.stop()
+            session.leave()
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await session.start() } }
+            if phase == .active {
+                Task { await session.start() }
+                subagents?.start()
+            } else {
+                subagents?.stop()
+            }
         }
         .sheet(item: $session.pendingRequest) { req in
             ExtensionSheet(request: req) { answer in Task { await session.respond(to: req, answer) } }
@@ -763,9 +800,12 @@ private struct Composer: View {
                 TextField(session.isStreaming ? "Steer pi…" : "Message pi", text: $session.composer, axis: .vertical)
                     .lineLimit(1...8)
                     .focused($focused)
+                    // A taller first line than one line of text: an easy tap
+                    // target for a thumb, not a hairline.
+                    .frame(minHeight: 44, alignment: .topLeading)
                     .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
+                    .padding(.top, 10)
+                    .padding(.bottom, 3)
                     .accessibilityIdentifier("composer")
                 if let hint = session.composerHint {
                     Text(hint).font(.caption).foregroundStyle(.secondary)

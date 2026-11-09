@@ -112,7 +112,7 @@ struct AssistantMessageView: View {
         case .toolCall(let id, let name, let args):
             ToolCard(name: name, summary: ToolSummary.summary(name: name, arguments: args, home: home),
                      arguments: args, result: transcript.toolResults[id],
-                     partial: transcript.partialResults[id], running: transcript.runningTools.contains(id))
+                     partial: transcript.partialResults[id], running: transcript.runningTools.contains(id), id: id)
         case .image(let data, _):
             if let d = Data(base64Encoded: data), let img = UIImage(data: d) {
                 Image(uiImage: img).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 10))
@@ -185,7 +185,7 @@ struct ActivityRow: View {
                     case .tool(let id, let name, let args):
                         ToolCard(name: name, summary: ToolSummary.summary(name: name, arguments: args, home: home),
                                  arguments: args, result: transcript.toolResults[id],
-                                 partial: transcript.partialResults[id], running: transcript.runningTools.contains(id))
+                                 partial: transcript.partialResults[id], running: transcript.runningTools.contains(id), id: id)
                     }
                 }
             }
@@ -215,8 +215,17 @@ struct ToolCard: View {
     let result: ToolResult?
     let partial: ToolResult?
     let running: Bool
+    /// pi's tool call id: a `subagent` card uses it to find its run.
+    let id: String? = nil
+    @Environment(\.subagents) private var subagents
+    @Environment(\.openSubagents) private var openSubagents
     @State private var open = false
     @State private var showAll = false
+
+    /// The run this `subagent` call started, once its status file exists.
+    private var run: SubagentRun? {
+        name == "subagent" ? subagents?.run(toolCallId: id) : nil
+    }
 
     private var icon: String {
         switch name {
@@ -233,6 +242,7 @@ struct ToolCard: View {
         // The system's expand control, like the Thought rows.
         DisclosureGroup(isExpanded: $open) {
             VStack(alignment: .leading, spacing: 8) {
+                if name == "subagent" { SubagentToolProgress(run: run) { openSubagents?() } }
                 if name != "bash", case .object(let o) = arguments, !o.isEmpty {
                     Text(arguments.compactText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(6)
                 } else if name == "bash" {
@@ -257,6 +267,7 @@ struct ToolCard: View {
                 Text(name).font(.footnote.monospaced().weight(.semibold))
                 Text(summary).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
+                if run?.active == true { ProgressView().controlSize(.mini).tint(Theme.signalText) }
                 status
             }
             .foregroundStyle(.primary)

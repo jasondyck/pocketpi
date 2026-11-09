@@ -70,6 +70,17 @@ struct ChatListView: View {
             }
         }
         .task { await model.refresh() }
+        // The list is the only screen that sees every chat: keep live rows
+        // ("working", runs, approvals) fresh without a pull. A chat this app
+        // is watching updates at once through AppModel.workingNow; the timer
+        // catches background work and finishes.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                await model.refresh(quiet: true)
+            }
+        }
         // A tapped notification, also on a cold launch (set before this appeared).
         .task(id: model.pendingLink) {
             guard let link = model.pendingLink else { return }
@@ -121,7 +132,15 @@ struct ChatListView: View {
         }
         // iPhone: backing out of a chat closes it, so it doesn't reopen.
         .onChange(of: column) { _, c in
-            if c != .detail { target = nil }
+            if c != .detail {
+                target = nil
+                // Back from a chat: show what happened while it was open
+                // (still working, finished, cost, a queued message).
+                Task { await model.refresh(quiet: true) }
+            }
+        }
+        .onChange(of: target) { _, t in
+            if t == nil { Task { await model.refresh(quiet: true) } }
         }
     }
 }
@@ -468,7 +487,7 @@ struct SessionRow: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {
-                    if session.streaming {
+                    if model.isWorking(session) {
                         Circle().fill(Theme.signal).frame(width: 7, height: 7)
                         Text("working").foregroundStyle(Theme.signalText)
                     }

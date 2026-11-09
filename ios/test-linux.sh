@@ -104,6 +104,35 @@ recs = [{"type": "session", "version": 3, "id": "usage-seed", "timestamp": iso(n
 open(sys.argv[1], "w").write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
 PY
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
+  # Subagent runs for GET /api/subagents: one live workflow with two steps and
+  # an output log. POCKETPI_SUBAGENTS_DIR points the server at this root (the
+  # real one is <tmpdir>/pi-subagents-*).
+  SUB="$SCRATCH/subagents"
+  mkdir -p "$SUB/async-subagent-runs/pp-test-live"
+  python3 - "$SUB/async-subagent-runs/pp-test-live" <<'PY'
+import json, sys, time
+d = sys.argv[1]
+now = int(time.time() * 1000)
+status = {
+    "runId": "pp-test-live", "toolCallId": "call_pp_test", "mode": "workflow",
+    "state": "running", "active": True,
+    "sessionId": "/pp-test-session.jsonl", "cwd": "/pp-test-project",
+    "startedAt": now - 5000, "lastUpdate": now, "tokens": 1500, "cost": 0.02,
+    "steps": [
+        {"index": 0, "agent": "reviewer", "label": "task-1", "status": "completed",
+         "active": False, "startedAt": now - 5000, "durationMs": 2000,
+         "tokens": {"input": 900, "output": 300, "total": 1200}},
+        {"index": 1, "agent": "worker", "label": "task-2", "status": "running",
+         "active": True, "startedAt": now - 3000,
+         "sessionFile": "/pp-test-child.jsonl",
+         "recentTools": [{"tool": "read", "args": "src/main.rs"}],
+         "recentOutput": ["working on it"],
+         "tokens": {"input": 200, "output": 100, "total": 300}},
+    ],
+}
+json.dump(status, open(f"{d}/status.json", "w"))
+open(f"{d}/output-0.log", "w").write("hello from the child\n")
+PY
   # A stand-in llama.cpp router, logged in the way pi's /login llama.cpp stores it.
   LLAMA_PORT=$((PORT + 2))
   export FAKE_LLAMA_STATE="$SCRATCH/llama.json"
@@ -115,6 +144,7 @@ PY
     -out "$SCRATCH/home/.config/pocketpi/apns/AuthKey_TEST000000.p8" 2>/dev/null
   HOME="$SCRATCH/home" XDG_CONFIG_HOME="$SCRATCH/home/.config" XDG_DATA_HOME="$SCRATCH/home/.local/share" \
     PI_CODING_AGENT_SESSION_DIR="$SCRATCH/sessions" POCKETPI_PI="$REPO/ios/fake-pi.py" \
+    POCKETPI_SUBAGENTS_DIR="$SCRATCH/subagents" \
     POCKETPI_PORT="$PORT" "$REPO/target/release/pocketpi" >"$SCRATCH/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 40); do

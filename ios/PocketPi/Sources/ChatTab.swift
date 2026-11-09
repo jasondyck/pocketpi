@@ -2,8 +2,9 @@ import PocketPiKit
 import SwiftUI
 
 /// The Chat tab: plain conversations with any model, pi's enabled ones, the
-/// rest, or one on the llama.cpp router. pi has no tools here (the server
-/// starts it that way in its chat folder), and these chats stay out of Work.
+/// rest, or one on the llama.cpp router. pi has no built-in tools here (the
+/// server starts it that way in its chat folder), but connected MCP tools such
+/// as a browser stay reachable through codemode. These chats stay out of Work.
 /// A screen in the Chat tab's stack (kept in the app model, so the tab
 /// opens where it was left, and a notification can open a chat in it).
 enum ChatRoute: Hashable {
@@ -55,7 +56,7 @@ struct ChatTab: View {
                     ContentUnavailableView {
                         Label("No chats yet", systemImage: "bubble.left.and.bubble.right")
                     } description: {
-                        Text("Talk with any model, including local ones on the llama.cpp router. pi has no tools here: it only talks.")
+                        Text("Talk with any model, including local ones on the llama.cpp router. pi has no built-in tools here, but connected MCP tools like a browser can still help.")
                     } actions: {
                         if model.chatDir != nil {
                             Button("New chat") { model.chatPath.append(.new(UUID())) }

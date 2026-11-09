@@ -26,6 +26,17 @@ A chat's title menu also has Compact context… (with an optional focus for
 the summary), Export as HTML and Download JSONL; the file opens in Quick
 Look, whose share button sends it on.
 
+**Subagents** shows pi-subagents' live runs (`GET /api/subagents`,
+src/subagents.rs) for the chat or every chat: each run's steps, current tool,
+recent output, tokens, cost and log tail. A running run also appears above the
+composer; tapping it opens the sheet, and a step with a session file opens that
+child's chat, live. The composer's first line is deliberately taller than one
+line of text, so it's an easy target for a thumb.
+
+The Work and Chat rows say **working** the moment pi starts a reply (the list
+stays visible beside a chat on iPad), and the list refreshes itself while it is
+open, so a chat left mid-reply doesn't look idle until a pull.
+
 ## Notifications
 
 The server sends every notification it already sends by web push (approvals,

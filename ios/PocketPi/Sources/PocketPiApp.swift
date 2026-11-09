@@ -116,7 +116,7 @@ final class AppModel {
     private(set) var projects: [Project] = []
     private(set) var sessions: [SessionInfo] = []
     private(set) var archived: [SessionInfo] = []
-    /// The Chat tab's chats and their folder (pi without tools there).
+    /// The Chat tab's chats and their folder (pi without built-in tools there).
     private(set) var chats: [SessionInfo] = []
     private(set) var archivedChats: [SessionInfo] = []
     private(set) var chatDir: String?
@@ -132,6 +132,10 @@ final class AppModel {
     var activeRuns: [RunInfo] { runs.filter(\.isActive) }
     private(set) var home: String?
     private(set) var loadError: String?
+    /// Chats the app is watching stream, by session file. On iPad the chat
+    /// list stays visible beside a chat, so its row says "working" before the
+    /// next refresh; `refresh()` reconciles this with the server.
+    private(set) var workingNow: Set<String> = []
     /// An action that failed (archive), shown as an alert.
     var problem: String?
     private(set) var loading = false
@@ -211,10 +215,12 @@ final class AppModel {
 
     // MARK: - lists
 
-    func refresh() async {
+    /// `quiet`: a background refresh (the list's timer) that shouldn't swap
+    /// the empty state for a spinner.
+    func refresh(quiet: Bool = false) async {
         guard let client else { return }
-        loading = true
-        defer { loading = false }
+        if !quiet { loading = true }
+        defer { if !quiet { loading = false } }
         do {
             async let p = client.projects()
             async let s = client.sessions()
@@ -236,6 +242,9 @@ final class AppModel {
             home = pr.home
             sessions = ss
             archived = aa
+            // The server's live flag is the truth; a chat left mid-reply is
+            // still streaming there even after its screen stopped watching.
+            workingNow = Set(ss.filter(\.streaming).map(\.path))
             loadError = nil
         } catch where error.isCancellation {
             // Cut short (left the screen, a newer refresh): keep what's shown.
@@ -243,6 +252,15 @@ final class AppModel {
             loadError = error.localizedDescription
         }
     }
+
+    /// The chat screen's live state: pi is working on this chat now.
+    func setWorking(_ path: String?, _ on: Bool) {
+        guard let path, !path.isEmpty else { return }
+        if on { workingNow.insert(path) } else { workingNow.remove(path) }
+    }
+
+    /// Whether a list row should say "working".
+    func isWorking(_ s: SessionInfo) -> Bool { s.streaming || workingNow.contains(s.path) }
 
     /// Archive (or bring back) a chat: moved between the lists at once, then
     /// saved; on failure the lists reload from the server and an alert says so.
