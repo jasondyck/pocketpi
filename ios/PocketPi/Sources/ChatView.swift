@@ -801,6 +801,7 @@ private struct Composer: View {
                     focused = true
                 }
             }
+            FileMentionList(session: session) { focused = true }
             if !images.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {

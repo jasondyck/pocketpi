@@ -642,7 +642,7 @@ def run(prompt, cmd_id):
     streaming = True
     aborted.clear()
     out({"type": "agent_start"})
-    user = {"role": "user", "content": [{"type": "text", "text": prompt}]}
+    user = {"role": "user", "content": [{"type": "text", "text": prompt}], "timestamp": int(time.time() * 1000)}
     out({"type": "message_start", "message": user})
     add(user)
     out({"type": "message_end", "message": user})
@@ -684,6 +684,24 @@ def run(prompt, cmd_id):
         result = {"content": [{"type": "text", "text": "hi"}], "details": {}}
         out({"type": "tool_execution_end", "toolCallId": call["id"], "toolName": "bash", "result": result, "isError": False, "durationMs": 5})
         tr = {"role": "toolResult", "toolCallId": call["id"], "toolName": "bash", "content": result["content"], "isError": False}
+        out({"type": "message_start", "message": tr})
+        add(tr)
+        out({"type": "message_end", "message": tr})
+    if "write file" in prompt:
+        # Really writes, in the chat's folder, for the files panel's
+        # changed-files tests. After a moment, like a model thinking first:
+        # the server snapshots the work tree as the turn starts.
+        time.sleep(0.5)
+        target = os.path.join(os.getcwd(), "notes", "pp-written.txt")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "a") as f:
+            f.write(prompt + "\n")
+        call = {"type": "toolCall", "id": f"w-{cmd_id}", "name": "write", "arguments": {"path": "notes/pp-written.txt", "content": prompt}}
+        stream_assistant([call], "toolUse")
+        out({"type": "tool_execution_start", "toolCallId": call["id"], "toolName": "write", "args": call["arguments"]})
+        result = {"content": [{"type": "text", "text": "Wrote notes/pp-written.txt"}], "details": {}}
+        out({"type": "tool_execution_end", "toolCallId": call["id"], "toolName": "write", "result": result, "isError": False, "durationMs": 3})
+        tr = {"role": "toolResult", "toolCallId": call["id"], "toolName": "write", "content": result["content"], "isError": False}
         out({"type": "message_start", "message": tr})
         add(tr)
         out({"type": "message_end", "message": tr})

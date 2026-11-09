@@ -35,6 +35,7 @@ mod features;
 mod goal_watch;
 mod chat_state;
 mod outline;
+mod files;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -322,6 +323,7 @@ async fn main() {
         .route("/goal.js", get(|| async { static_file("goal.js") }))
         .route("/modes.js", get(|| async { static_file("modes.js") }))
         .route("/outline.js", get(|| async { static_file("outline.js") }))
+        .route("/files.js", get(|| async { static_file("files.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -402,6 +404,7 @@ async fn main() {
         .route("/api/sessions/outline", get(outline::get_outline))
         .route("/api/usage", get(usage::route))
         .merge(subagents::router())
+        .merge(files::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -502,6 +505,7 @@ fn static_file(name: &str) -> Response {
         "goal.js" => (include_bytes!("../web/goal.js"), "text/javascript; charset=utf-8"),
         "modes.js" => (include_bytes!("../web/modes.js"), "text/javascript; charset=utf-8"),
         "outline.js" => (include_bytes!("../web/outline.js"), "text/javascript; charset=utf-8"),
+        "files.js" => (include_bytes!("../web/files.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),
@@ -710,6 +714,7 @@ async fn spawn_live(
                 let (app3, live3) = (app2.clone(), live2.clone());
                 tokio::spawn(async move { goal_push(&app3, &live3, done).await });
             }
+            files::observe(&app2, &live2, &ty, &v);
             handle_record(&live2, line, v);
             if let Some(d) = dialog {
                 dialogs::opened(&app2, &live2, d);

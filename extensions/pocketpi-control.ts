@@ -20,9 +20,20 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const REPLY = "pocketpi-control";
 
+/** dsh's rule for @-mentions (docs/dsh-features-plan.md §3.5): the files
+ * panel's `@` picker inserts a path only, and the model reads the file itself. */
+export const FILE_REFERENCE_PROMPT =
+  "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the working directory; absolute paths identify files or directories on the host. A trailing slash marks a directory: list it when its contents matter. Anything else is a file: use the read tool when its contents are needed, and do not claim to have inspected it before reading. @\"...\" quotes a path containing spaces.";
+
 type Handler = (args: any, ctx: any) => Promise<unknown> | unknown;
 
 export default function (pi: ExtensionAPI) {
+  // The same section on every turn, so the prompt cache stays warm.
+  pi.on("before_agent_start", async (event: any) => {
+    const sections = event.systemPromptOptions?.sections;
+    if (sections) sections.pocketpi_file_references = FILE_REFERENCE_PROMPT;
+  });
+
   // Every /pp-* command parses "<reqId> [json]" and always replies, even when
   // it throws, so the server is never left waiting until its timeout.
   const command = (name: string, description: string, run: Handler) => {
