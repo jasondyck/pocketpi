@@ -12,14 +12,15 @@
 #   scripts/bench.sh --sessions N --soak SECS --duration SECS --concurrency C
 #   scripts/bench.sh --tool python|oha|hey   # load generator (default: oha, hey, else python)
 #   scripts/bench.sh --no-build --keep       # reuse target/release; keep the scratch dir
+#   scripts/bench.sh --bin PATH --out DIR    # bench another binary (implies --no-build); results elsewhere
 #
 # Never touches the real pocketpi (its port, home or sessions).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$PWD
 
-SESSIONS=2000 REPO_FILES=20000 DURATION=8 CONC=16 SOAK=60 SSE_CLIENTS=50 TURNS=3 TERMS=8
-QUICK=0 BUILD=1 KEEP=0 TOOL=auto
+SESSIONS=2000 REPO_FILES=20000 DURATION=8 CONC=16 SOAK=60 SSE_CLIENTS=50 TURNS=5 TERMS=8
+QUICK=0 BUILD=1 KEEP=0 TOOL=auto BIN="$REPO/target/release/pocketpi" OUT="$REPO/bench-results"
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) QUICK=1 SESSIONS=500 REPO_FILES=5000 DURATION=2 CONC=8 SOAK=10 SSE_CLIENTS=20 TURNS=1 TERMS=2 ;;
@@ -31,7 +32,9 @@ while [ $# -gt 0 ]; do
     --tool) TOOL=$2; shift ;;
     --no-build) BUILD=0 ;;
     --keep) KEEP=1 ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --bin) BIN=$(realpath "$2") BUILD=0; shift ;;
+    --out) OUT=$(realpath -m "$2"); shift ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -46,7 +49,6 @@ if [ "$BUILD" = 1 ]; then
   echo "== cargo build --release"
   cargo build --release --quiet
 fi
-BIN="$REPO/target/release/pocketpi"
 [ -x "$BIN" ] || { echo "no $BIN (drop --no-build)" >&2; exit 1; }
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/pocketpi-bench.XXXXXX")
@@ -93,4 +95,4 @@ python3 scripts/bench/run.py \
   --sessions-json "$SCRATCH/sessions.json" --repo "$H/projects/bigrepo" \
   --duration "$DURATION" --concurrency "$CONC" --soak "$SOAK" --sse-clients "$SSE_CLIENTS" \
   --turns "$TURNS" --terms "$TERMS" --tool "$TOOL" --quick "$QUICK" \
-  --gen-secs "$GEN_SECS" --ready-ms "$READY_MS" --out-dir "$REPO/bench-results"
+  --gen-secs "$GEN_SECS" --ready-ms "$READY_MS" --out-dir "$OUT"

@@ -506,7 +506,8 @@ def print_table(res):
           f"tool={res['config']['tool']}  sessions={res['config']['sessions']}  repo_files={res['config']['repo_files']}  "
           f"c={res['config']['concurrency']}  {res['config']['duration']}s/endpoint")
     print(f"binary {res['binary_bytes'] / 1e6:.1f} MB · ready in {res['startup']['ready_ms']} ms · "
-          f"idle RSS {res['process']['start']['rss_kb'] / 1024:.1f} MB")
+          f"idle RSS {res['process']['start']['rss_kb'] / 1024:.1f} MB · load avg {res['loadavg_start'][0]} on {res['cpus']} CPUs "
+          "(a busy machine makes the numbers noisy)")
     print()
     hdr = ["endpoint", "rps", "p50 ms", "p90 ms", "p99 ms", "max ms", "errors", "cold ms", "KB/req", "peakRSS MB", "thr", "fds"]
     print(f"{hdr[0]:<14}" + "".join(h.rjust(10) for h in hdr[1:]))
@@ -585,10 +586,10 @@ def compare(res, out_dir, this_file):
         o = old["endpoints"].get(n)
         if not o:
             continue
-        delta(f"{n} p99 ms", o["p99_ms"], e["p99_ms"], 1.0)
+        delta(f"{n} p99 ms", o["p99_ms"], e["p99_ms"], 2.0)
         delta(f"{n} rps", o["rps"], e["rps"], 1e18, higher_is_worse=False)  # shown, not flagged
         delta(f"{n} peak RSS KB", o.get("peak_rss_kb"), e.get("peak_rss_kb"), 2048)
-    for k, label, floor in (("sse", "fanout_spread_p99_ms", 2.0), ("snapshot", "settled_to_files_median_ms", 20.0)):
+    for k, label, floor in (("sse", "fanout_spread_p99_ms", 2.0), ("snapshot", "settled_to_files_median_ms", 50.0)):
         if res.get(k) and old.get(k):
             delta(f"{k} {label}", old[k].get(label), res[k].get(label), floor)
     for ph in ("start", "after_load", "after_soak", "end"):
@@ -596,7 +597,8 @@ def compare(res, out_dir, this_file):
             delta(f"process {ph} RSS KB", old["process"][ph]["rss_kb"], res["process"][ph]["rss_kb"], 2048)
             delta(f"process {ph} HWM KB", old["process"][ph]["hwm_kb"], res["process"][ph]["hwm_kb"], 2048)
     if res.get("soak") and old.get("soak"):
-        delta("soak p99 ms", old["soak"]["p99_ms"], res["soak"]["p99_ms"], 1.0)
+        # Shown, not flagged: the mix's tail is the slowest endpoint's, already flagged above.
+        delta("soak p99 ms", old["soak"]["p99_ms"], res["soak"]["p99_ms"], 1e18)
     delta("binary bytes", old.get("binary_bytes"), res.get("binary_bytes"), 1e18)
     if flags:
         print(f"\n{len(flags)} regression(s) over 20%:")
@@ -649,6 +651,7 @@ def main():
            "binary_bytes": os.path.getsize(o.bin),
            "dataset": {"sessions": facts["sessions"], "session_bytes": facts["bytes"], "large_session_entries": facts["large_entries"],
                        "gen_secs": float(o.gen_secs)},
+           "loadavg_start": [round(x, 2) for x in os.getloadavg()], "cpus": os.cpu_count(),
            "startup": {"ready_ms": o.ready_ms}, "process": {"start": snap(pid)}, "endpoints": {}}
     repo_facts = os.path.join(o.scratch, "repo.json")
     res["config"]["repo_files"] = json.load(open(repo_facts))["files"] if os.path.exists(repo_facts) else None
@@ -661,6 +664,15 @@ def main():
         print(f"  {name:<14}{ms:9.1f} ms  {status}  {size / 1024:.0f} KB")
         if status >= 400:
             print(f"  !! {name} answered {status}", file=sys.stderr)
+
+    # Terminals first, while the heap is small and quiet: the per-terminal
+    # RSS delta is lost in allocator noise after the load phases.
+    if o.terms:
+        print(f"== terminals: {o.terms}")
+        try:
+            res["terminals"] = terminals(port, pid, facts["cwds"][2], o.terms, sampler)
+        except Exception as e:
+            res["terminals"] = {"error": repr(e)}
 
     ctx = mp.get_context("spawn")
     with ctx.Pool(o.concurrency) as pool:
@@ -684,12 +696,6 @@ def main():
         res["sse"] = sse_fanout(port, small_cwd, o.sse_clients, 400, sampler)
         print(f"== git snapshot per turn: {o.turns} turn(s) in the {res['config']['repo_files']}-file repo")
         res["snapshot"] = snapshot_turns(port, repo, o.turns, sampler)
-        if o.terms:
-            print(f"== terminals: {o.terms}")
-            try:
-                res["terminals"] = terminals(port, pid, facts["cwds"][2], o.terms, sampler)
-            except Exception as e:
-                res["terminals"] = {"error": repr(e)}
         if o.soak:
             print(f"== soak: {o.soak} s of the mix")
             mix = [p for n, p in endpoints.items() if n != "version"]

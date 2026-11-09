@@ -158,6 +158,32 @@ schema with `node scripts/check-safety-policies.mjs <permissions.schema.json>`.
 `ios/test-linux.sh` (PocketPiKit against a scratch pocketpi with
 `ios/fake-pi.py` as pi).
 
+## Benchmark
+
+`scripts/bench.sh` (run once per wave) builds release, starts a throwaway
+pocketpi on a free port (scratch HOME/XDG dirs, `ios/fake-pi.py` as pi, model
+keys unset), generates synthetic history (2000 pi session files across 20
+projects, a few with 2000+ entries, and a 20k-file git repo), then measures:
+cold and loaded latency (rps, p50/p90/p99, errors) of `/api/sessions`,
+`/api/projects`, `/api/sessions/outline`, `/api/usage` and
+`/api/files/{list,read,search}`; 50 SSE clients on one streaming chat; the
+per-turn git snapshot (`agent_settled` to `pocketpi_turn_files`); memory per
+terminal; and a soak that reports whether RSS or fds keep growing. RSS
+(VmRSS/VmHWM), threads and fds come from `/proc`.
+
+```sh
+scripts/bench.sh            # ~3 min
+scripts/bench.sh --quick    # under a minute, smaller data
+scripts/bench.sh --sessions 5000 --soak 300 --duration 10 --concurrency 32
+scripts/bench.sh --bin /path/to/pocketpi --out /tmp/ab   # A/B another build
+```
+
+The load generator is `oha` or `hey` when installed, else a built-in Python
+one (stated in the output). Results go to `bench-results/<date>-<sha>.json`
+(git-ignored) with a table and a delta against the latest run with the same
+settings; p99 or RSS more than 20% worse is flagged. A busy machine makes the
+numbers noisy (the load average is recorded): re-run before trusting a flag.
+
 ## Access model
 
 Loopback only. Remote access is meant to go through `tailscale serve` (tailnet only, never Funnel):
