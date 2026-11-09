@@ -477,7 +477,12 @@ async fn raw(State(app): State<Arc<AppState>>, Query(q): Query<RawQuery>) -> App
     let mut res = bytes.into_response();
     let hs = res.headers_mut();
     hs.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype.unwrap_or("application/octet-stream")));
-    hs.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    // Chrome refuses to show a PDF in a sandboxed document, and its viewer
+    // runs a PDF's scripts in its own origin, so PDFs go out without it.
+    // Everything else (SVG, HTML) never runs as the app's origin.
+    if ctype != Some("application/pdf") {
+        hs.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    }
     hs.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     hs.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     let ascii: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '_' }).collect();
