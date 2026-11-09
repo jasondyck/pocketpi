@@ -31,6 +31,7 @@ mod pi_settings_raw;
 mod exports;
 mod usage;
 mod subagents;
+mod features;
 #[allow(dead_code)] // used from wave D1 on (docs/dsh-features-plan.md)
 mod chat_state;
 use ext_ui::ExtUi;
@@ -173,6 +174,8 @@ pub struct AppState {
     pub(crate) feature_exts: Vec<PathBuf>,
     /// Where `export_html` writes (never a path a client picks).
     pub(crate) exports_dir: PathBuf,
+    /// Serializes writes of features.json (src/features.rs).
+    pub(crate) features_lock: tokio::sync::Mutex<()>,
     /// Server-side state per chat (src/chat_state.rs).
     #[allow(dead_code)] // used from wave D1 on
     pub(crate) chat_state: chat_state::ChatState,
@@ -283,6 +286,7 @@ async fn main() {
         control_ext,
         feature_exts,
         exports_dir: data_dir.join("exports"),
+        features_lock: tokio::sync::Mutex::new(()),
         chat_state: chat_state::ChatState::new(&data_dir),
         chat_dir,
         pi_bin: std::env::var("POCKETPI_PI").unwrap_or_else(|_| "pi".into()),
@@ -327,6 +331,7 @@ async fn main() {
         .route("/fonts/geist.woff2", get(|| async { static_file("geist.woff2") }))
         .route("/fonts/geist-mono.woff2", get(|| async { static_file("geist-mono.woff2") }))
         .route("/api/version", get(|| async { Json(json!({ "build": *BUILD_ID })) }))
+        .route("/api/features", get(features::get_features).post(features::set_features))
         .route("/api/projects", get(list_projects))
         .route("/api/projects/save", post(save_project))
         .route("/api/projects/hide", post(hide_project))
