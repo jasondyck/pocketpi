@@ -159,7 +159,7 @@ function initials(name) {
 function projectFor(path) { return S.projects.find((s) => s.path === path); }
 function projectName(path) { const sp = projectFor(path); return sp ? sp.name : path === S.home ? "Home" : base(path); }
 function badge(path, cls = "badge") { const n = projectName(path); return `<span class="${cls}" style="--h:${hue(path)}">${esc(initials(n))}</span>`; }
-function plural(n, w) { return `${n} ${w}${n === 1 ? "" : "s"}`; }
+function plural(n, w, pl) { return `${n} ${n === 1 ? w : pl || w + "s"}`; }
 function fmtTokens(n) { if (n == null) return "–"; if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k"; return String(n); }
 function fmtCost(c) { if (!c) return "$0"; return c < 0.01 ? "<$0.01" : "$" + c.toFixed(c < 1 ? 3 : 2); }
 function ago(ms) {
@@ -1593,7 +1593,7 @@ function renderSearchHits(box, term) {
   if (!s || s.term !== term) return false;
   const wrap = el("div", "search-hits");
   const head = el("div", "group-label search-head");
-  head.innerHTML = `<span>In messages</span><span class="search-count">${s.loading && !s.results.length ? "…" : s.total ? plural(s.total, "match") : ""}</span>`;
+  head.innerHTML = `<span>In messages</span><span class="search-count">${s.loading && !s.results.length ? "…" : s.total ? plural(s.total, "match", "matches") : ""}</span>`;
   wrap.append(head);
   const chips = el("div", "search-roles");
   for (const [value, label] of SEARCH_ROLES) {
@@ -1611,7 +1611,7 @@ function renderSearchHits(box, term) {
     const b = el("button", "sess hit-sess" + (r.path === S.path ? " active" : ""));
     // Search spans every project: name the chat's project even when the drawer
     // is scoped to one, or a hit would look like it belongs to that scope.
-    const meta = [projectName(r.cwd), r.chat ? "Chat" : "", plural(r.count, "match"), ago(r.modified)].filter(Boolean).join(" · ");
+    const meta = [projectName(r.cwd), r.chat ? "Chat" : "", plural(r.count, "match", "matches"), ago(r.modified)].filter(Boolean).join(" · ");
     b.innerHTML = `${S.project ? "" : badge(r.cwd, "badge sm")}<div class="sess-main"><div class="t"><span>${esc(r.name || r.title || "Untitled")}</span></div><div class="m">${esc(meta)}</div>
       ${r.hits.map((h) => `<div class="hit"><span class="hit-role">${esc(hitRole(h))}</span><span class="hit-text">${markSnippet(h.snippet)}</span></div>`).join("")}</div>`;
     b.onclick = () => openSession(r.path);
