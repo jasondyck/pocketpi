@@ -32,6 +32,7 @@ mod exports;
 mod usage;
 mod subagents;
 mod features;
+mod goal_watch;
 #[allow(dead_code)] // used from wave D1 on (docs/dsh-features-plan.md)
 mod chat_state;
 use ext_ui::ExtUi;
@@ -691,6 +692,7 @@ async fn spawn_live(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
         let mut buf = Vec::new();
+        let mut goal = goal_watch::GoalWatch::default();
         loop {
             buf.clear();
             match reader.read_until(b'\n', &mut buf).await {
@@ -704,6 +706,10 @@ async fn spawn_live(
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
             let ty = v.get("type").and_then(Value::as_str).unwrap_or("").to_string();
             let dialog = (ty == "extension_ui_request" && live2.kind != Kind::Stage).then(|| v.clone());
+            if let Some(done) = goal.record(&v) {
+                let (app3, live3) = (app2.clone(), live2.clone());
+                tokio::spawn(async move { goal_push(&app3, &live3, done).await });
+            }
             handle_record(&live2, line, v);
             if let Some(d) = dialog {
                 dialogs::opened(&app2, &live2, d);
@@ -723,8 +729,9 @@ async fn spawn_live(
                         tokio::spawn(async move { auto_title(&app3, &live3).await });
                     }
                     let took = live2.turn_started.lock().unwrap().take().map(|t| t.elapsed());
-                    // Long reply finished and nobody has the chat open: tell the phone.
-                    if took.is_some_and(|d| d > Duration::from_secs(45)) && live2.tx.receiver_count() == 0 {
+                    // Long reply finished and nobody has the chat open: tell the phone
+                    // (not for each round of a goal: goal_push says when it ends).
+                    if !goal.settled() && took.is_some_and(|d| d > Duration::from_secs(45)) && live2.tx.receiver_count() == 0 {
                         let (app3, live3) = (app2.clone(), live2.clone());
                         tokio::spawn(async move {
                             let file = live3.session_file().unwrap_or_default();
@@ -755,6 +762,15 @@ async fn spawn_live(
     });
 
     Ok(live)
+}
+
+/// A chat's goal completed or was blocked (src/goal_watch.rs): one push,
+/// opening the chat.
+async fn goal_push(app: &Arc<AppState>, live: &Live, done: goal_watch::Finished) {
+    let file = live.session_file().unwrap_or_default();
+    let project = live.cwd.rsplit('/').next().unwrap_or("");
+    let url = format!("/?s={}", urlencode(&file));
+    app.push.send(&format!("{} · {project}", done.title), &done.body, &url, &format!("chat-{}", live.key)).await;
 }
 
 fn handle_record(live: &Live, line: &str, v: Value) {
