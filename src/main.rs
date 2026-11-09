@@ -323,6 +323,7 @@ async fn main() {
         .route("/goal.js", get(|| async { static_file("goal.js") }))
         .route("/modes.js", get(|| async { static_file("modes.js") }))
         .route("/outline.js", get(|| async { static_file("outline.js") }))
+        .route("/files.js", get(|| async { static_file("files.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
         .route("/icon.svg", get(|| async { static_file("icon.svg") }))
@@ -504,6 +505,7 @@ fn static_file(name: &str) -> Response {
         "goal.js" => (include_bytes!("../web/goal.js"), "text/javascript; charset=utf-8"),
         "modes.js" => (include_bytes!("../web/modes.js"), "text/javascript; charset=utf-8"),
         "outline.js" => (include_bytes!("../web/outline.js"), "text/javascript; charset=utf-8"),
+        "files.js" => (include_bytes!("../web/files.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),
         "icon-512.png" => (include_bytes!("../web/icon-512.png"), "image/png"),

@@ -51,10 +51,11 @@ const TOOL_ICON = { bash: ICON.term, read: ICON.file, write: ICON.pen, edit: ICO
 //   tools[name](api, body) -> bool     a tool card's body; true = drawn
 //   events: [fn(ev)]                   every chat event, after app.js
 //   chat: [fn(chat)]                   the open chat changed (or closed)
+//   rendered: [fn()]                   the transcript was drawn afresh
 // `chat` is {key, path, cwd, status: Map, streaming}. pp.control(command,
 // args) runs a pocketpi extension command; pp.panel opens the side panel.
 const pp = window.pp = {
-  status: {}, chips: [], sheet: [], tools: {}, events: [], chat: [],
+  status: {}, chips: [], sheet: [], tools: {}, events: [], chat: [], rendered: [],
   chatInfo() { return { key: S.key, path: S.path, cwd: S.cwd, status: S.extUI?.status || new Map(), streaming: S.streaming }; },
   async control(command, args) {
     if (!S.key) await reopen();
@@ -539,6 +540,7 @@ function renderAll() {
   collapseTurns();
   updateEmpty();
   scrollBottom(true);
+  ppRun(pp.rendered);
 }
 function greeting() {
   const h = new Date().getHours();
