@@ -785,9 +785,9 @@ private struct Composer: View {
     @Bindable var session: ChatSession
     @State private var images: [ImageAttachment] = []
     @State private var picks: [PhotosPickerItem] = []
-    @State private var showPicker = false
     @State private var sending = false
-    @FocusState private var focused: Bool
+    /// The keyboard. ComposerTextView focuses itself and reports taps back.
+    @State private var focused = false
 
     private var hasText: Bool { !session.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -815,27 +815,30 @@ private struct Composer: View {
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                TextField(session.isStreaming ? "Steer pi…" : "Message pi", text: $session.composer, axis: .vertical)
-                    .lineLimit(1...8)
-                    .focused($focused)
-                    // A taller first line than one line of text: an easy tap
-                    // target for a thumb, not a hairline.
-                    .frame(minHeight: 44, alignment: .topLeading)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 10)
-                    .padding(.bottom, 3)
-                    .accessibilityIdentifier("composer")
+                ZStack(alignment: .topLeading) {
+                    if session.composer.isEmpty {
+                        Text(session.isStreaming ? "Steer pi…" : "Message pi")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                    ComposerTextView(text: $session.composer, focused: $focused,
+                                     onImage: addImage)
+                        // A taller first line than one line of text: an easy
+                        // tap target for a thumb, not a hairline.
+                        .frame(minHeight: 44, alignment: .topLeading)
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 3)
                 if let hint = session.composerHint {
                     Text(hint).font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
                         .accessibilityIdentifier("composer-hint")
                 }
                 HStack(spacing: 8) {
-                    Menu {
-                        Button("Photo Library", systemImage: "photo.on.rectangle") { showPicker = true }
-                        Button("Paste Image", systemImage: "doc.on.clipboard") { pasteImage() }
-                            .disabled(!UIPasteboard.general.hasImages)
-                    } label: {
+                    PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
                         Image(systemName: "plus").font(.title3).frame(width: 34, height: 34)
                     }
                     .accessibilityLabel("Attach images")
@@ -873,15 +876,12 @@ private struct Composer: View {
                 picks = []
             }
         }
-        .photosPicker(isPresented: $showPicker, selection: $picks, maxSelectionCount: 4, matching: .images)
     }
 
-    /// A picture copied from Photos or another app: the phone's own way in,
-    /// since a touch keyboard has no ⌘V and SwiftUI's paste command is macOS
-    /// only.
-    private func pasteImage() {
-        guard let image = UIPasteboard.general.image,
-              let data = image.jpegData(compressionQuality: 1),
+    /// A pasted picture, downscaled like a picked one (ComposerTextView hands
+    /// over what the system's Paste produced).
+    private func addImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 1),
               let a = ImageShrinker.attachment(from: data) else { return }
         images.append(a)
     }
