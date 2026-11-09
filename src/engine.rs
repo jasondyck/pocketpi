@@ -635,6 +635,9 @@ impl Engine {
         if let Some(t) = tools {
             extra.extend(["--tools".into(), t.join(",")]);
         }
+        if review || !stage.wants_mcp() {
+            extra.push("--no-mcp".into());
+        }
         extra.extend(["--name".into(), format!("{} · {}", wf.name, stage.label())]);
 
         let feedback = vars.get("feedback").cloned().unwrap_or_default();

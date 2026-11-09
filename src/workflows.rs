@@ -124,6 +124,11 @@ pub struct Stage {
     pub allow_fail: bool,
     #[serde(default)]
     pub timeout_minutes: Option<u32>,
+    /// agent: start pi's MCP servers (a browser, docs lookup). Off by default:
+    /// each costs ~150 MB per stage and most stages only edit code. Also on
+    /// when `tools` names `codemode` or an `mcp__` tool.
+    #[serde(default)]
+    pub mcp: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +154,13 @@ fn two() -> u32 {
 impl Stage {
     pub fn label(&self) -> String {
         self.name.clone().unwrap_or_else(|| self.id.clone())
+    }
+
+    /// Whether this stage's pi gets MCP servers (see `mcp`). Review stages never do.
+    pub fn wants_mcp(&self) -> bool {
+        self.kind == StageKind::Agent
+            && (self.mcp
+                || self.tools.as_ref().is_some_and(|t| t.iter().any(|t| t == "codemode" || t.starts_with("mcp__"))))
     }
 }
 
@@ -426,7 +438,8 @@ pub fn schema_doc() -> Value {
             "inputs": "[{name, description, required, default}] available as {{input.name}}",
             "max_cost": "optional USD cap for the whole run",
             "improve": "'off' | 'suggest' (default: after notable runs a reviewer proposes improvements for the user to apply) | 'auto' (safe improvements are applied automatically)",
-            "stages": "[{id, type:'agent'|'shell'|'review'|'approval', name?, needs?:[ids], prompt?, run?, model?, thinking?, tools?, on_fail?:{goto, max}, allow_fail?, timeout_minutes?}]"
+            "stages": "[{id, type:'agent'|'shell'|'review'|'approval', name?, needs?:[ids], prompt?, run?, model?, thinking?, tools?, on_fail?:{goto, max}, allow_fail?, timeout_minutes?, mcp?}]",
+            "stage_mcp": "agent stages run without pi's MCP servers (browser, docs lookup) unless the stage sets mcp:true or lists codemode/mcp__* in tools"
         },
         "stage_types": {
             "agent": "pi works in the worktree. prompt is required. Changes are committed automatically after the stage.",
@@ -473,6 +486,7 @@ mod tests {
         assert_eq!(topo_order(&ex).unwrap(), vec!["plan", "build", "test", "review", "approve", "pr"]);
         assert!(downstream_of(&ex, "build").contains("pr"));
         assert!(!downstream_of(&ex, "build").contains("plan"));
+        assert!(ex.stages.iter().all(|s| !s.wants_mcp()));
     }
 
     #[test]
@@ -499,5 +513,18 @@ mod tests {
         v.insert("input.task".to_string(), "fix it".to_string());
         assert_eq!(render("Do: {{input.task}} {{missing}}!", &v), "Do: fix it !");
         assert_eq!(render("open {{ unclosed", &v), "open {{ unclosed");
+    }
+
+    #[test]
+    fn stages_skip_mcp_unless_asked() {
+        let w = wf(serde_json::json!([
+            {"id": "a", "type": "agent", "prompt": "x"},
+            {"id": "b", "type": "agent", "prompt": "x", "mcp": true},
+            {"id": "c", "type": "agent", "prompt": "x", "tools": ["read", "codemode"]},
+            {"id": "d", "type": "agent", "prompt": "x", "tools": ["mcp__playwright__*"]},
+            {"id": "e", "type": "review", "prompt": "x", "mcp": true}
+        ]));
+        let got: Vec<bool> = w.stages.iter().map(Stage::wants_mcp).collect();
+        assert_eq!(got, vec![false, true, true, true, false]);
     }
 }
