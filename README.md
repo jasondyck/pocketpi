@@ -16,7 +16,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Export a chat as pi's HTML page (open or download; Quick Look and share on iOS) or download its session JSONL; compact with an optional "Focus the summary on…" (`src/exports.rs`, `web/chat-more.js`)
 - **Settings › Usage** (`src/usage.rs`): cost and tokens per day, model, provider and project over 7/30/90 days, from every session file (cached by mtime + size); subscription costs (OAuth logins, Codex, Copilot) shown as the API-rate equivalent and kept out of "spent", OpenCode Go's pool on its own
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
-- **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs with `--no-tools` and a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
+- **Chat tab** (iOS): plain conversations in `~/.local/share/pocketpi/chat`, where pi runs without built-in tools but with `codemode` (`--no-tools --tools +codemode`) so MCP tools such as Playwright stay reachable, plus a chat system prompt; these chats stay out of the projects and the Work list (`/api/sessions?chat=1` lists them)
 - **llama.cpp router** (`src/llama.rs`): `/api/llama` lists the router pi is logged in to (`/login llama.cpp`) and `/api/llama/load` loads a model on it (unloading the others), so the app can pick local models (iOS and the web's model sheet, under *Local*)
 - **iOS app** (`ios/`, early): native SwiftUI client for the same API; see `ios/README.md`
 - **APNs** (`src/apns.rs`): the same notifications go to the iOS app when `~/.config/pocketpi/apns/AuthKey_<KEYID>.p8` exists (team/topic: `POCKETPI_APNS_TEAM`, `POCKETPI_APNS_TOPIC`)

@@ -170,7 +170,8 @@ pub struct AppState {
 pub enum Kind {
     /// A normal chat (Work tab, the web UI).
     Chat,
-    /// The app's Chat tab: pi without tools.
+    /// The app's Chat tab: pi without built-in tools, but with codemode so
+    /// MCP tools (such as a browser) stay reachable.
     ChatTab,
     /// A workflow stage, driven by the engine.
     Stage,
@@ -511,7 +512,8 @@ fn find_live_by_path(app: &AppState, path: &str) -> Option<Arc<Live>> {
 
 const CHAT_SYSTEM_PROMPT: &str = "You are a helpful, knowledgeable assistant chatting with the user from their phone. \
 Answer directly and conversationally. Use Markdown when it helps (lists, tables, code blocks). \
-You have no tools in this chat: you can't read files, run commands or browse.";
+You have no built-in tools in this chat: you can't read files or run commands directly. \
+When the session provides the codemode tool, use it to call available MCP tools (for example Playwright browser automation) for web lookups and research.";
 
 fn is_chat_dir(app: &AppState, cwd: &str) -> bool {
     std::path::Path::new(cwd) == app.chat_dir
@@ -537,8 +539,8 @@ fn install_control_extension(data_dir: &std::path::Path) -> Option<PathBuf> {
     Some(path)
 }
 
-/// A chat's pi (new or reopened): the Chat tab's without tools, every other
-/// one with the pocketpi-control extension.
+/// A chat's pi (new or reopened): the Chat tab's without built-in tools,
+/// every other one with the pocketpi-control extension.
 async fn spawn_pi(app: &Arc<AppState>, cwd: &str, session: Option<&str>) -> AppResult<Arc<Live>> {
     let kind = if is_chat_dir(app, cwd) { Kind::ChatTab } else { Kind::Chat };
     spawn_live(app, cwd, session, &[], kind, None).await
@@ -565,8 +567,14 @@ async fn spawn_live(
         cmd.arg("--session").arg(s);
     }
     // The Chat tab: a conversation, not a coding agent (also on reopen).
+    // Keep codemode active so `exposure: "codemode"` MCP tools (a browser,
+    // docs lookup) are reachable; --no-tools alone filters MCP tools out.
     if kind == Kind::ChatTab {
-        cmd.arg("--no-tools").arg("--system-prompt").arg(CHAT_SYSTEM_PROMPT);
+        cmd.arg("--no-tools")
+            .arg("--tools")
+            .arg("+codemode")
+            .arg("--system-prompt")
+            .arg(CHAT_SYSTEM_PROMPT);
     }
     let control = kind == Kind::Chat && app.control_ext.is_some();
     if control {
