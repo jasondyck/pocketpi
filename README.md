@@ -18,6 +18,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Fork from an earlier message of yours (it comes back into the message box to edit and resend) and clone a chat; both carry on in a new session file, listed as "Forked from …"
 - Session tree (pi's `/tree`): every branch of a chat with its labels, compactions and branch summaries; go back to any point in the same session file (a prompt comes back into the message box), optionally summarizing the branch you leave; label entries. Session info: file, id, parent, counts by role, cost per model
 - **Titles and outline**: a new chat is named after its first exchange, then titled again after the 3rd and 10th prompt only if its topic changed (dsh's rules; the person's messages go in as a JSON array, never cut past 4 KiB, on a cheap tool-less `pi -p`). Renaming a chat pins its title for good (`title` in `~/.local/share/pocketpi/chats/<session>.json`). **Outline** (chat sheet on the web, title menu on iOS): one line per prompt of the active branch with the reply it got; tap one to jump to it (`GET /api/sessions/outline?path=`, `src/outline.rs`, cached by mtime + size)
+- **Terminal** (web only; `src/term.rs`, `web/term.js`): "Terminal" in the chat sheet opens your `$SHELL` (a login shell, `/bin/sh` if unset) in the chat's folder, in the side panel, with tabs for up to 8 terminals. Terminals keep running when the panel closes or the page reloads: the open ones are remembered in the browser and reattach with the last 256 KiB of output; one with nothing attached for 2 h is closed. Typing while disconnected is dropped, never sent later. Closing a tab hangs up the shell's whole process group. It runs over `GET /api/term/ws?root=&id=` (a WebSocket), whose `root` must be a live chat's or a project's folder. xterm.js 5.5.0 and its fit addon (MIT) are vendored in `web/vendor/xterm/` and loaded on first open
 - Export a chat as pi's HTML page (open or download; Quick Look and share on iOS) or download its session JSONL; compact with an optional "Focus the summary on…" (`src/exports.rs`, `web/chat-more.js`)
 - **Settings › Usage** (`src/usage.rs`): cost and tokens per day, model, provider and project over 7/30/90 days, from every session file (cached by mtime + size); subscription costs (OAuth logins, Codex, Copilot) shown as the API-rate equivalent and kept out of "spent", OpenCode Go's pool on its own
 - Vanilla JS/CSS embedded in the binary; Geist fonts (OFL, see `web/GEIST-OFL.txt`)
@@ -161,6 +162,7 @@ schema with `node scripts/check-safety-policies.mjs <permissions.schema.json>`.
 Loopback only. Remote access is meant to go through `tailscale serve` (tailnet only, never Funnel):
 requests must come from loopback and carry `Tailscale-User-Login` (or a localhost Host header),
 Funnel requests are refused, and every POST needs `X-Pocketpi: 1` so other sites can't drive it.
+The terminal's WebSocket upgrade is a GET, so instead its `Origin` must match `Host`.
 Anyone allowed in can run pi, which has shell access as your user. Treat it like SSH.
 
 ## Icons
