@@ -7,6 +7,7 @@ A small, phone-first web UI for the [pi coding agent](https://github.com/earendi
 - Chats are pi's own session files, so terminal and web chats are the same list
 - **Projects**: chats grouped by project folder (auto-discovered from session folders, pin/rename/hide in `~/.config/pocketpi/projects.json`)
 - **Workflows**: DAGs of agent / shell / review / approval stages, a git worktree + branch per run, loop-backs on failure, cost caps. Sensors: manual, chat, cron schedule, git commits/PRs/issues (polled), per-workflow webhook URLs. Created by asking pi in any chat (`extensions/pocketpi-workflows.ts`). Definitions in `~/.config/pocketpi/workflows/`, runs in `~/.local/share/pocketpi/`
+- **Subagents** (`src/subagents.rs`): live progress for pi-subagents' runs, read from the extension's own `status.json` / `output-<n>.log` files (never scraped from model output). The chat's tool card gets a live agent line, a top-bar count shows what's running, and a Subagents sheet lists each run's steps, current tool, recent output, tokens, cost and log tail; a step's child session opens as a chat while it works. The iOS app has the same sheet from the chat title menu and a running line above the composer
 - **Web push** (VAPID, pure Rust): approvals, finished/failed runs, long chat replies finished while the phone is locked. iOS needs the app on the Home Screen
 - **push-review** (`extensions/push-review.ts`): pi's own `git push` is reviewed by `opencode-go/deepseek-v4-pro` first
 - Model + thinking switcher, context ring, cost, compaction, steering while pi works or queueing a message until the turn ends (long-press or right-click send; Alt+Enter), `!cmd` / `!!cmd` shell commands (output into or kept out of the context) with a live card and Stop, a retry countdown with "Stop retrying", stop, image attachments, slash commands, extension dialogs
@@ -104,6 +105,29 @@ broadcasts `{"type":"pocketpi_session","file":...}`. `cycle_model`,
 | `GET /api/exports/{name}` | `?download=1&title=` | the export, `text/html` with `Content-Security-Policy: sandbox` (its scripts can't call the API); only names the server made |
 | `GET /api/sessions/file` | `?path=<session file>&title=` | the session JSONL as an attachment, streamed; only `.jsonl` files that resolve inside the sessions or Chat-tab folder |
 | `GET /api/usage` | `?days=7\|30\|90&tz=<minutes east of UTC>` | `{totals, billing: {api, subscription, pool}, byDay, byModel, byProvider, byProject, files, ms}`; usage from assistant messages, `usage` entries and compaction / branch summaries, fork copies counted once |
+
+## Subagents (`src/subagents.rs`)
+
+pi-subagents (npm `pi-subagents`) keeps machine-readable run state in
+`<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<runId>/`: `status.json`
+(what its TUI widget reads), `events.jsonl` and `output-<n>.log`. pocketpi
+reads those files rather than scraping the model's tool output, so the web and
+iOS views show the same steps, tools, output and usage as pi's own widget.
+
+| Route | Answer |
+|---|---|
+| `GET /api/subagents[?session=<session file>][&all=1]` | `{at, total, runs}`: recent runs, live first. Without `session` (or with `all=1`), every chat's runs. A run has `runId`, `toolCallId` (pi's tool call), `mode` (single/chain/parallel/workflow), `state`, `active`, `sessionId`, `cwd`, timestamps, `tokens`, `cost` and `steps` |
+| `GET /api/subagents/{runId}` | `{at, run, outputs: [{name, text}]}`: one run plus the bounded tails of its `output-<n>.log` files |
+
+A step has `agent`, `label`, `status`, tokens, model, the child's
+`sessionFile` (open it as a chat), `recentTools` (`read src/main.rs`) and
+`recentOutput` (its last lines). A workflow root's steps carry their own
+child's live detail, merged from the child run's `status.json`. Runs with a
+parent workflow that is present are listed once, as its step. Artifacts are
+capped (2 MB a file, 48 h old, 80 runs); pi-subagents deletes them itself after
+a day. Set `POCKETPI_SUBAGENTS_DIR` to read a different root (the tested
+fixtures use this). Project-scoped `.pi/subagents/` and nested async roots are
+not read.
 
 ## Safety (`src/safety.rs`, `src/dialogs.rs`)
 

@@ -30,6 +30,7 @@ mod pi_context;
 mod pi_settings_raw;
 mod exports;
 mod usage;
+mod subagents;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -136,7 +137,8 @@ pub struct AppState {
     pub(crate) agent_dir: PathBuf,
     pub(crate) home: PathBuf,
     /// Where the app's Chat tab keeps its chats: plain conversations, pi
-    /// without tools, left out of the projects and the Work chat list.
+    /// without built-in tools but with codemode for MCP tools, left out of
+    /// the projects and the Work chat list.
     pub(crate) chat_dir: PathBuf,
     pub(crate) allowed_users: Option<Vec<String>>,
     pub(crate) suggest_model: String,
@@ -286,6 +288,7 @@ async fn main() {
         .route("/manage.js", get(|| async { static_file("manage.js") }))
         .route("/tree.js", get(|| async { static_file("tree.js") }))
         .route("/chat-tools.js", get(|| async { static_file("chat-tools.js") }))
+        .route("/agents.js", get(|| async { static_file("agents.js") }))
         .route("/chat-more.js", get(|| async { static_file("chat-more.js") }))
         .route("/manage/{file}", get(manage_page_file))
         .route("/api/manage/pages", get(|| async { Json(json!({ "pages": MANAGE_PAGES.iter().map(|p| p.0).collect::<Vec<_>>() })) }))
@@ -364,6 +367,7 @@ async fn main() {
         .route("/api/exports/{name}", get(exports::serve_export))
         .route("/api/sessions/file", get(exports::download_session))
         .route("/api/usage", get(usage::route))
+        .merge(subagents::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -459,6 +463,7 @@ fn static_file(name: &str) -> Response {
         "manage.js" => (include_bytes!("../web/manage.js"), "text/javascript; charset=utf-8"),
         "tree.js" => (include_bytes!("../web/tree.js"), "text/javascript; charset=utf-8"),
         "chat-tools.js" => (include_bytes!("../web/chat-tools.js"), "text/javascript; charset=utf-8"),
+        "agents.js" => (include_bytes!("../web/agents.js"), "text/javascript; charset=utf-8"),
         "chat-more.js" => (include_bytes!("../web/chat-more.js"), "text/javascript; charset=utf-8"),
         "icon.svg" => (include_bytes!("../web/icon.svg"), "image/svg+xml"),
         "icon-180.png" => (include_bytes!("../web/icon-180.png"), "image/png"),

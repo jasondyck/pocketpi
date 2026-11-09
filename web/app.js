@@ -304,6 +304,7 @@ function makeCard(call) {
         if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text, 6000, api.name === "bash"));
         for (const p of r.content) if (p.type === "image") { const img = el("img"); img.src = `data:${p.mimeType};base64,${p.data}`; sec("Image", img); }
       } else if (!r) sec("Status", el("pre", "", "waiting…"));
+      window.ppAgents?.cardBody?.(body, api);
     },
   };
   d.addEventListener("toggle", () => { if (d.open) api.renderBody(); });
@@ -712,6 +713,7 @@ function onEvent(ev) {
 
 async function afterRun() {
   refreshStats();
+  window.ppAgents?.sync?.();
   maybeSuggest();
   if (!S.path) {
     try { const st = await cmd({ type: "get_state" }); S.state = st; if (st.sessionFile) setPath(st.sessionFile); } catch {}
@@ -782,6 +784,7 @@ async function loadSnapshot() {
     updateHeader(); updateChips();
     refreshStats(); loadLevels();
     maybeSuggest();
+    window.ppAgents?.sync?.();
   } catch (e) { banner(esc(e.message), true); }
 }
 async function refreshStats() {
@@ -1151,6 +1154,7 @@ async function openChatSheet() {
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
     window.ppChatTools?.sheetEntry(b);
+    window.ppAgents?.sheetEntry?.(b);
     window.ppChat?.chatSheet(b);
     window.ppManage?.sheetEntry(b);
     b.append(opt(ICON.power, "Stop pi process", "Frees memory; reopening the chat restarts it", async () => {
