@@ -94,7 +94,7 @@ done
 curl -fs "http://127.0.0.1:$PORT/api/version" >/dev/null || { echo "server did not start:"; cat "$SCRATCH/server.log"; exit 1; }
 READY_MS=$(python3 -c "print(int(($(date +%s.%N) - $t0) * 1000))")
 
-python3 scripts/bench/run.py \
+python3 -u scripts/bench/run.py \
   --port "$PORT" --pid "$SERVER" --scratch "$SCRATCH" --bin "$BIN" \
   --sessions-json "$SCRATCH/sessions.json" --repo "$H/projects/bigrepo" \
   --duration "$DURATION" --concurrency "$CONC" --soak "$SOAK" --sse-clients "$SSE_CLIENTS" \

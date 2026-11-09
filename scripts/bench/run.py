@@ -441,7 +441,8 @@ def terminals(port, pid, root, n, sampler):
 
 # ------------------------------------------------------------------ soak
 
-def soak(pool, port, paths, secs, conc, sampler):
+def soak(pool, port, pid, paths, secs, conc, sampler):
+    idle_before = snap(pid)
     sampler.phase = "soak"
     t0 = time.time()
     # In 5 s slices, so each slice's errors and rps are visible.
@@ -476,10 +477,14 @@ def soak(pool, port, paths, secs, conc, sampler):
         anon_last = statistics.median(s["rssanon_kb"] for _, s in ss[-third:])
         growth = (last - first) / first * 100
         rss_grows = growth > 5 and slope * 60 > 512
-        fds_grow = fd_last - fd_first > 8
+        # fds under load swing with the requests in flight; a leak shows idle.
+        time.sleep(2)
+        idle_after = snap(pid)
+        fds_grow = idle_after["fds"] - idle_before["fds"] > 4
         out.update({"seconds": round(dur, 1), "rss_first_third_kb": int(first), "rss_last_third_kb": int(last),
                     "rss_growth_pct": round(growth, 1), "anon_first_third_kb": int(anon_first), "anon_last_third_kb": int(anon_last), "rss_slope_kb_per_min": round(slope * 60, 1),
                     "fds_first_third": fd_first, "fds_last_third": fd_last,
+                    "idle_fds_before": idle_before["fds"], "idle_fds_after": idle_after["fds"],
                     "threads_first_third": th_first, "threads_last_third": th_last,
                     "verdict": ("GROWING: " + ", ".join(x for x, y in (("RSS", rss_grows), ("fds", fds_grow)) if y))
                     if (rss_grows or fds_grow) else "stable", **sampler.peak("soak")})
@@ -540,8 +545,8 @@ def print_table(res):
     if k:
         print(f"Soak {k.get('seconds')} s: {k['requests']} requests, {k['errors']} errors, {k['rps']} rps, p99 {k['p99_ms']} ms; "
               f"RSS {k.get('rss_first_third_kb', 0) / 1024:.1f} -> {k.get('rss_last_third_kb', 0) / 1024:.1f} MB "
-              f"({k.get('rss_growth_pct')}%, {k.get('rss_slope_kb_per_min')} KB/min), fds {k.get('fds_first_third')} -> "
-              f"{k.get('fds_last_third')}: {k['verdict']}")
+              f"({k.get('rss_growth_pct')}%, {k.get('rss_slope_kb_per_min')} KB/min), anon {k.get('anon_first_third_kb', 0) / 1024:.1f} -> "
+              f"{k.get('anon_last_third_kb', 0) / 1024:.1f} MB, idle fds {k.get('idle_fds_before')} -> {k.get('idle_fds_after')}: {k['verdict']}")
     p = res["process"]
     print("\nprocess      " + "".join(h.rjust(10) for h in ("RSS MB", "HWM MB", "anon MB", "file MB", "threads", "fds")))
     for ph in ("start", "after_load", "after_soak", "end"):
@@ -704,7 +709,7 @@ def main():
         if o.soak:
             print(f"== soak: {o.soak} s of the mix")
             mix = [p for n, p in endpoints.items() if n != "version"]
-            res["soak"] = soak(pool, port, mix, o.soak, o.concurrency, sampler)
+            res["soak"] = soak(pool, port, pid, mix, o.soak, o.concurrency, sampler)
             time.sleep(2)
             res["process"]["after_soak"] = snap(pid)
     time.sleep(1)
