@@ -33,7 +33,10 @@
 //! each turn's numstat are kept in `chat_state` under `"files"`, so they
 //! survive restarts. Outside git, a turn's changed files are the paths its
 //! `edit` and `write` tool calls named. Each settled turn is also announced to
-//! the chat's clients as `{"type":"pocketpi_turn_files", …}`.
+//! the chat's clients as `{"type":"pocketpi_turn_files", …}`. The start
+//! snapshot runs beside the turn, not before it: a tool call that lands
+//! before the snapshot has walked the tree (a model acting within a few
+//! hundred milliseconds of the prompt) counts as part of the "before".
 
 use crate::{AppResult, AppState, Kind, Live, err, exports, projects, sessions};
 use axum::{
@@ -926,6 +929,9 @@ pub async fn diff(repo: &Repo, store: &Path, a: &str, b: &str, paths: &[&str]) -
 
 /// A turn being run: from `agent_start` to `agent_settled`.
 struct Pending {
+    /// Which pi (a restarted chat keeps its key): a turn its predecessor
+    /// never finished doesn't carry over.
+    pi: usize,
     start: u64,
     cwd: PathBuf,
     /// The snapshot at the start (None outside git).
@@ -976,13 +982,14 @@ pub fn observe(app: &Arc<AppState>, live: &Arc<Live>, ty: &str, v: &Value) {
     }
     match ty {
         "agent_start" => {
+            let pi = Arc::as_ptr(live) as usize;
             let mut p = PENDING.lock().unwrap();
-            if p.contains_key(&live.key) {
+            if p.get(&live.key).is_some_and(|t| t.pi == pi) {
                 return; // still the same turn
             }
             let cwd = PathBuf::from(&live.cwd);
             let before = tokio::spawn(snap(snapshots_dir(app), cwd.clone()));
-            p.insert(live.key.clone(), Pending { start: now_ms(), cwd, before, paths: BTreeSet::new() });
+            p.insert(live.key.clone(), Pending { pi, start: now_ms(), cwd, before, paths: BTreeSet::new() });
         }
         "tool_execution_start" => {
             if let Some(p) = PENDING.lock().unwrap().get_mut(&live.key) {
