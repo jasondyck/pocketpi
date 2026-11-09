@@ -35,6 +35,7 @@ mod features;
 mod goal_watch;
 mod chat_state;
 mod outline;
+mod files;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -402,6 +403,7 @@ async fn main() {
         .route("/api/sessions/outline", get(outline::get_outline))
         .route("/api/usage", get(usage::route))
         .merge(subagents::router())
+        .merge(files::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
@@ -710,6 +712,7 @@ async fn spawn_live(
                 let (app3, live3) = (app2.clone(), live2.clone());
                 tokio::spawn(async move { goal_push(&app3, &live3, done).await });
             }
+            files::observe(&app2, &live2, &ty, &v);
             handle_record(&live2, line, v);
             if let Some(d) = dialog {
                 dialogs::opened(&app2, &live2, d);
