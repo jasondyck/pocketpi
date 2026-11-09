@@ -115,6 +115,8 @@ const S = {
   searchRole: "",    // role filter, kept across query edits
   searchSeq: 0,      // bumps to drop a stale response
   searchFocus: null, // chip to focus after the next render (the render replaces it)
+  histFrom: null,   // first message index drawn; null = start at the tail chunk
+  histBusy: false,  // a page of older history is being prepended
 };
 
 // ---------------------------------------------------------------- api
@@ -595,15 +597,88 @@ function applyToolResult(m) {
   const card = S.cards.get(m.toolCallId);
   if (card) card.setResult({ content: m.content, details: m.details }, m.isError);
 }
-function renderAll() {
-  const box = $("messages");
-  box.innerHTML = ""; S.cards.clear(); S.cur = null;
-  for (const m of S.msgs) {
-    if (m.role === "user") box.append(renderUser(m));
-    else if (m.role === "assistant") box.append(renderAssistant(m).el);
+// ---------------------------------------------------------------- history window
+// A long chat used to be one DOM tree built on open: hundreds of turns, every
+// tool card, on a phone. DeepSeek Harness' trajectory view opens at the tail
+// and pages older rows in on demand; the same rule here, in turns so a tool
+// call and its result never split. Prepending keeps the scroll position, and
+// nothing already drawn is rebuilt. Tool-result application relies on the
+// slice starting at a user message, so every call is rendered before its
+// result.
+const HISTORY_CHUNK = coarse ? 8 : 16;
+function turnStarts(msgs) {
+  const starts = [];
+  for (let i = 0; i < msgs.length; i++) if (msgs[i].role === "user") starts.push(i);
+  return starts;
+}
+function renderMessageList(box, msgs, from, to = msgs.length) {
+  for (let i = from; i < to; i++) {
+    const m = msgs[i];
+    if (m.role === "user") {
+      const n = renderUser(m);
+      n.dataset.tk = turnKey(i);
+      box.append(n);
+    } else if (m.role === "assistant") box.append(renderAssistant(m).el);
     else if (m.role === "toolResult") applyToolResult(m);
     else { const n = renderOther(m); if (n) box.append(n); }
   }
+}
+function turnKey(i) { return `${S.path || S.key || ""}#${i}`; }
+/// Where the drawn window starts, snapped to a turn boundary. A snapshot after
+/// a compaction can replace the message list, so an index is never trusted as
+/// a turn start without checking.
+function historyFrom() {
+  const starts = turnStarts(S.msgs);
+  let from = Math.min(S.histFrom ?? 0, S.msgs.length);
+  if (from > 0 && S.msgs[from]?.role !== "user") from = starts.find((s) => s >= from) ?? 0;
+  return { starts, from, earlier: starts.filter((s) => s < from).length };
+}
+function historyMoreButton(n) {
+  const b = el("button", "history-more", `↑ ${plural(n, "earlier turn")}`);
+  b.type = "button";
+  b.onclick = () => loadEarlier();
+  return b;
+}
+function loadEarlier() {
+  if (S.histBusy || !S.msgs.length || S.histFrom == null) return;
+  const { starts, from, earlier } = historyFrom();
+  const k = earlier;
+  if (k === 0) return;
+  S.histBusy = true;
+  try {
+    const newFrom = starts[Math.max(0, k - HISTORY_CHUNK)];
+    const sc = $("scroller");
+    const prevH = sc.scrollHeight, prevTop = sc.scrollTop;
+    const box = $("messages");
+    const btn = box.querySelector(".history-more");
+    const frag = document.createDocumentFragment();
+    renderMessageList(frag, S.msgs, newFrom, from);
+    // New pages go above everything already drawn; the button stays on top of
+    // them (inserting before the button would stack pages below older ones).
+    box.prepend(frag);
+    S.histFrom = newFrom;
+    const left = Math.max(0, k - HISTORY_CHUNK);
+    if (left > 0) {
+      if (btn) { btn.textContent = `↑ ${plural(left, "earlier turn")}`; box.prepend(btn); }
+      else box.prepend(historyMoreButton(left));
+    } else if (btn) btn.remove();
+    collapseTurns();
+    // Keep what the reader is looking at still, instead of jumping.
+    sc.scrollTop = prevTop + (sc.scrollHeight - prevH);
+  } finally {
+    S.histBusy = false;
+  }
+}
+function renderAll() {
+  const box = $("messages");
+  box.innerHTML = ""; S.cards.clear(); S.cur = null;
+  if (S.histFrom == null) {
+    const starts = turnStarts(S.msgs);
+    S.histFrom = starts.length > HISTORY_CHUNK ? starts[starts.length - HISTORY_CHUNK] : 0;
+  }
+  const { from, earlier } = historyFrom();
+  if (earlier > 0) box.append(historyMoreButton(earlier));
+  renderMessageList(box, S.msgs, from);
   if (S.bash) box.append(S.bash.wrap); // still running: not in pi's messages yet
   collapseTurns();
   updateEmpty();
@@ -663,13 +738,15 @@ function activityLabel(nodes) {
 }
 function collapseTurns() {
   const box = $("messages");
-  const turns = [[]];
+  // Key a turn by the message it starts at, not its ordinal position: loading
+  // older history prepends turns, and an ordinal key would move the fold state.
+  const turns = [{ key: "pre", wrappers: [] }];
   for (const child of box.children) {
-    if (child.classList.contains("user")) { turns.push([]); continue; }
-    if (child.classList.contains("msg")) turns[turns.length - 1].push(child);
+    if (!child.classList.contains("msg")) continue;
+    if (child.classList.contains("user")) turns.push({ key: child.dataset.tk || `t${turns.length}`, wrappers: [] });
+    turns[turns.length - 1].wrappers.push(child);
   }
-  turns.forEach((wrappers, ti) => {
-    const key = String(ti);
+  turns.forEach(({ key, wrappers }) => {
     const items = [];
     for (const w of wrappers) for (const n of w.children) {
       if (n.classList.contains("activity") || n.classList.contains("actions") || n.classList.contains("errbox")) continue;
@@ -733,7 +810,7 @@ function onMessageStart(m) {
   } else if (m.role === "user") {
     clearSuggestions();
     S.msgs.push(m);
-    const n = renderUser(m); n.classList.add("enter"); $("messages").append(n);
+    const n = renderUser(m); n.dataset.tk = turnKey(S.msgs.length - 1); n.classList.add("enter"); $("messages").append(n);
     if (!S.state?.sessionName) updateHeader();
   } else if (m.role === "toolResult") {
     // handled on message_end
@@ -898,7 +975,9 @@ async function loadSnapshot() {
   try {
     const [m, st] = await Promise.all([cmd({ type: "get_messages" }), cmd({ type: "get_state" })]);
     if (seq !== snapshotSeq) return;
-    S.msgs = m.messages || []; S.state = st;
+    const next = m.messages || [];
+    if (next.length < S.msgs.length) { S.histFrom = null; S.openTurns.clear(); }
+    S.msgs = next; S.state = st;
     followSessionFile(st);
     setStreaming(!!st.isStreaming);
     renderAll();
@@ -1205,6 +1284,7 @@ scroller.addEventListener("scroll", () => {
   S.stick = nearBottom();
   $("jump").hidden = S.stick || S.view !== "chat";
   $("topbar").classList.toggle("scrolled", scroller.scrollTop > 4);
+  if (S.view === "chat" && scroller.scrollTop < 220) loadEarlier();
 }, { passive: true });
 $("jump").onclick = () => { S.stick = true; scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }); };
 new ResizeObserver(() => document.documentElement.style.setProperty("--composer-h", $("composer-wrap").offsetHeight + "px")).observe($("composer-wrap"));
@@ -1665,6 +1745,7 @@ async function openProjectPicker(adding = false) {
 function resetChat() {
   disconnect(); clearSuggestions();
   Object.assign(S, { key: null, path: null, cwd: null, state: null, stats: null, msgs: [], cur: null, commands: null, levels: [] });
+  S.histFrom = null; S.histBusy = false; S.openTurns.clear();
   S.cards.clear(); setStreaming(false); renderQueue(); resetExtUI(); banner(null);
   $("messages").innerHTML = "";
   ppRun(pp.chat, pp.chatInfo());
