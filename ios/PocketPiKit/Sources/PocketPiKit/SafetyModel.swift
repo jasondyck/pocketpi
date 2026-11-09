@@ -22,6 +22,11 @@ public final class SafetyModel {
     public private(set) var chats = PolicyDocument()
     public private(set) var stages = PolicyDocument()
     public private(set) var projects: [ProjectRow] = []
+    /// Auto review (AutoReview.swift): whether its package is installed, its
+    /// config, and its latest decisions. On/off is `chats`' chain.
+    public private(set) var autoReviewInstalled = false
+    public private(set) var autoReview = AutoReviewConfig()
+    public private(set) var reviews: [AutoReviewRecord] = []
     /// Something in progress ("Installing…"), for a spinner.
     public private(set) var working: String?
     public var problem: String?
@@ -39,7 +44,17 @@ public final class SafetyModel {
             async let p = try? client.projects()
             let set = try await settings
             installed = Safety.isInstalled(settings: set.data)
+            autoReviewInstalled = AutoReview.isInstalled(settings: set.data)
             chats = try await c
+            if autoReviewInstalled {
+                async let ar = try? client.config(.autoReview)
+                async let rv = try? client.autoReviews()
+                autoReview = (await ar).map { AutoReviewConfig($0) } ?? AutoReviewConfig()
+                reviews = await rv ?? []
+            } else {
+                autoReview = AutoReviewConfig()
+                reviews = []
+            }
             stages = try await s
             let trust = await t?.data ?? [:]
             let defaultTrust = set.data["defaultProjectTrust"]?.string
@@ -76,6 +91,50 @@ public final class SafetyModel {
             ok = true
         }
         await load()
+        return ok
+    }
+
+    /// Install auto review and turn it on. Returns true when it worked
+    /// (chats need a restart to load it).
+    @discardableResult
+    public func installAutoReview() async -> Bool {
+        var ok = false
+        await run("Installing…") {
+            let job = try await client.installAutoReview()
+            guard job.status == "ok" else {
+                throw PocketPiError.unexpected("pi install failed: " + job.output.split(separator: "\n").suffix(3).joined(separator: " "))
+            }
+            ok = true
+        }
+        await load()
+        return ok
+    }
+
+    /// Whether auto review answers the chat policy's asks.
+    public var autoReviewOn: Bool { AutoReview.isOn(chats) }
+
+    /// Turn auto review on or off. Returns true when it changed.
+    @discardableResult
+    public func setAutoReview(_ on: Bool) async -> Bool {
+        var ok = false
+        await run("Saving…") {
+            let r = try await client.setAutoReview(on)
+            chats = r.policy
+            autoReview = AutoReviewConfig(r.config)
+            ok = true
+        }
+        return ok
+    }
+
+    /// Change auto review's config. Returns true when it was written (pi
+    /// reads it when it starts, so chats need a restart).
+    @discardableResult
+    public func patchAutoReview(_ patch: PiConfigPatch) async -> Bool {
+        var ok = false
+        await run("Saving…") {
+            autoReview = AutoReviewConfig(try await client.patchConfig(.autoReview, patch))
+            ok = true
+        }
         return ok
     }
 

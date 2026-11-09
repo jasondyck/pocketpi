@@ -141,4 +141,60 @@ extension IntegrationTests {
         #expect(info["stage_policy_active"]?.bool == true)
         #expect(info["package"]?.string == Safety.package)
     }
+
+    @Test func autoReviewRoundTrip() async throws {
+        // Install (fake-pi adds it to settings.json), which also turns it on
+        // and writes the recommended config.
+        let job = try await client.installAutoReview()
+        #expect(job.status == "ok")
+        #expect(AutoReview.isInstalled(settings: try await client.config(.settings).data))
+        let info = try await client.safetyInfo()
+        #expect(info["auto_review"]?["package"]?.string == AutoReview.package)
+        #expect(info["auto_review"]?["link"]?.string == AutoReview.link)
+        var chats = try await client.policy(.chats)
+        #expect(AutoReview.isOn(chats))
+        #expect(chats.rules(for: "path_write").contains { $0.pattern == "~/.pi/agent/settings.json" && $0.action == .deny })
+        var cfg = AutoReviewConfig(try await client.config(.autoReview))
+        #expect(cfg.exists)
+        #expect(cfg.preset == .claudeCode)
+        #expect(cfg.modelKey == "opencode-go/claude-haiku-5-5")
+        #expect(cfg.followUpReviews == "off")
+        #expect(!cfg.claudeViaOpenCodeGo)
+
+        // The settings rows' patches; a config write bumps the epoch.
+        let before = try await client.piStatus().configEpoch
+        cfg = AutoReviewConfig(try await client.patchConfig(.autoReview, AutoReviewConfig.followUpPatch("")))
+        #expect(cfg.followUpReviews == nil && cfg.claudeViaOpenCodeGo)
+        cfg = AutoReviewConfig(try await client.patchConfig(.autoReview, AutoReviewConfig.modelPatch("")))
+        #expect(cfg.modelKey == nil && !cfg.claudeViaOpenCodeGo)
+        cfg = AutoReviewConfig(try await client.patchConfig(.autoReview, AutoReviewConfig.reasoningPatch("medium")))
+        #expect(cfg.reasoning == "medium")
+        cfg = AutoReviewConfig(try await client.patchConfig(.autoReview, AutoReviewConfig.presetPatch(.codex)))
+        #expect(cfg.preset == .codex && cfg.reasoning == "medium")
+        #expect(try await client.piStatus().configEpoch > before)
+
+        // The review log test-linux.sh seeded, newest first.
+        let reviews = try await client.autoReviews()
+        #expect(reviews.map(\.id) == ["r2", "r1"])
+        #expect(reviews.first?.outcomeLabel == "Asked you · you denied")
+        #expect(reviews.first?.detail().hasPrefix("provider-error · ") == true)
+        #expect(reviews.last?.outcomeLabel == "Allowed")
+        #expect(reviews.last?.subject == "rm -rf build")
+        #expect(reviews.last?.detail().hasPrefix("4.0 s · claude-haiku-5-5 · ") == true)
+        #expect(reviews.last?.detail().hasSuffix(" min ago") == true)
+
+        // Off takes only the link out: the config stays, and on again keeps it.
+        let m = SafetyModel(client: client)
+        await m.load()
+        #expect(m.autoReviewInstalled && m.autoReviewOn && m.reviews.count == 2)
+        #expect(await m.setAutoReview(false))
+        #expect(!m.autoReviewOn && m.problem == nil)
+        chats = try await client.policy(.chats)
+        #expect(!AutoReview.isOn(chats))
+        #expect(await m.setAutoReview(true))
+        #expect(m.autoReviewOn && m.autoReview.preset == .codex)
+        #expect(await m.patchAutoReview(AutoReviewConfig.reasoningPatch("")))
+        #expect(m.autoReview.reasoning == nil)
+        await m.setAutoReview(false)
+    }
 }

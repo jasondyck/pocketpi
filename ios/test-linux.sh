@@ -103,6 +103,25 @@ recs = [{"type": "session", "version": 3, "id": "usage-seed", "timestamp": iso(n
          "usage": {"input": 0, "output": 0, "cacheRead": 50000, "cacheWrite": 0, "totalTokens": 50000, "cost": {"total": 0.5}}}]
 open(sys.argv[1], "w").write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in recs))
 PY
+  # pi-permission-system's review log with two auto-review decisions, for
+  # Settings › Safety's Recent reviews: an allow, and a defer the person denied.
+  mkdir -p "$A/extensions/pi-permission-system/logs"
+  python3 - "$A/extensions/pi-permission-system/logs/pi-permission-system-permission-review.jsonl" <<'PY'
+import json, sys, time
+def iso(s): return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(s))
+t = time.time() - 300
+recs = [
+    {"timestamp": iso(t), "event": "permission_request.waiting", "requestId": "r1", "surface": "bash", "command": "rm -rf build"},
+    {"timestamp": iso(t + 4), "event": "auto_review.decision", "requestId": "r1", "outcome": "allow", "durationMs": 4000,
+     "model": "claude-haiku-5-5", "provider": "opencode-go", "stage": "fast"},
+    {"timestamp": iso(t + 4), "event": "permission_request.approved", "requestId": "r1",
+     "decidedBy": {"kind": "authorizer", "name": "auto-review", "verdict": "allow", "reason": None}},
+    {"timestamp": iso(t + 60), "event": "permission_request.waiting", "requestId": "r2", "surface": "bash", "command": "git push --force"},
+    {"timestamp": iso(t + 61), "event": "auto_review.decision", "requestId": "r2", "outcome": "defer", "errorCategory": "provider-error"},
+    {"timestamp": iso(t + 70), "event": "permission_request.denied", "requestId": "r2", "decidedBy": {"kind": "user", "via": "select"}},
+]
+open(sys.argv[1], "w").write("".join(json.dumps(r) + "\n" for r in recs))
+PY
   echo '{"enabledModels":["other/glm-5.2","fake/echo-*"]}' > "$SCRATCH/home/.pi/agent/settings.json"
   # Subagent runs for GET /api/subagents: one live workflow with two steps and
   # an output log. POCKETPI_SUBAGENTS_DIR points the server at this root (the

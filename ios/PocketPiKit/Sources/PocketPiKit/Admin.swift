@@ -8,8 +8,10 @@ import FoundationNetworking
 // pick changes up, and the pocketpi-control extension's commands.
 
 /// One of pi's config files. `settings` and `mcp` also exist per project.
+/// `autoReview` is @mzwing/pi-permission-auto-review's config (AutoReview.swift).
 public enum PiConfigFile: String, Sendable, CaseIterable {
     case settings, auth, models, mcp, trust
+    case autoReview = "auto-review"
 }
 
 /// A config file as the server returns it. `data` is the whole document,

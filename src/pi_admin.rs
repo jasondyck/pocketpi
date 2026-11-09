@@ -12,6 +12,7 @@
 //! | `trust`    | `trust.json`            | –                       |
 //! | `permissions` | `extensions/pi-permission-system/config.json` | same, under `.pi/` |
 //! | `stage-policy` | pocketpi's own `~/.config/pocketpi/safety/stage-policy.json` | – |
+//! | `auto-review` | `extensions/pi-permission-auto-review/config.json` | – |
 //!
 //! `permissions` is @gotgenes/pi-permission-system's policy and
 //! `stage-policy` the one workflow stages run under (src/safety.rs). Their
@@ -19,7 +20,9 @@
 //! not keep: reads add `rules` (each object-valued surface as `[[pattern,
 //! action], ...]`) and a write may set `permission.<surface>` to such a list.
 //! Neither bumps the epoch: the extension rereads its policy when the file
-//! changes, and stages read theirs when they start.
+//! changes, and stages read theirs when they start. `auto-review` is
+//! @mzwing/pi-permission-auto-review's config (which model answers the
+//! policy's asks, src/safety.rs); pi reads it when it starts, so it does.
 //!
 //! Writes are patches, never whole files: `{set: {"a.b": value}, unset: ["c"]}`
 //! changes only the named paths, so keys pocketpi doesn't know about (new pi
@@ -64,6 +67,7 @@ pub enum File {
     Trust,
     Permissions,
     StagePolicy,
+    AutoReview,
 }
 
 impl File {
@@ -76,6 +80,7 @@ impl File {
             "trust" => File::Trust,
             "permissions" => File::Permissions,
             "stage-policy" => File::StagePolicy,
+            "auto-review" => File::AutoReview,
             _ => return None,
         })
     }
@@ -89,6 +94,7 @@ impl File {
             File::Trust => "trust.json",
             File::Permissions => "extensions/pi-permission-system/config.json",
             File::StagePolicy => "stage-policy.json",
+            File::AutoReview => "extensions/pi-permission-auto-review/config.json",
         }
     }
 
@@ -318,6 +324,7 @@ fn file_label(f: File) -> &'static str {
         File::Trust => "trust",
         File::Permissions => "permissions",
         File::StagePolicy => "stage-policy",
+        File::AutoReview => "auto-review",
     }
 }
 

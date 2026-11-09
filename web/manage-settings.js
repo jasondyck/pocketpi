@@ -117,30 +117,6 @@
     return `Plain names replace ${from}; +/− entries then apply in order.`;
   }
 
-  // The models pi can use: get_available_models from a running chat's pi, or
-  // from a pi started for the purpose (no messages, so no session file) and
-  // closed again. Kept for a minute.
-  let modelCache = null;
-  async function availableModels(ctx) {
-    if (modelCache && Date.now() - modelCache.at < 60000) return modelCache.list;
-    const ask = async (key) => {
-      const r = await ctx.api(`/api/s/${key}/cmd`, { type: "get_available_models" });
-      if (r.success === false) throw new Error(r.error || "get_available_models failed");
-      return r.data?.models || [];
-    };
-    let list = null;
-    const live = (ctx.status()?.live || []).filter((l) => l.kind !== "stage");
-    const pick = live.find((l) => l.kind === "chat" && !l.stale) || live[0];
-    if (pick) list = await ask(pick.key).catch(() => null);
-    if (!list) {
-      const t = await ctx.api("/api/new", { cwd: "~" });
-      try { list = await ask(t.key); } finally { ctx.api(`/api/s/${t.key}/close`, {}).catch(() => {}); }
-    }
-    list.sort((a, z) => a.provider.localeCompare(z.provider) || (a.name || a.id).localeCompare(z.name || z.id));
-    modelCache = { at: Date.now(), list };
-    return list;
-  }
-
   ppManage.register({
     id: "settings",
     title: "pi settings",
@@ -193,7 +169,7 @@ ${SCOPE_CSS}`);
         scope.cwd = scopeCwd = ""; await load();
       }
       ctx.api("/api/projects").then((r) => { scope.projects = (r.projects || []).filter((p) => p.exists !== false); if (root.isConnected) draw(); }).catch(() => {});
-      let models = modelCache?.list || null;
+      let models = null;
       let saving = false;
 
       async function switchScope(cwd) {
@@ -216,7 +192,7 @@ ${SCOPE_CSS}`);
       }
       async function loadModels() {
         if (models) return models;
-        try { models = await availableModels(ctx); } catch (e) { ctx.toast(`Couldn't list models: ${e.message}`, true); models = null; }
+        try { models = await ctx.models(); } catch (e) { ctx.toast(`Couldn't list models: ${e.message}`, true); models = null; }
         return models || [];
       }
 

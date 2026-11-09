@@ -412,6 +412,8 @@ async fn main() {
         .merge(pi_packages::router())
         .route("/api/safety", get(safety::info))
         .route("/api/safety/recommended", post(safety::use_recommended))
+        .route("/api/safety/auto-review", post(safety::set_auto_review))
+        .route("/api/safety/reviews", get(safety::reviews))
         .route("/api/s/{key}/export", post(exports::export))
         .route("/api/exports/{name}", get(exports::serve_export))
         .route("/api/sessions/file", get(exports::download_session))

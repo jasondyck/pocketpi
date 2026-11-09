@@ -1,8 +1,10 @@
 import PocketPiKit
 import SwiftUI
 
-// Settings › Safety: @gotgenes/pi-permission-system, its rules for chats, each
-// project's Off / Ask / Strict, and the policy workflow stages run under.
+// Settings › Safety: @gotgenes/pi-permission-system, auto review
+// (@mzwing/pi-permission-auto-review: a model answers the chat policy's asks),
+// its rules for chats, each project's Off / Ask / Strict, and the policy
+// workflow stages run under.
 // State and logic are PocketPiKit's SafetyModel; the web twin is
 // web/manage-safety.js.
 
@@ -67,6 +69,53 @@ private struct SafetyList: View {
                 Text("Permission system")
             } footer: {
                 Text("This is pi's own policy file, so it applies to pi in the terminal too, not only to chats here. When pi asks and nobody has the chat open, your phone gets a notification. Changes apply from pi's next tool call.")
+            }
+
+            if model.installed {
+                Section {
+                    if model.autoReviewInstalled {
+                        Toggle(isOn: Binding(
+                            get: { model.autoReviewOn },
+                            set: { on in Task { if await model.setAutoReview(on) { await hub.changed() } } }
+                        )) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Auto review")
+                                Text(AutoReview.status(installed: true, on: model.autoReviewOn))
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(model.working != nil)
+                        .accessibilityIdentifier("safety-auto-review")
+                        AutoReviewSettings(model: model)
+                    } else {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Auto review")
+                            Text(AutoReview.status(installed: false, on: false)).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Button {
+                            Task { if await model.installAutoReview() { await hub.changed() } }
+                        } label: {
+                            Label("Install auto review", systemImage: "arrow.down.circle")
+                        }
+                        .disabled(model.working != nil)
+                        .accessibilityIdentifier("safety-auto-review-install")
+                    }
+                } header: {
+                    Text("Auto review")
+                } footer: {
+                    if !model.autoReviewInstalled { AutoReviewFootnote() }
+                }
+
+                if model.autoReviewInstalled {
+                    Section {
+                        if model.reviews.isEmpty { Text("No reviews yet.").foregroundStyle(.secondary) }
+                        ForEach(model.reviews) { ReviewRow(review: $0) }
+                    } header: {
+                        Text("Recent reviews")
+                    } footer: {
+                        AutoReviewFootnote()
+                    }
+                }
             }
 
             if model.installed || model.chats.exists {
@@ -138,6 +187,151 @@ private struct SafetyList: View {
                 Text("Workflow stages")
             }
         }
+    }
+}
+
+private struct AutoReviewFootnote: View {
+    var body: some View {
+        Text("Each review sends your recent messages and the agent's recent tool calls to the review model's provider. Changes apply to chats started or restarted after them. Turning it on also stops the agent from writing pi's settings, packages and permission policies.")
+    }
+}
+
+/// Auto review's settings: each a patch to its config file, which pi reads
+/// when it starts (so a write asks for a restart).
+private struct AutoReviewSettings: View {
+    @Environment(SettingsHub.self) private var hub
+    let model: SafetyModel
+
+    private var config: AutoReviewConfig { model.autoReview }
+    private func save(_ patch: PiConfigPatch) { Task { if await model.patchAutoReview(patch) { await hub.changed() } } }
+
+    var body: some View {
+        Group {
+            Picker(selection: Binding(get: { config.preset }, set: { save(AutoReviewConfig.presetPatch($0)) })) {
+                ForEach(AutoReview.Preset.allCases, id: \.self) { Text($0.label).tag($0) }
+            } label: {
+                AutoReviewLabel(title: "Rules", detail: "Whose reviewer it copies: Codex's auto-review or Claude Code's auto mode.")
+            }
+            NavigationLink {
+                AutoReviewModelList(model: model)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    AutoReviewLabel(title: "Model", detail: "Which model reviews. It needs a login for its provider.")
+                    Text(config.modelKey ?? "Preset default (\(config.preset.defaultModel))")
+                        .font(.footnote.monospaced()).foregroundStyle(.secondary)
+                }
+            }
+            Picker(selection: Binding(get: { config.reasoning ?? "" }, set: { save(AutoReviewConfig.reasoningPatch($0)) })) {
+                Text("Default (\(config.preset.defaultReasoning))").tag("")
+                ForEach(AutoReview.reasoningLevels, id: \.self) { Text($0).tag($0) }
+            } label: {
+                AutoReviewLabel(title: "Reasoning", detail: "How hard the review thinks (for Claude Code's rules, only its second, careful pass).")
+            }
+            Picker(selection: Binding(get: { config.followUpReviews ?? "" }, set: { save(AutoReviewConfig.followUpPatch($0)) })) {
+                Text("Default (auto)").tag("")
+                ForEach(AutoReview.followUps, id: \.self) { Text(AutoReview.followUpLabel($0)).tag($0) }
+            } label: {
+                AutoReviewLabel(title: "Follow-up reviews", detail: "Continue one review conversation across asks (cheaper with caching). Off sends every review in full.")
+            }
+            if config.claudeViaOpenCodeGo {
+                Text(AutoReviewConfig.claudeViaOpenCodeGoWarning).font(.footnote).foregroundStyle(.orange)
+            }
+        }
+        .disabled(model.working != nil)
+    }
+}
+
+private struct AutoReviewLabel: View {
+    let title: String
+    let detail: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(detail).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The review model: the preset's default or one of pi's models. The list
+/// loads when this opens (it may start a pi, so not with the page).
+private struct AutoReviewModelList: View {
+    @Environment(SettingsHub.self) private var hub
+    @Environment(\.dismiss) private var dismiss
+    let model: SafetyModel
+    @State private var models: [ModelInfo]?
+    @State private var problem: String?
+
+    private var current: String { model.autoReview.modelKey ?? "" }
+
+    var body: some View {
+        List {
+            Section {
+                row("", "Preset default (\(model.autoReview.preset.defaultModel))")
+                if !current.isEmpty, models?.contains(where: { $0.key == current }) != true { row(current, current) }
+            }
+            Section("pi's models") {
+                if let models {
+                    ForEach(models, id: \.key) { m in row(m.key, m.key) }
+                } else if let problem {
+                    Text(problem).foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+        .navigationTitle("Model")
+        .task {
+            guard models == nil else { return }
+            do {
+                models = try await hub.client.availableModels()
+            } catch {
+                problem = "Couldn't list models: \(error.reportable ?? "")"
+            }
+        }
+    }
+
+    private func row(_ key: String, _ label: String) -> some View {
+        Button {
+            Task {
+                if key != current {
+                    let saved = await model.patchAutoReview(AutoReviewConfig.modelPatch(key))
+                    if saved { await hub.changed() }
+                }
+                dismiss()
+            }
+        } label: {
+            HStack {
+                Text(label).font(.callout.monospaced()).foregroundStyle(.primary)
+                Spacer()
+                if key == current {
+                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(.tint)
+                }
+            }
+        }
+    }
+}
+
+/// One of auto review's decisions: what it said, about what, and how fast.
+private struct ReviewRow: View {
+    let review: AutoReviewRecord
+
+    private var color: Color {
+        switch review.kind {
+        case .allowed: return .green
+        case .denied: return .red
+        case .asked: return .orange
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(review.outcomeLabel).font(.footnote.weight(.semibold)).foregroundStyle(color)
+            if !review.subject.isEmpty { Text(review.subject).font(.callout.monospaced()) }
+            if let reason = review.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+            let detail = review.detail()
+            if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary) }
+        }
+        .padding(.vertical, 2)
     }
 }
 

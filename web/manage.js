@@ -36,6 +36,9 @@
 //                        refetches /api/pi/status and shows "Restart to apply"
 //                        if any chat's pi is behind. Returns the status.
 //   status()             last /api/pi/status ({config_epoch, live, control}) or null.
+//   models()             the models pi can use (get_available_models from a
+//                        running chat's pi, or from one started for the purpose
+//                        and closed again), sorted; kept for a minute.
 //   project              the drawer's selected project path ("" = none), for
 //                        project-scoped config (?cwd=).
 //   home                 the server's $HOME.
@@ -126,6 +129,30 @@ window.ppManage = (() => {
     v.append(card);
   }
 
+  // The models pi can use: get_available_models from a running chat's pi, or
+  // from a pi started for the purpose (no messages, so no session file) and
+  // closed again. Kept for a minute.
+  let modelCache = null;
+  async function availableModels() {
+    if (modelCache && Date.now() - modelCache.at < 60000) return modelCache.list;
+    const ask = async (key) => {
+      const r = await api(`/api/s/${key}/cmd`, { type: "get_available_models" });
+      if (r.success === false) throw new Error(r.error || "get_available_models failed");
+      return r.data?.models || [];
+    };
+    let list = null;
+    const live = (status?.live || []).filter((l) => l.kind !== "stage");
+    const pick = live.find((l) => l.kind === "chat" && !l.stale) || live[0];
+    if (pick) list = await ask(pick.key).catch(() => null);
+    if (!list) {
+      const t = await api("/api/new", { cwd: "~" });
+      try { list = await ask(t.key); } finally { api(`/api/s/${t.key}/close`, {}).catch(() => {}); }
+    }
+    list.sort((a, z) => a.provider.localeCompare(z.provider) || (a.name || a.id).localeCompare(z.name || z.id));
+    modelCache = { at: Date.now(), list };
+    return list;
+  }
+
   async function renderPage(p) {
     const v = $("wfview"); v.innerHTML = "";
     const back = el("button", "copy mp-back", `${BACK}Settings`); back.onclick = () => open("");
@@ -139,6 +166,7 @@ window.ppManage = (() => {
       rerender: () => { if (current === me) { leave(); open(p.id); } },
       needsRestart: refreshStatus,
       status: () => status,
+      models: availableModels,
       project: S.project || "",
       home: S.home || "",
       style(css) {

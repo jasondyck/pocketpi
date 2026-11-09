@@ -4,6 +4,12 @@
 // extensions/pi-permission-system/config.json, so the terminal's pi uses it
 // too), each project's Off / Ask / Strict, and the policy workflow stages
 // run under (pocketpi's ~/.config/pocketpi/safety/stage-policy.json).
+// Auto review (@mzwing/pi-permission-auto-review): a model answers the chat
+// policy's asks, so they reach the person only when its review fails. On/off
+// is the policy's authorizerChain (POST /api/safety/auto-review), its settings
+// are pi's extensions/pi-permission-auto-review/config.json (the
+// `auto-review` config file), and its recent decisions come from the review
+// log (GET /api/safety/reviews).
 // Rule lists are ordered: the last matching rule wins. The server hands them
 // out as `rules: {surface: [[pattern, action], ...]}` and takes them back
 // that way (src/pi_admin.rs). The iOS twin is SettingsSafetyPage.swift.
@@ -25,7 +31,29 @@
   const expanded = new Set();
   const STRICT_KEYS = ["permission.bash.*", "permission.write", "permission.edit"];
 
-  const isInstalled = (settings) => (settings?.packages || []).some((p) => String(typeof p === "string" ? p : p?.source || "").includes("@gotgenes/pi-permission-system"));
+  const hasPackage = (settings, name) => (settings?.packages || []).some((p) => String(typeof p === "string" ? p : p?.source || "").includes(name));
+  const isInstalled = (settings) => hasPackage(settings, "@gotgenes/pi-permission-system");
+
+  // Auto review's settings and what each preset falls back to.
+  const AR_PRESETS = { codex: ["Codex", "openai-codex", "codex-auto-review", "low"], "claude-code": ["Claude Code", "anthropic", "claude-sonnet-5", "high"] };
+  const AR_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  const AR_FOLLOW = { auto: "Auto", always: "Always", off: "Off" };
+  // Claude through OpenCode Go fails a continued review conversation (tested
+  // 2026-11-09): each follow-up review errors and falls back to asking.
+  const arClaudeViaGo = (c) => c.provider === "opencode-go" && /claude/i.test(c.model || "") && c.followUpReviews !== "off";
+  function ago(iso) {
+    const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+    if (!isFinite(s)) return "";
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+    return `${Math.round(s / 86400)} d ago`;
+  }
+  function arOutcome(r) {
+    if (r.outcome === "allow") return ["Allowed", "allow"];
+    if (r.outcome === "deny") return ["Denied", "deny"];
+    return [r.then ? `Asked you · you ${r.then}` : "Asked you", "ask"];
+  }
 
   // A surface's rules: the ordered pairs, or a plain action as `* -> action`.
   function rulesOf(doc, surface) {
@@ -102,7 +130,16 @@
 .mp-safety .sf-add .btn { height: 34px; padding: 0 12px; font-size: 13.5px; border-radius: 10px; }
 .mp-safety .sf-card { margin-top: 10px; }
 .mp-safety .sf-proj .seg { margin-top: 8px; }
-.mp-safety .sf-warn { color: var(--warn); }`);
+.mp-safety .sf-warn { color: var(--warn); }
+.mp-safety .opt.switch-row + .sf-row { border-top: 1px solid var(--line); }
+.mp-safety .sf-row select { max-width: 55%; }
+.mp-safety .sf-row .btn.small { height: 32px; padding: 0 10px; font: 500 12.5px var(--mono); border-radius: 9px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-safety .sf-rv { padding: 10px 14px; }
+.mp-safety .sf-rv + .sf-rv { border-top: 1px solid var(--line); }
+.mp-safety .sf-rv b { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .03em; }
+.mp-safety .sf-rv b.allow { color: var(--ok); } .mp-safety .sf-rv b.deny { color: var(--danger); } .mp-safety .sf-rv b.ask { color: var(--warn); }
+.mp-safety .sf-rv code { display: block; font: 13px var(--mono); overflow-wrap: anywhere; margin-top: 3px; }
+.mp-safety .sf-rv .sf-sub { margin-top: 3px; }`);
       el.append(ctx.el("div", "wf-loading", "Loading…"));
       const q = (cwd) => cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
       const [settings, chats, stages, info, trust, projects] = await Promise.all([
@@ -113,6 +150,11 @@
         ctx.api("/api/pi/config/trust").catch(() => ({ data: {} })),
         ctx.api("/api/projects").catch(() => ({ projects: [] })),
       ]);
+      const arInstalled = hasPackage(settings.data, "@mzwing/pi-permission-auto-review");
+      const [arConfig, arReviews] = arInstalled ? await Promise.all([
+        ctx.api("/api/pi/config/auto-review").catch(() => ({ data: {} })),
+        ctx.api("/api/safety/reviews?limit=20").catch(() => ({ reviews: [] })),
+      ]) : [{ data: {} }, { reviews: [] }];
       el.innerHTML = "";
       const installed = isInstalled(settings.data);
 
@@ -126,15 +168,18 @@
       card.append(status);
       const act = ctx.el("div", "sf-row");
       const busy = (b, text) => { b.disabled = true; b.textContent = text; };
+      async function install(source) {
+        const { id } = await ctx.api("/api/pi/jobs", { action: "install", source });
+        let job;
+        for (;;) { await new Promise((r) => setTimeout(r, 600)); job = (await ctx.api(`/api/pi/jobs/${id}`)).job; if (job.status !== "running") break; }
+        if (job.status !== "ok") throw new Error(`pi install failed: ${(job.output || "").trim().split("\n").slice(-3).join(" ")}`);
+      }
       if (!installed) {
         const b = ctx.el("button", "btn", "Install with recommended policy");
         b.onclick = async () => {
           busy(b, "Installing…");
           try {
-            const { id } = await ctx.api("/api/pi/jobs", { action: "install", source: info.package });
-            let job;
-            for (;;) { await new Promise((r) => setTimeout(r, 600)); job = (await ctx.api(`/api/pi/jobs/${id}`)).job; if (job.status !== "running") break; }
-            if (job.status !== "ok") throw new Error(`pi install failed: ${(job.output || "").trim().split("\n").slice(-3).join(" ")}`);
+            await install(info.package);
             await ctx.api("/api/safety/recommended", { file: "permissions" });
             ctx.toast("Installed. Restart chats to load it.");
             await ctx.needsRestart();
@@ -150,6 +195,122 @@
       if (act.childNodes.length) card.append(act);
       el.append(card);
       el.append(ctx.el("div", "sf-note", "This is pi's own policy file, so it applies to pi in the terminal too, not only to chats here. When pi asks and nobody has the chat open, your phone gets a notification. Changes apply from pi's next tool call."));
+
+      // ---- auto review
+      if (installed) {
+        const ar = info.auto_review || {};
+        const on = (chats.data?.authorizerChain || []).includes(ar.link || "auto-review");
+        el.append(ctx.el("div", "wf-section", "Auto review"));
+        const ac = ctx.el("div", "wf-card");
+        ac.dataset.k = "auto-review";
+        if (!arInstalled) {
+          ac.append(ctx.el("div", "sf-row", `<div class="sf-main"><div>Auto review</div><div class="sf-sub">Not installed: pi's asks come to you</div></div>`));
+          const r = ctx.el("div", "sf-row");
+          const b = ctx.el("button", "btn", "Install auto review");
+          b.onclick = async () => {
+            busy(b, "Installing…");
+            try {
+              await install(ar.package);
+              await ctx.api("/api/safety/auto-review", { enabled: true });
+              ctx.toast("Installed. Restart chats to load it.");
+              await ctx.needsRestart();
+            } catch (e) { ctx.toast(e.message, true); }
+            ctx.rerender();
+          };
+          r.append(b); ac.append(r);
+        } else {
+          const sw = ctx.el("button", "opt switch-row", `<div class="o-main"><div class="o-t">Auto review</div><div class="o-s">${on
+            ? "A model answers pi's permission asks; you're asked only when its review fails."
+            : "Installed and off: pi's asks come to you."}</div></div><span class="switch${on ? " on" : ""}"><i></i></span>`);
+          sw.dataset.k = "auto-review-toggle";
+          sw.onclick = async () => {
+            sw.disabled = true;
+            try { await ctx.api("/api/safety/auto-review", { enabled: !on }); await ctx.needsRestart(); ctx.toast(`Auto review ${on ? "off" : "on"}`); } catch (e) { ctx.toast(e.message, true); }
+            ctx.rerender();
+          };
+          ac.append(sw);
+
+          // Settings: patches to its config file (read when pi starts).
+          const c = arConfig.data || {};
+          const preset = AR_PRESETS[c.preset] ? c.preset : "codex";
+          const [, defProvider, defModel, defLevel] = AR_PRESETS[preset];
+          const save = async (patch) => {
+            try { await ctx.api("/api/pi/config/auto-review", { set: patch.set || {}, unset: patch.unset || [] }); await ctx.needsRestart(); } catch (e) { ctx.toast(e.message, true); }
+            ctx.rerender();
+          };
+          const select = (options, value, onChange) => {
+            const sel = ctx.el("select");
+            for (const [v, label] of options) { const o = ctx.el("option", "", ctx.esc(label)); o.value = v; sel.append(o); }
+            sel.value = value; sel.onchange = () => onChange(sel.value);
+            return sel;
+          };
+          const setting = (title, sub, control, k) => {
+            const r = ctx.el("div", "sf-row", `<div class="sf-main"><div>${ctx.esc(title)}</div>${sub ? `<div class="sf-sub">${sub}</div>` : ""}</div>`);
+            r.dataset.k = k;
+            r.append(control);
+            return r;
+          };
+          ac.append(setting("Rules", "Whose reviewer it copies: Codex's auto-review or Claude Code's auto mode.",
+            select(Object.entries(AR_PRESETS).map(([k, v]) => [k, v[0]]), preset, (v) => save({ set: { preset: v } })), "preset"));
+
+          const current = c.provider && c.model ? `${c.provider}/${c.model}` : "";
+          const modelBtn = ctx.el("button", "btn secondary small", ctx.esc(current || `Preset default`));
+          modelBtn.title = current || `${defProvider}/${defModel}`;
+          // A sheet, like pi settings' model pickers: the list may take a pi
+          // starting, which a native select can't wait for.
+          modelBtn.onclick = async () => {
+            ctx.openSheet((b) => b.append(ctx.el("div", "sheet-title", "Review model"), ctx.el("div", "sheet-sub", "Loading models…")));
+            let list = [];
+            try { list = await ctx.models(); } catch (e) { ctx.closeSheet(); ctx.toast(`Couldn't list models: ${e.message}`, true); return; }
+            ctx.openSheet((b) => {
+              b.append(ctx.el("div", "sheet-title", "Review model"), ctx.el("div", "sheet-sub", "It needs a login for its provider. A small, fast model is plenty."));
+              const sf = ctx.el("div", "field model-search"); const q = ctx.el("input"); q.type = "search"; q.placeholder = "Filter models"; sf.append(q); b.append(sf);
+              const box = ctx.el("div"); b.append(box);
+              const draw = () => {
+                box.innerHTML = "";
+                const d = opt("", "Preset default", ctx.esc(`${defProvider}/${defModel}`), () => { ctx.closeSheet(); save({ unset: ["provider", "model"] }); });
+                if (!current) d.append(ctx.el("span", "check", ctx.ICON.check));
+                box.append(d);
+                const term = q.value.toLowerCase(); let last = null;
+                for (const m of list) {
+                  const key = `${m.provider}/${m.id}`;
+                  if (term && !`${key} ${m.name || ""}`.toLowerCase().includes(term)) continue;
+                  if (m.provider !== last) { box.append(ctx.el("div", "provider-label", ctx.esc(m.provider))); last = m.provider; }
+                  const o = opt("", `<span class="mono">${ctx.esc(m.id)}</span>`, ctx.esc(m.name || ""), () => { ctx.closeSheet(); save({ set: { provider: m.provider, model: m.id } }); });
+                  if (current === key) o.append(ctx.el("span", "check", ctx.ICON.check));
+                  box.append(o);
+                }
+              };
+              q.oninput = draw; draw();
+            });
+          };
+          ac.append(setting("Model", ctx.esc(current ? "Which model reviews." : `Which model reviews: ${defProvider}/${defModel} by default.`), modelBtn, "model"));
+
+          ac.append(setting("Reasoning", "How hard the review thinks (for Claude Code's rules, only its second, careful pass).",
+            select([["", `Default (${defLevel})`], ...AR_LEVELS.map((l) => [l, l])], AR_LEVELS.includes(c.reasoning) ? c.reasoning : "", (v) => save(v ? { set: { reasoning: v } } : { unset: ["reasoning"] })), "reasoning"));
+
+          ac.append(setting("Follow-up reviews", "Continue one review conversation across asks (cheaper with caching). Off sends every review in full.",
+            select([["", "Default (auto)"], ...Object.entries(AR_FOLLOW)], AR_FOLLOW[c.followUpReviews] ? c.followUpReviews : "", (v) => save(v ? { set: { followUpReviews: v } } : { unset: ["followUpReviews"] })), "followUpReviews"));
+          if (arClaudeViaGo(c)) ac.append(ctx.el("div", "sf-row", `<div class="sf-main sf-warn" data-k="claude-go-warning">Claude through OpenCode Go fails continued reviews, so they fall back to asking you. Set Follow-up reviews to Off.</div>`));
+        }
+        el.append(ac);
+
+        if (arInstalled) {
+          el.append(ctx.el("div", "wf-section", "Recent reviews"));
+          const rc = ctx.el("div", "wf-card");
+          rc.dataset.k = "reviews";
+          const list = arReviews.reviews || [];
+          if (!list.length) rc.append(ctx.el("div", "list-empty", "No reviews yet."));
+          for (const r of list) {
+            const [label, cls] = arOutcome(r);
+            const what = r.command || r.path || r.surface || "";
+            const meta = [r.durationMs != null ? `${(r.durationMs / 1000).toFixed(1)} s` : "", r.outcome === "defer" && r.errorCategory ? r.errorCategory : r.model || "", ago(r.at)].filter(Boolean).join(" · ");
+            rc.append(ctx.el("div", "sf-rv", `<b class="${cls}">${ctx.esc(label)}</b><code>${ctx.esc(what)}</code>${r.reason ? `<div class="sf-sub">${ctx.esc(r.reason)}</div>` : ""}<div class="sf-sub">${ctx.esc(meta)}</div>`));
+          }
+          el.append(rc);
+        }
+        el.append(ctx.el("div", "sf-note", "Each review sends your recent messages and the agent's recent tool calls to the review model's provider. Changes apply to chats started or restarted after them. Turning it on also stops the agent from writing pi's settings, packages and permission policies."));
+      }
 
       // ---- rule lists
       // Collapsed to its summary until tapped (the bash list is long).

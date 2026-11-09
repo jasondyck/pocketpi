@@ -20,6 +20,13 @@
       "*.env.*": { "action": "deny", "reason": ".env files hold secrets; use .env.example" },
       "*.env.example": "allow"
     },
+    "path_write": {
+      "*": "allow",
+      "~/.pi/agent/settings.json": { "action": "deny", "reason": "pi's settings, packages and permission policies are off limits to the agent; change them in pocketpi's Settings" },
+      "~/.pi/agent/extensions/*": { "action": "deny", "reason": "pi's settings, packages and permission policies are off limits to the agent; change them in pocketpi's Settings" },
+      "~/.pi/agent/npm/*": { "action": "deny", "reason": "pi's settings, packages and permission policies are off limits to the agent; change them in pocketpi's Settings" },
+      "~/.config/pocketpi/safety/*": { "action": "deny", "reason": "pi's settings, packages and permission policies are off limits to the agent; change them in pocketpi's Settings" }
+    },
     "external_directory": {
       "*": "ask",
       "/tmp/*": "allow",
