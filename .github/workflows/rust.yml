@@ -27,3 +27,12 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: cargo test
         run: cargo test --locked
+      # The per-chat feature extensions (goal, plan mode, todos, presets)
+      # against a fake pi; Node strips their TypeScript types itself.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: extension tests
+        run: node --test extensions/tests/
+      - name: web syntax
+        run: for f in web/*.js; do node --check "$f"; done
