@@ -1226,11 +1226,26 @@ async function stop() {
 
 // image attachments, downscaled on the phone before upload
 $("file").addEventListener("change", async (e) => {
-  for (const f of e.target.files) {
-    try { S.attachments.push(await shrink(f)); } catch { toast(`Couldn't read ${f.name}`, true); }
-  }
-  e.target.value = ""; renderAttachments(); updateSend();
+  const files = [...e.target.files]; e.target.value = "";
+  await addImages(files);
 });
+// A screenshot or copied photo pastes straight into the message box: the
+// clipboard carries it as a file, so plain text paste is left alone.
+input.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.items || [])]
+    .filter((i) => i.kind === "file" && i.type.startsWith("image/"))
+    .map((i) => i.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  addImages(files);
+});
+async function addImages(files) {
+  if (!files.length) return;
+  for (const f of files) {
+    try { S.attachments.push(await shrink(f)); } catch { toast(`Couldn't read ${f.name || "that image"}`, true); }
+  }
+  renderAttachments(); updateSend();
+}
 function shrink(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file); const img = new Image();

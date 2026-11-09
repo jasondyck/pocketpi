@@ -2,6 +2,7 @@ import PhotosUI
 import PocketPiKit
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// Makes the session once per screen (the client comes from the environment,
 /// which an initializer can't read).
@@ -785,6 +786,7 @@ private struct Composer: View {
     @Bindable var session: ChatSession
     @State private var images: [ImageAttachment] = []
     @State private var picks: [PhotosPickerItem] = []
+    @State private var showPicker = false
     @State private var sending = false
     @FocusState private var focused: Bool
 
@@ -830,7 +832,11 @@ private struct Composer: View {
                         .accessibilityIdentifier("composer-hint")
                 }
                 HStack(spacing: 8) {
-                    PhotosPicker(selection: $picks, maxSelectionCount: 4, matching: .images) {
+                    Menu {
+                        Button("Photo Library", systemImage: "photo.on.rectangle") { showPicker = true }
+                        Button("Paste Image", systemImage: "doc.on.clipboard") { pasteImage() }
+                            .disabled(!UIPasteboard.general.hasImages)
+                    } label: {
                         Image(systemName: "plus").font(.title3).frame(width: 34, height: 34)
                     }
                     .accessibilityLabel("Attach images")
@@ -868,6 +874,26 @@ private struct Composer: View {
                 picks = []
             }
         }
+        .photosPicker(isPresented: $showPicker, selection: $picks, maxSelectionCount: 4, matching: .images)
+        // ⌘V (or Edit › Paste) with a picture on the clipboard, on an iPad or
+        // with a hardware keyboard. A text-only paste goes to the field as usual.
+        .onPasteCommand(of: [UTType.image]) { providers in
+            for provider in providers {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    guard let data, let a = ImageShrinker.attachment(from: data) else { return }
+                    Task { @MainActor in images.append(a) }
+                }
+            }
+        }
+    }
+
+    /// The phone's own path to a pasted picture: copy one in Photos, then
+    /// Attach › Paste Image (there is no ⌘V on a touch keyboard).
+    private func pasteImage() {
+        guard let image = UIPasteboard.general.image,
+              let data = image.jpegData(compressionQuality: 1),
+              let a = ImageShrinker.attachment(from: data) else { return }
+        images.append(a)
     }
 
     /// Send and Stop are one control: the same lime circle (a plain fill,

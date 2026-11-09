@@ -57,7 +57,7 @@ Key: ✅ done · 🟡 partial · ❌ missing. P1 is the most valuable and the le
 | B4 | Auto-retry: show a countdown and a "Stop retrying" button; global toggle | `auto_retry_*` events, `abort_retry`, `set_auto_retry` | 🟡 events shown, `abort_retry` never sent | P1 |
 | B5 | Auto-compaction toggle and thresholds (global or per model) | `set_auto_compaction`, settings `compaction.*` | 🟡 manual compaction only | P2 |
 | B6 | Compact with custom instructions | `compact{customInstructions}` | ✅ (W3) | P2 |
-| B7 | Paste an image from the clipboard (web) | — | ❌ | P3 |
+| B7 | Paste an image from the clipboard (web and iOS) | — | ✅ | P3 |
 
 ### C. Models and thinking
 
