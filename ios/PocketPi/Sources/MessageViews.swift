@@ -243,7 +243,9 @@ struct ToolCard: View {
         DisclosureGroup(isExpanded: $open) {
             VStack(alignment: .leading, spacing: 8) {
                 if name == "subagent" { SubagentToolProgress(run: run) { openSubagents?() } }
-                if name != "bash", case .object(let o) = arguments, !o.isEmpty {
+                if ModesToolBody.handles(name) { // plan and todo cards (ModesViews.swift)
+                    ModesToolBody(name: name, arguments: arguments, result: result ?? partial)
+                } else if name != "bash", case .object(let o) = arguments, !o.isEmpty {
                     Text(arguments.compactText).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(6)
                 } else if name == "bash" {
                     Text(summary).font(.caption.monospaced()).textSelection(.enabled)
