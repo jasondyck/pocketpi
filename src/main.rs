@@ -1356,7 +1356,8 @@ async fn list_sessions(
     let want_chat = q.chat.as_deref().is_some_and(|v| v == "1" || v == "true");
     let cfg = projects::load(&app.projects_path);
     let mut list = scan_with_live(&app).await;
-    list.retain(|s| cfg.archived.contains(&s.path) == want_archived && is_chat_dir(&app, &s.cwd) == want_chat);
+    let archived: std::collections::HashSet<&str> = cfg.archived.iter().map(String::as_str).collect();
+    list.retain(|s| archived.contains(s.path.as_str()) == want_archived && is_chat_dir(&app, &s.cwd) == want_chat);
     Json(json!({ "sessions": list, "chat_dir": app.chat_dir, "config_epoch": app.admin.epoch() }))
 }
 

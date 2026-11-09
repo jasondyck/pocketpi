@@ -571,8 +571,8 @@ fn visible(path: &str, q: &str) -> bool {
 
 /// The best `limit` candidates for `q`: score, then folders first, then the
 /// shorter path, then by name.
-pub fn rank(cands: &[Candidate], q: &str, limit: usize) -> Vec<Candidate> {
-    let mut hits: Vec<(i64, &Candidate)> = cands.iter().filter_map(|c| score(c, q).map(|s| (s, c))).collect();
+pub fn rank<'a>(cands: impl IntoIterator<Item = &'a Candidate>, q: &str, limit: usize) -> Vec<Candidate> {
+    let mut hits: Vec<(i64, &Candidate)> = cands.into_iter().filter_map(|c| score(c, q).map(|s| (s, c))).collect();
     hits.sort_by(|a, b| {
         b.0.cmp(&a.0)
             .then_with(|| (a.1.kind != "dir").cmp(&(b.1.kind != "dir")))
@@ -620,8 +620,7 @@ pub fn search_in(root: &Path, index: &[Candidate], q: &str, limit: usize) -> Vec
         let scored: Vec<Candidate> = cands.iter().map(|c| Candidate { path: c.path[prefix.len()..].to_string(), kind: c.kind }).collect();
         return rank(&scored, frag, limit).into_iter().map(|c| Candidate { path: format!("{prefix}{}", c.path), kind: c.kind }).collect();
     }
-    let vis: Vec<Candidate> = index.iter().filter(|c| visible(&c.path, q)).cloned().collect();
-    rank(&vis, q, limit)
+    rank(index.iter().filter(|c| visible(&c.path, q)), q, limit)
 }
 
 struct Index {

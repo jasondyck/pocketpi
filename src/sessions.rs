@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::Mutex,
@@ -113,8 +113,7 @@ fn first_text(content: Option<&Value>) -> String {
 }
 
 pub fn scan(root: &Path, cache: &Cache) -> Vec<SessionInfo> {
-    let mut out = Vec::new();
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     // pi groups sessions into one subfolder per working directory, but writes
     // them flat when a custom session dir is configured; accept both.
     let mut files = Vec::new();
@@ -125,52 +124,61 @@ pub fn scan(root: &Path, cache: &Cache) -> Vec<SessionInfo> {
             _ => {}
         }
     }
-    {
-        for f in files {
-            let path = f.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let Ok(md) = f.metadata() else { continue };
-            let mtime = md
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let size = md.len();
-            let cached = cache
-                .0
-                .lock()
-                .unwrap()
-                .get(&path)
-                .filter(|(m, s, _)| *m == mtime && *s == size)
-                .map(|(_, _, meta)| meta.clone());
-            let meta = match cached {
-                Some(m) => m,
-                None => {
-                    let Some(m) = read_meta(&path) else { continue };
-                    cache.0.lock().unwrap().insert(path.clone(), (mtime, size, m.clone()));
-                    m
-                }
-            };
-            seen.push(path.clone());
-            out.push(SessionInfo {
-                path: path.to_string_lossy().to_string(),
-                id: meta.id,
-                cwd: meta.cwd,
-                name: meta.name,
-                title: meta.title,
-                modified: mtime,
-                messages: meta.messages,
-                live: false,
-                streaming: false,
-                epoch: None,
-                parent: meta.parent,
-            });
+    // Stat everything first, then take the cache lock once for the hits and
+    // once for the misses and pruning; file reads happen outside the lock.
+    let mut stats = Vec::with_capacity(files.len());
+    for f in files {
+        let path = f.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
         }
+        let Ok(md) = f.metadata() else { continue };
+        let mtime = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        stats.push((path, mtime, md.len()));
     }
-    cache.0.lock().unwrap().retain(|p, _| seen.contains(p));
+    let cached: Vec<Option<Meta>> = {
+        let map = cache.0.lock().unwrap();
+        stats
+            .iter()
+            .map(|(path, mtime, size)| map.get(path).filter(|(m, s, _)| m == mtime && s == size).map(|(_, _, meta)| meta.clone()))
+            .collect()
+    };
+    let mut fresh = Vec::new();
+    let mut out = Vec::with_capacity(stats.len());
+    for ((path, mtime, size), hit) in stats.into_iter().zip(cached) {
+        let meta = match hit {
+            Some(m) => m,
+            None => {
+                let Some(m) = read_meta(&path) else { continue };
+                fresh.push((path.clone(), (mtime, size, m.clone())));
+                m
+            }
+        };
+        out.push(SessionInfo {
+            path: path.to_string_lossy().to_string(),
+            id: meta.id,
+            cwd: meta.cwd,
+            name: meta.name,
+            title: meta.title,
+            modified: mtime,
+            messages: meta.messages,
+            live: false,
+            streaming: false,
+            epoch: None,
+            parent: meta.parent,
+        });
+        seen.insert(path);
+    }
+    {
+        let mut map = cache.0.lock().unwrap();
+        map.extend(fresh);
+        map.retain(|p, _| seen.contains(p));
+    }
     out.sort_by(|a, b| b.modified.cmp(&a.modified));
     out
 }
