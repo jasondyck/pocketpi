@@ -113,6 +113,12 @@ private struct ChatScreen: View {
                 if new.items.count > old.items.count, case .user? = new.items.last?.kind { following = true }
                 if following, scrollPhase == .idle { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            // The outline sheet's "go to this turn" (OutlineViews.swift).
+            .onReceive(NotificationCenter.default.publisher(for: .scrollToTranscriptRow, object: session)) { n in
+                guard let row = n.userInfo?["row"] as? String else { return }
+                following = false
+                withAnimation { proxy.scrollTo(row, anchor: .top) }
+            }
             .overlay(alignment: .bottomTrailing) {
                 if !atBottom {
                     Button {

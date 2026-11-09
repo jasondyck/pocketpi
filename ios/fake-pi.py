@@ -51,12 +51,18 @@ import time
 import uuid
 
 # One-shot `pi -p` (pocketpi's titles and suggestions): the prompt is the
-# last argument. A title is the first five words of the user's message.
+# last argument. A title is the first five words of the person's first message
+# (the JSON array on the line after "...JSON array of human messages:"); a
+# re-title ("Current title ...") keeps the current title, as dsh's rules say
+# for a chat whose topic didn't change.
 if "-p" in sys.argv:
     prompt = sys.argv[-1]
-    if "USER'S FIRST MESSAGE:" in prompt:
-        words = prompt.split("USER'S FIRST MESSAGE:", 1)[1].split("ASSISTANT'S", 1)[0].split()
-        print(" ".join(words[:5]).capitalize())
+    marker = "JSON array of human messages:\n"
+    if prompt.startswith("Current title (a JSON string): "):
+        print(json.loads(prompt.split(": ", 1)[1].split("\n", 1)[0]))
+    elif marker in prompt:
+        msgs = json.loads(prompt.split(marker, 1)[1].split("\n", 1)[0])
+        print(" ".join(msgs[0].split()[:5]).capitalize())
     else:
         print('{"replies":[]}')
     sys.exit(0)
