@@ -36,6 +36,7 @@ mod goal_watch;
 mod chat_state;
 mod outline;
 mod files;
+mod term;
 use ext_ui::ExtUi;
 
 use axum::{
@@ -405,6 +406,7 @@ async fn main() {
         .route("/api/usage", get(usage::route))
         .merge(subagents::router())
         .merge(files::router())
+        .merge(term::router())
         .layer(DefaultBodyLimit::max(40 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app.clone());
