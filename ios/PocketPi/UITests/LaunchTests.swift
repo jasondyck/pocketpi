@@ -99,8 +99,9 @@ final class LaunchTests: XCTestCase {
         dismissKeyboardTip(app)
         // Back to Projects (chat → clipt's chats → projects), then Workflows again.
         app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["clipt"].waitForExistence(timeout: 5))
         sleep(1)
-        app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
+        app.navigationBars["clipt"].buttons["BackButton"].tap()
         XCTAssertTrue(natter.waitForExistence(timeout: 5))
         app.descendants(matching: .any)["project-workflows"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Workflows"].waitForExistence(timeout: 5))

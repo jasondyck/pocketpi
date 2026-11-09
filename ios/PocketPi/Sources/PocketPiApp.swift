@@ -231,26 +231,34 @@ final class AppModel {
             let (pr, ss, aa, rr, ww) = try await (p, s, a, r, w)
             // An older server has no Chat tab; Work still loads.
             if let cc = try? await c {
-                chats = cc.sessions
-                chatDir = cc.chatDir.isEmpty ? nil : cc.chatDir
+                update(\.chats, cc.sessions)
+                update(\.chatDir, cc.chatDir.isEmpty ? nil : cc.chatDir)
             }
-            if let ac = try? await client.chats(archived: true) { archivedChats = ac.sessions }
-            approvals = rr.filter { $0.waitingApproval != nil }
-            runs = rr
-            workflows = ww
-            projects = pr.projects
-            home = pr.home
-            sessions = ss
-            archived = aa
+            if let ac = try? await client.chats(archived: true) { update(\.archivedChats, ac.sessions) }
+            update(\.approvals, rr.filter { $0.waitingApproval != nil })
+            update(\.runs, rr)
+            update(\.workflows, ww)
+            update(\.projects, pr.projects)
+            update(\.home, pr.home)
+            update(\.sessions, ss)
+            update(\.archived, aa)
             // The server's live flag is the truth; a chat left mid-reply is
             // still streaming there even after its screen stopped watching.
-            workingNow = Set(ss.filter(\.streaming).map(\.path))
-            loadError = nil
+            update(\.workingNow, Set(ss.filter(\.streaming).map(\.path)))
+            update(\.loadError, nil)
         } catch where error.isCancellation {
             // Cut short (left the screen, a newer refresh): keep what's shown.
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    /// Writes a list only when it changed. Every write to an observed property
+    /// redraws the views that read it, and the list refreshes every 10 s and
+    /// on the way back from a chat: redrawing the whole split view mid-pop
+    /// made the next back tap go nowhere.
+    private func update<T: Equatable>(_ key: ReferenceWritableKeyPath<AppModel, T>, _ value: T) {
+        if self[keyPath: key] != value { self[keyPath: key] = value }
     }
 
     /// The chat screen's live state: pi is working on this chat now.

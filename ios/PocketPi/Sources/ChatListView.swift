@@ -132,13 +132,11 @@ struct ChatListView: View {
         }
         // iPhone: backing out of a chat closes it, so it doesn't reopen.
         .onChange(of: column) { _, c in
-            if c != .detail {
-                target = nil
-                // Back from a chat: show what happened while it was open
-                // (still working, finished, cost, a queued message).
-                Task { await model.refresh(quiet: true) }
-            }
+            if c != .detail { target = nil }
         }
+        // Back from a chat (the column change above clears it, as does a
+        // screen that closes itself): show what happened while it was open
+        // (still working, finished, cost, a queued message). One refresh.
         .onChange(of: target) { _, t in
             if t == nil { Task { await model.refresh(quiet: true) } }
         }
