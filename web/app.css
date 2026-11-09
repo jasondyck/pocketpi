@@ -289,6 +289,10 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
   .tbody pre, .think-body { max-height: none; overflow: visible; }
 }
 .more { font-size: 12.5px; font-weight: 550; color: var(--signal-text); margin-top: 7px; }
+.spill { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 7px; }
+.spill .more { margin-top: 0; }
+.spill .more.sub { color: var(--muted); font-size: 12px; font-weight: 500; }
+.spill .more.sub.done { color: var(--ok); }
 .d-add { color: var(--ok); } .d-del { color: var(--danger); } .d-hunk { color: var(--muted); }
 
 .note { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 12px; margin: 22px 0; }

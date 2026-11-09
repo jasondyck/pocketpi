@@ -224,46 +224,111 @@ function toolArgSummary(name, a) {
   if (a.url) return a.url;
   const s = JSON.stringify(a); return s === "{}" ? "" : s;
 }
-// Long text is trimmed by lines (and chars) with a "Show all" button. On touch
-// screens these blocks are not scroll boxes of their own (nested scrollers trap
-// iOS swipes), so the trim is what keeps the chat readable. `fromEnd` keeps the
-// last lines instead, which is where bash errors usually are.
+// Long text is a viewport over text that is already in memory (pi sent the
+// whole result; a reload brings it back), never one giant text node: on iOS
+// the first freeze is the last thing the user sees. Borrowed from DeepSeek
+// Harness' spill idea — a preview plus a locator (Copy / Save .txt) and the
+// rest on request, in bounded pages. `fromEnd` starts at the tail, which is
+// where bash errors usually are, and pages backwards.
 const coarse = matchMedia("(pointer: coarse)").matches;
-function truncBlock(text, limit = 6000, fromEnd = false) {
+/// Characters revealed per "Show more".
+const SPILL_CHUNK = coarse ? 20_000 : 60_000;
+/// Most characters rendered in place; beyond this, Save the full output.
+const SPILL_INLINE = 200_000;
+const spillChars = (n) =>
+  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M chars` : n >= 1000 ? `${Math.round(n / 1000)}k chars` : `${n} chars`;
+function truncBlock(text, limit = 6000, fromEnd = false, name = "output") {
+  text = String(text ?? "");
   const maxLines = coarse ? 40 : 200;
   const lines = text.split("\n");
+  const lineOffset = (i) => (i <= 0 ? 0 : lines.slice(0, i).join("\n").length + 1);
+  let lo = 0, hi = text.length;
+  if (lines.length > maxLines || text.length > limit) {
+    if (fromEnd) {
+      if (lines.length > maxLines) lo = lineOffset(lines.length - maxLines);
+      if (text.length - lo > limit) lo = Math.max(lo, text.length - limit);
+      const nl = text.indexOf("\n", lo);
+      if (nl !== -1) lo = nl + 1;
+    } else {
+      if (lines.length > maxLines) hi = lineOffset(maxLines) - 1;
+      if (hi - lo > limit) hi = lo + limit;
+      const nl = text.lastIndexOf("\n", hi - 1);
+      if (nl > lo) hi = nl;
+    }
+  }
   const wrap = el("div");
   const pre = el("pre");
-  let shown = text;
-  if (lines.length > maxLines) shown = (fromEnd ? lines.slice(-maxLines) : lines.slice(0, maxLines)).join("\n");
-  if (shown.length > limit) shown = fromEnd ? shown.slice(-limit) : shown.slice(0, limit);
-  const trimmed = shown.length < text.length;
-  if (trimmed && fromEnd) wrap.append(el("div", "trim-note", `… ${lines.length > maxLines ? `${lines.length - maxLines} earlier lines` : "earlier output"} hidden`));
-  pre.textContent = shown;
+  const note = el("div", "trim-note");
+  const acts = el("div", "spill");
+  const more = el("button", "more");
+  const copy = el("button", "more sub", "Copy");
+  const save = el("button", "more sub", "Save .txt");
+  // Tail-first previews put the controls above the text: they'd otherwise sit
+  // a couple of hundred lines below the part you're reading.
+  wrap.append(note);
+  if (fromEnd) wrap.append(acts);
   wrap.append(pre);
-  if (trimmed) {
-    const more = el("button", "more", `Show all · ${plural(lines.length, "line")}`);
-    more.onclick = (e) => { e.preventDefault(); pre.textContent = text; more.remove(); wrap.querySelector(".trim-note")?.remove(); };
-    wrap.append(more);
+  if (!fromEnd) wrap.append(acts);
+  copy.onclick = (e) => { e.preventDefault(); copyText(text, copy); };
+  save.onclick = (e) => {
+    e.preventDefault();
+    const a = el("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.download = `${String(name || "output").replace(/[^\w.-]+/g, "-")}.txt`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+  more.onclick = (e) => {
+    e.preventDefault();
+    if (fromEnd) lo = Math.max(0, lo - SPILL_CHUNK);
+    else hi = Math.min(text.length, hi + SPILL_CHUNK, Math.max(hi, SPILL_INLINE));
+    render();
+  };
+  const render = () => {
+    pre.textContent = text.slice(lo, hi);
+    const before = lo, after = text.length - hi, pending = before + after;
+    if (!pending) note.hidden = true;
+    else {
+      note.hidden = false;
+      const parts = [];
+      if (before) parts.push(`${spillChars(before)} earlier`);
+      if (after) parts.push(`${spillChars(after)} later`);
+      let line = `… ${parts.join(", ")} hidden · ${plural(lines.length.toLocaleString(), "line")}`;
+      if (!fromEnd && hi >= Math.min(text.length, SPILL_INLINE) && after) line += " — Save .txt for the rest";
+      note.textContent = line;
+    }
+    more.hidden = !pending || (!fromEnd && hi >= Math.min(text.length, SPILL_INLINE));
+    more.textContent = fromEnd ? "Show earlier" : "Show more";
+  };
+  render();
+  // Small results don't need the toolbar; long ones always get Copy / Save.
+  if (text.length >= 2000) {
+    acts.append(more, copy, save);
+  } else if (lo > 0 || hi < text.length) {
+    acts.append(more);
   }
   return wrap;
 }
 function diffBlock(diff) {
   const lines = diff.split("\n");
   const max = coarse ? 120 : 600;
+  const chunk = coarse ? 400 : 1200;
   const wrap = el("div");
   const pre = el("pre");
-  const paint = (ls) => { pre.innerHTML = ls.map((l) => {
-    const c = /^\+(?!\+\+)/.test(l) ? "d-add" : /^-(?!--)/.test(l) ? "d-del" : /^@@/.test(l) ? "d-hunk" : "";
-    return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
-  }).join("\n"); };
-  paint(lines.slice(0, max));
-  wrap.append(pre);
-  if (lines.length > max) {
-    const more = el("button", "more", `Show all · ${plural(lines.length, "line")}`);
-    more.onclick = (e) => { e.preventDefault(); paint(lines); more.remove(); };
-    wrap.append(more);
-  }
+  const more = el("button", "more");
+  let shown = Math.min(max, lines.length);
+  // Same viewport rule as truncBlock: a 20k-line diff is not one text node.
+  const paint = () => {
+    pre.innerHTML = lines.slice(0, shown).map((l) => {
+      const c = /^\+(?!\+\+)/.test(l) ? "d-add" : /^-(?!--)/.test(l) ? "d-del" : /^@@/.test(l) ? "d-hunk" : "";
+      return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+    }).join("\n");
+    more.hidden = shown >= lines.length;
+    more.textContent = `Show more · ${shown.toLocaleString()} of ${plural(lines.length.toLocaleString(), "line")}`;
+  };
+  more.onclick = (e) => { e.preventDefault(); shown = Math.min(lines.length, shown + chunk); paint(); };
+  paint();
+  wrap.append(pre, more);
   return wrap;
 }
 function makeCard(call) {
@@ -305,10 +370,9 @@ function makeCard(call) {
       else if (a.oldText != null || a.old_string != null) sec("Edit", diffBlock([...String(a.oldText ?? a.old_string).split("\n").map((l) => "-" + l), ...String(a.newText ?? a.new_string ?? "").split("\n").map((l) => "+" + l)].join("\n")));
       if (r && Array.isArray(r.content)) {
         const text = textOf(r.content);
-        if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text, 6000, api.name === "bash"));
+        if (text && !(diff && !api.isError && text.length < 200)) sec(api.isError ? "Error" : api.result ? "Output" : "Output so far", truncBlock(text, 6000, api.name === "bash", api.name));
         for (const p of r.content) if (p.type === "image") { const img = el("img"); img.src = `data:${p.mimeType};base64,${p.data}`; sec("Image", img); }
       } else if (!r) sec("Status", el("pre", "", "waiting…"));
-      window.ppAgents?.cardBody?.(body, api);
     },
   };
   d.addEventListener("toggle", () => { if (d.open) api.renderBody(); });
@@ -717,7 +781,6 @@ function onEvent(ev) {
 
 async function afterRun() {
   refreshStats();
-  window.ppAgents?.sync?.();
   maybeSuggest();
   if (!S.path) {
     try { const st = await cmd({ type: "get_state" }); S.state = st; if (st.sessionFile) setPath(st.sessionFile); } catch {}
@@ -788,7 +851,6 @@ async function loadSnapshot() {
     updateHeader(); updateChips();
     refreshStats(); loadLevels();
     maybeSuggest();
-    window.ppAgents?.sync?.();
   } catch (e) { banner(esc(e.message), true); }
 }
 async function refreshStats() {
@@ -912,7 +974,7 @@ function renderBash(run) {
     const r = b.run;
     const sec = (label, node) => { const s = el("div", "tsec"); s.append(el("div", "tlabel", esc(label)), node); body.append(s); };
     sec("Command", truncBlock(r.command || "", 4000));
-    if (r.output || !r.running) sec(r.running ? "Output so far" : "Output", truncBlock(r.output || "(no output)", 6000, true));
+    if (r.output || !r.running) sec(r.running ? "Output so far" : "Output", truncBlock(r.output || "(no output)", 6000, true, "shell"));
     if (r.truncated) body.append(el("div", "tsec trim-note", `Output truncated${r.fullOutputPath ? ` · full output in ${esc(r.fullOutputPath)}` : ""}`));
     if (r.running) {
       const stopBtn = el("button", "shell-stop", "Stop");
@@ -1158,7 +1220,6 @@ async function openChatSheet() {
       try { await cmd({ type: "compact" }); await loadSnapshot(); toast("Context compacted"); } catch (e) { toast(e.message, true); } finally { setStreaming(false); }
     }));
     window.ppChatTools?.sheetEntry(b);
-    window.ppAgents?.sheetEntry?.(b);
     window.ppChat?.chatSheet(b);
     window.ppManage?.sheetEntry(b);
     b.append(opt(ICON.power, "Stop pi process", "Frees memory; reopening the chat restarts it", async () => {
@@ -1968,7 +2029,7 @@ function openStageSheet(wf, run, rs) {
       b.append(o);
     }
     if (rs.prompt) { b.append(el("div", "sheet-section", rs.kind === "shell" ? "Command" : rs.kind === "approval" ? "Message" : "Prompt")); b.append(truncBlock(rs.prompt, 4000)); }
-    if (rs.output) { b.append(el("div", "sheet-section", rs.status === "failed" ? "Failure" : "Output")); b.append(truncBlock(rs.output, 8000, rs.kind === "shell")); }
+    if (rs.output) { b.append(el("div", "sheet-section", rs.status === "failed" ? "Failure" : "Output")); b.append(truncBlock(rs.output, 8000, rs.kind === "shell", rs.kind === "shell" ? "shell" : "output")); }
     b.querySelectorAll("pre").forEach((p) => p.classList.add("sheet-pre"));
   });
 }
