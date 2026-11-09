@@ -1564,9 +1564,13 @@ Plain text only: no quotes, no emoji, no trailing punctuation, no 'Chat about'. 
 Output ONLY the title.";
 
 /// How large the JSON array of the person's messages sent for a title may be.
-/// Longer input isn't cut: the oldest messages are left out, and a title
-/// whose newest message alone is too long is skipped.
+/// Longer input isn't cut: the oldest messages are left out, and a re-title
+/// whose newest message alone is too long is skipped (the first title
+/// shortens it instead, see `title_request`).
 const TITLE_INPUT_MAX: usize = 4096;
+
+/// How much of a long first message the first title sees (its start).
+const FIRST_TITLE_CHARS: usize = 1500;
 
 /// After this many prompts of the person a chat pocketpi named is titled again.
 const RETITLE_AT: [usize; 2] = [3, 10];
@@ -1588,8 +1592,11 @@ fn title_input(messages: &[String]) -> Option<String> {
 
 /// The first title's prompt: the person's first message in dsh's JSON
 /// framing, and the assistant's first reply (cut, as context) after it.
+/// Unlike re-titling, a long first message is shortened to its start rather
+/// than skipped: a chat that opens with a pasted log still gets a title.
 fn title_request(user: &str, reply: &str) -> Option<String> {
-    let input = title_input(&[user.to_string()])?;
+    let user: String = user.trim().chars().take(FIRST_TITLE_CHARS).collect();
+    let input = title_input(&[user])?;
     let reply: String = reply.trim().chars().take(2000).collect();
     Some(format!(
         "Generate the session title from this JSON array of human messages:\n{input}\n\nThe assistant's first reply, for context only (a JSON string):\n{}",
@@ -1780,7 +1787,6 @@ async fn auto_title(app: &Arc<AppState>, live: &Arc<Live>) {
     let list = msgs.pointer("/data/messages").and_then(Value::as_array).cloned().unwrap_or_default();
     let first = |role: &str| list.iter().find(|m| m["role"] == role && !message_text(m).trim().is_empty()).map(message_text);
     let (Some(user), Some(reply)) = (first("user"), first("assistant")) else { return };
-    // A first message over TITLE_INPUT_MAX: no title (the list shows its start).
     let Some(prompt) = title_request(&user, &reply) else { return };
     let Ok(_slot) = app.suggest_slots.acquire().await else { return };
     let Some(title) = one_shot(app, &model, TITLE_PROMPT, &prompt).await.ok().as_deref().and_then(clean_title) else { return };
@@ -2370,8 +2376,9 @@ mod title_tests {
         assert_eq!(serde_json::from_str::<Vec<String>>(&j).unwrap(), vec![big.clone(), "short one".into(), "short two".into()]);
         // The newest alone is too long: nothing to send.
         assert_eq!(title_input(&strings(&["short", &"b".repeat(5000)])), None);
-        assert_eq!(title_request(&"c".repeat(4095), "r"), None);
-        assert!(title_request(&"c".repeat(4092), "r").is_some()); // 4092 + the brackets and quotes = 4096
+        // The first title shortens a long first message to its start instead.
+        let first = title_request(&"c".repeat(9000), "r").unwrap();
+        assert!(first.contains(&"c".repeat(FIRST_TITLE_CHARS)) && !first.contains(&"c".repeat(FIRST_TITLE_CHARS + 1)));
         assert_eq!(title_input(&[]), None);
         // Bytes, not characters, count.
         assert_eq!(title_input(&strings(&[&"é".repeat(2047)])), None);
