@@ -37,7 +37,7 @@ def proc_stats(pid):
         with open(f"/proc/{pid}/status") as f:
             for line in f:
                 k, _, v = line.partition(":")
-                if k in ("VmRSS", "VmHWM"):
+                if k in ("VmRSS", "VmHWM", "RssAnon", "RssFile"):
                     s[k.lower() + "_kb"] = int(v.split()[0])
                 elif k == "Threads":
                     s["threads"] = int(v)
@@ -83,13 +83,13 @@ class Sampler(threading.Thread):
         ss = [s for _, p, s in self.samples if p == phase]
         if not ss:
             return {}
-        return {"peak_rss_kb": max(s["vmrss_kb"] for s in ss), "peak_threads": max(s["threads"] for s in ss),
+        return {"peak_rss_kb": max(s["vmrss_kb"] for s in ss), "peak_anon_kb": max(s["rssanon_kb"] for s in ss), "peak_threads": max(s["threads"] for s in ss),
                 "peak_fds": max(s["fds"] for s in ss)}
 
 
 def snap(pid):
     s = proc_stats(pid) or {}
-    return {"rss_kb": s.get("vmrss_kb"), "hwm_kb": s.get("vmhwm_kb"), "threads": s.get("threads"), "fds": s.get("fds")}
+    return {"rss_kb": s.get("vmrss_kb"), "hwm_kb": s.get("vmhwm_kb"), "anon_kb": s.get("rssanon_kb"), "file_kb": s.get("rssfile_kb"), "threads": s.get("threads"), "fds": s.get("fds")}
 
 
 # ------------------------------------------------------------------ HTTP
@@ -472,11 +472,13 @@ def soak(pool, port, paths, secs, conc, sampler):
         fd_last = statistics.median(s["fds"] for _, s in ss[-third:])
         th_first = statistics.median(s["threads"] for _, s in ss[:third])
         th_last = statistics.median(s["threads"] for _, s in ss[-third:])
+        anon_first = statistics.median(s["rssanon_kb"] for _, s in ss[:third])
+        anon_last = statistics.median(s["rssanon_kb"] for _, s in ss[-third:])
         growth = (last - first) / first * 100
         rss_grows = growth > 5 and slope * 60 > 512
         fds_grow = fd_last - fd_first > 8
         out.update({"seconds": round(dur, 1), "rss_first_third_kb": int(first), "rss_last_third_kb": int(last),
-                    "rss_growth_pct": round(growth, 1), "rss_slope_kb_per_min": round(slope * 60, 1),
+                    "rss_growth_pct": round(growth, 1), "anon_first_third_kb": int(anon_first), "anon_last_third_kb": int(anon_last), "rss_slope_kb_per_min": round(slope * 60, 1),
                     "fds_first_third": fd_first, "fds_last_third": fd_last,
                     "threads_first_third": th_first, "threads_last_third": th_last,
                     "verdict": ("GROWING: " + ", ".join(x for x, y in (("RSS", rss_grows), ("fds", fds_grow)) if y))
@@ -541,11 +543,12 @@ def print_table(res):
               f"({k.get('rss_growth_pct')}%, {k.get('rss_slope_kb_per_min')} KB/min), fds {k.get('fds_first_third')} -> "
               f"{k.get('fds_last_third')}: {k['verdict']}")
     p = res["process"]
-    print("\nprocess      " + "".join(h.rjust(10) for h in ("RSS MB", "HWM MB", "threads", "fds")))
+    print("\nprocess      " + "".join(h.rjust(10) for h in ("RSS MB", "HWM MB", "anon MB", "file MB", "threads", "fds")))
     for ph in ("start", "after_load", "after_soak", "end"):
         if ph in p:
             q = p[ph]
             print(f"{ph:<13}" + fmt(round(q['rss_kb'] / 1024, 1), 10) + fmt(round(q['hwm_kb'] / 1024, 1), 10)
+                  + fmt(round(q['anon_kb'] / 1024, 1), 10) + fmt(round(q['file_kb'] / 1024, 1), 10)
                   + fmt(q["threads"], 10) + fmt(q["fds"], 10))
 
 
@@ -589,6 +592,7 @@ def compare(res, out_dir, this_file):
         delta(f"{n} p99 ms", o["p99_ms"], e["p99_ms"], 2.0)
         delta(f"{n} rps", o["rps"], e["rps"], 1e18, higher_is_worse=False)  # shown, not flagged
         delta(f"{n} peak RSS KB", o.get("peak_rss_kb"), e.get("peak_rss_kb"), 2048)
+        delta(f"{n} peak anon KB", o.get("peak_anon_kb"), e.get("peak_anon_kb"), 2048)
     for k, label, floor in (("sse", "fanout_spread_p99_ms", 2.0), ("snapshot", "settled_to_files_median_ms", 50.0)):
         if res.get(k) and old.get(k):
             delta(f"{k} {label}", old[k].get(label), res[k].get(label), floor)
@@ -596,6 +600,7 @@ def compare(res, out_dir, this_file):
         if ph in res["process"] and ph in old.get("process", {}):
             delta(f"process {ph} RSS KB", old["process"][ph]["rss_kb"], res["process"][ph]["rss_kb"], 2048)
             delta(f"process {ph} HWM KB", old["process"][ph]["hwm_kb"], res["process"][ph]["hwm_kb"], 2048)
+            delta(f"process {ph} anon KB", old["process"][ph].get("anon_kb"), res["process"][ph].get("anon_kb"), 2048)
     if res.get("soak") and old.get("soak"):
         # Shown, not flagged: the mix's tail is the slowest endpoint's, already flagged above.
         delta("soak p99 ms", old["soak"]["p99_ms"], res["soak"]["p99_ms"], 1e18)

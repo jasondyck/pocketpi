@@ -10,6 +10,7 @@
 #   scripts/bench.sh                 # defaults: 2000 sessions, 8 s/endpoint, 60 s soak
 #   scripts/bench.sh --quick         # under a minute: smaller data, short runs
 #   scripts/bench.sh --sessions N --soak SECS --duration SECS --concurrency C
+#   scripts/bench.sh --sse-clients N --turns N --terms N   # 0 terms skips the terminal test
 #   scripts/bench.sh --tool python|oha|hey   # load generator (default: oha, hey, else python)
 #   scripts/bench.sh --no-build --keep       # reuse target/release; keep the scratch dir
 #   scripts/bench.sh --bin PATH --out DIR    # bench another binary (implies --no-build); results elsewhere
@@ -30,11 +31,14 @@ while [ $# -gt 0 ]; do
     --duration) DURATION=$2; shift ;;
     --concurrency) CONC=$2; shift ;;
     --tool) TOOL=$2; shift ;;
+    --sse-clients) SSE_CLIENTS=$2; shift ;;
+    --turns) TURNS=$2; shift ;;
+    --terms) TERMS=$2; shift ;;
     --no-build) BUILD=0 ;;
     --keep) KEEP=1 ;;
     --bin) BIN=$(realpath "$2") BUILD=0; shift ;;
     --out) OUT=$(realpath -m "$2"); shift ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
