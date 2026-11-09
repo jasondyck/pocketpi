@@ -45,10 +45,12 @@ use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::task;
 
 /// Runs whose artifacts were touched longer ago than this are ignored.
 const MAX_AGE_SECS: u64 = 48 * 3600;
@@ -58,6 +60,8 @@ const MAX_RUNS: usize = 80;
 const MAX_STATUS_BYTES: u64 = 2_000_000;
 /// Characters kept from an output log tail.
 const MAX_TAIL_CHARS: usize = 16_000;
+/// Bytes read from the end of a log (enough for [`MAX_TAIL_CHARS`] UTF-8).
+const MAX_TAIL_BYTES: u64 = 128 * 1024;
 /// Lines kept from an output log tail.
 const MAX_TAIL_LINES: usize = 240;
 /// Recent output lines passed through per step.
@@ -82,9 +86,15 @@ struct ListQuery {
 }
 
 async fn list(Query(q): Query<ListQuery>) -> Json<Value> {
-    let now = now_ms();
-    let raw = scan(now);
-    let mut runs = build_runs(&raw);
+    // Scanning and parsing status files is filesystem work: keep it off the
+    // async runtime's threads.
+    let (now, mut runs) = task::spawn_blocking(|| {
+        let now = now_ms();
+        let raw = scan(now);
+        (now, build_runs(&raw))
+    })
+    .await
+    .unwrap_or_else(|_| (now_ms(), Vec::new()));
     if q.all.is_none() && q.session.is_some() {
         let session = q.session.as_deref();
         runs.retain(|r| r.get("sessionId").and_then(Value::as_str) == session);
@@ -97,18 +107,23 @@ async fn detail(Path(id): Path<String>) -> impl IntoResponse {
     if !safe_id(&id) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad run id" })));
     }
+    match task::spawn_blocking(move || detail_payload(&id)).await.ok().flatten() {
+        Some(payload) => (StatusCode::OK, Json(payload)),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found or expired" }))),
+    }
+}
+
+fn detail_payload(id: &str) -> Option<Value> {
     let now = now_ms();
     let raw = scan(now);
-    let Some(run) = raw.iter().find(|r| r.id == id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found or expired" })));
-    };
+    let run = raw.iter().find(|r| r.id == id)?;
     let children: HashMap<&str, &Value> = raw.iter().map(|r| (r.id.as_str(), &r.value)).collect();
     let projected = project(&run.id, &run.value, &children).unwrap_or(Value::Null);
     let outputs = output_files(&run.dir)
         .into_iter()
         .map(|(name, path)| json!({ "name": name, "text": tail_file(&path) }))
         .collect::<Vec<_>>();
-    (StatusCode::OK, Json(json!({ "at": now, "run": projected, "outputs": outputs })))
+    Some(json!({ "at": now, "run": projected, "outputs": outputs }))
 }
 
 /// One `status.json` found on disk.
@@ -407,10 +422,19 @@ fn output_files(dir: &FsPath) -> Vec<(String, PathBuf)> {
     files.into_iter().map(|(_, name, path)| (name, path)).collect()
 }
 
+/// The end of a log, without reading the whole file: agent output can be
+/// large, and this runs in the detail handler.
 fn tail_file(path: &FsPath) -> String {
-    let Ok(bytes) = fs::read(path) else { return String::new() };
-    let text = String::from_utf8_lossy(&bytes);
-    tail(&text)
+    let Ok(mut file) = fs::File::open(path) else { return String::new() };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if len > MAX_TAIL_BYTES && file.seek(SeekFrom::Start(len - MAX_TAIL_BYTES)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::with_capacity(MAX_TAIL_BYTES as usize);
+    if file.take(MAX_TAIL_BYTES).read_to_end(&mut bytes).is_err() {
+        return String::new();
+    }
+    tail(&String::from_utf8_lossy(&bytes))
 }
 
 fn tail(text: &str) -> String {
@@ -575,6 +599,21 @@ mod tests {
         // Never splits a multi-byte character.
         let unicode = "é".repeat(MAX_TAIL_CHARS + 100);
         assert!(tail(&unicode).chars().count() <= MAX_TAIL_CHARS);
+    }
+
+    #[test]
+    fn reads_only_the_end_of_a_large_log() {
+        let path = std::env::temp_dir().join(format!(
+            "pocketpi-subagents-tail-{}-{}.log",
+            std::process::id(),
+            now_ms()
+        ));
+        let body = format!("{}\nTHE END", "x".repeat(MAX_TAIL_CHARS * 4));
+        fs::write(&path, body).unwrap();
+        let t = tail_file(&path);
+        let _ = fs::remove_file(&path);
+        assert!(t.ends_with("THE END"));
+        assert!(t.chars().count() <= MAX_TAIL_CHARS);
     }
 
     #[test]

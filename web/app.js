@@ -264,10 +264,10 @@ function diffBlock(diff) {
 }
 function makeCard(call) {
   const d = el("details", "tool");
-  d.innerHTML = `<summary><span class="ticon">${TOOL_ICON[call.name] || ICON.tool}</span><span class="tname"></span><span class="targ"></span><span class="tmeta"></span></summary><div class="tbody"></div>`;
+  d.innerHTML = `<summary><span class="ticon">${TOOL_ICON[call.name] || ICON.tool}</span><span class="tname"></span><span class="targ"></span><span class="tmeta"></span><span class="ag-inline"></span></summary><div class="tbody"></div>`;
   const q = (s) => d.querySelector(s);
   const api = {
-    el: d, name: call.name, args: call.arguments || {}, result: null, isError: false, partial: null, duration: null,
+    el: d, id: call.id, name: call.name, args: call.arguments || {}, result: null, isError: false, partial: null, duration: null,
     setCall(c) { api.name = c.name || api.name; api.args = c.arguments || api.args; q(".tname").textContent = api.name; q(".targ").textContent = toolArgSummary(api.name, api.args); if (d.open) api.renderBody(); },
     setState(s) { d.classList.toggle("run", s === "run"); d.classList.toggle("err", s === "err"); d.classList.toggle("ok", s === "ok"); },
     setPartial(r) { api.partial = r; if (d.open) api.renderBody(); },

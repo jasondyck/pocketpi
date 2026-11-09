@@ -216,7 +216,7 @@ struct ToolCard: View {
     let partial: ToolResult?
     let running: Bool
     /// pi's tool call id: a `subagent` card uses it to find its run.
-    let id: String? = nil
+    let id: String?
     @Environment(\.subagents) private var subagents
     @Environment(\.openSubagents) private var openSubagents
     @State private var open = false
