@@ -654,3 +654,13 @@ body.streaming .user-actions .fork { opacity: .4; pointer-events: none; }
 .goal-card-act { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--text); background: var(--surface); border-radius: 6px; padding: 1px 6px; margin-right: 4px; }
 .goal-card-obj { font-size: 13.5px; line-height: 1.4; }
 .goal-card-meta { font: 11.5px var(--mono); color: var(--muted); }
+/* ---------- outline (outline.js) ---------- */
+.ol-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.ol-turn { display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left; padding: 9px 10px; border-radius: 13px; }
+.ol-turn:active { background: var(--surface); }
+.ol-n { flex: none; min-width: 22px; padding-top: 1px; font: 500 12px var(--mono); color: var(--muted); text-align: right; }
+.ol-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ol-p { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ol-r { font-size: 12.5px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.msg.user.ol-flash .bubble { animation: ol-flash 1.8s ease-out; }
+@keyframes ol-flash { 0%, 30% { box-shadow: 0 0 0 2.5px var(--signal); } 100% { box-shadow: 0 0 0 2.5px transparent; } }
