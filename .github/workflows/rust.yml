@@ -33,6 +33,6 @@ jobs:
         with:
           node-version: 24
       - name: extension tests
-        run: node --test extensions/tests/
+        run: node --test 'extensions/tests/*.test.ts'
       - name: web syntax
         run: for f in web/*.js; do node --check "$f"; done
