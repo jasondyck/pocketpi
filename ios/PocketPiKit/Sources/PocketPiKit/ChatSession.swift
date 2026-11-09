@@ -27,7 +27,28 @@ public final class ChatSession {
     }
 
     public let client: PocketPiClient
-    public private(set) var transcript = Transcript()
+    /// Read by the transcript list only: every streamed token changes it.
+    /// Everything else reads the copies below, which change only when their
+    /// own value does, so the composer, toolbar and docks don't redraw per
+    /// token (that redraw made the chat above them shift while pi thought).
+    public private(set) var transcript = Transcript() {
+        didSet { transcriptChanged() }
+    }
+    /// Bumped on every change to the transcript: cheap to watch with `onChange`.
+    public private(set) var transcriptRevision = TranscriptRevision()
+    public private(set) var isStreaming = false
+    /// A composer shell command is running.
+    public private(set) var bashRunning = false
+    /// Extensions' status chips, widgets, title and features.
+    public private(set) var extensionUI = ExtensionUIState()
+    /// pi waiting to retry after a model error.
+    public private(set) var retry: RetryState?
+    /// Messages waiting in pi's queue.
+    public private(set) var steering: [String] = []
+    public private(set) var followUp: [String] = []
+    /// Workflow runs pi started in this chat.
+    public private(set) var startedRuns: [String] = []
+    private var firstPrompt: String?
     public private(set) var state: ChatState?
     public private(set) var stats: SessionStats?
     public private(set) var thinkingLevels: [String] = []
@@ -106,11 +127,27 @@ public final class ChatSession {
         self.cwd = cwd
     }
 
-    public var isStreaming: Bool { transcript.isStreaming }
-
     public var title: String {
         if let n = state?.sessionName, !n.isEmpty { return n }
-        return transcript.firstPrompt ?? (path == nil ? "New chat" : "Chat")
+        return firstPrompt ?? (path == nil ? "New chat" : "Chat")
+    }
+
+    /// Copy what changed out of the transcript. Each copy is set only when
+    /// its value differs: setting an observed property redraws its readers
+    /// even when the value is the same.
+    private func transcriptChanged() {
+        let t = transcript
+        transcriptRevision = transcriptRevision.next(t)
+        if isStreaming != t.isStreaming { isStreaming = t.isStreaming }
+        if bashRunning != t.bashRunning { bashRunning = t.bashRunning }
+        if extensionUI != t.extensionUI { extensionUI = t.extensionUI }
+        if retry != t.retry { retry = t.retry }
+        if steering != t.steering { steering = t.steering }
+        if followUp != t.followUp { followUp = t.followUp }
+        let runs = t.startedRuns
+        if startedRuns != runs { startedRuns = runs }
+        let first = t.firstPrompt
+        if firstPrompt != first { firstPrompt = first }
     }
 
     // MARK: - connection
@@ -475,14 +512,14 @@ public final class ChatSession {
     /// The line under the composer: what a `!`/`!!` command will do, or
     /// why it can't run yet.
     public var composerHint: String? {
-        if transcript.bashRunning { return "A shell command is running" }
+        if bashRunning { return "A shell command is running" }
         return composerIntent.hint(streaming: isStreaming)
     }
 
     /// Whether the composer's text can go now: a shell command waits for
     /// pi to finish, and only one runs at a time.
     public var canSendComposer: Bool {
-        if transcript.bashRunning { return false }
+        if bashRunning { return false }
         return !(composerIntent.isBash && isStreaming)
     }
 
@@ -582,7 +619,7 @@ public final class ChatSession {
     /// The extension's title (setTitle) when it set one, else `fallback`
     /// (the project's name).
     public func subtitle(fallback: String) -> String {
-        transcript.extensionUI.title ?? fallback
+        extensionUI.title ?? fallback
     }
 
     public func respond(to request: ExtensionRequest, _ answer: Answer) async {

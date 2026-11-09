@@ -138,7 +138,7 @@ public enum GoalAction: Sendable, Equatable {
 
 extension ChatSession {
     /// This chat's goal, from the extension's published state.
-    public var goal: Goal? { Goal(transcript.extensionUI.feature("pp-goal")) }
+    public var goal: Goal? { Goal(extensionUI.feature("pp-goal")) }
 
     /// Runs a goal action; returns the goal afterwards (nil when there is none).
     @discardableResult

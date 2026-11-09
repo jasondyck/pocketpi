@@ -136,8 +136,8 @@ extension ExtensionUIState {
 }
 
 extension ChatSession {
-    public var chatMode: ChatMode { transcript.extensionUI.chatMode }
-    public var todos: TodoList { transcript.extensionUI.todos }
+    public var chatMode: ChatMode { extensionUI.chatMode }
+    public var todos: TodoList { extensionUI.todos }
 
     /// Changes this chat's preset. The new state arrives as "pp-mode".
     public func setPreset(_ preset: PermissionPreset) async {

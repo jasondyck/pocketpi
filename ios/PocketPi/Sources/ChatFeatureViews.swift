@@ -8,7 +8,7 @@ import SwiftUI
 //                       ModesMenuButtons
 //   OutlineViews.swift  turn outline: OutlineMenuButtons, OutlineSheet
 //   FilesViews.swift    files panel: FilesMenuButtons, FilesScreen
-// A feature's state comes from `session.transcript.extensionUI.feature("pp-…")`
+// A feature's state comes from `session.extensionUI.feature("pp-…")`
 // and its commands go through `session.control(_:args:)`.
 
 /// A sheet a feature opens from the chat's title menu.

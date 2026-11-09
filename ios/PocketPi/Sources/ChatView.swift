@@ -108,9 +108,11 @@ private struct ChatScreen: View {
                 scrollPhase = phase
                 if phase == .idle, atBottom { following = true }
             }
-            .onChange(of: session.transcript) { old, new in
+            // The revision, not the transcript: comparing whole transcripts
+            // on every token was most of the cost of following a reply.
+            .onChange(of: session.transcriptRevision) { old, new in
                 // Sending a message brings the end back, even after scrolling up.
-                if new.items.count > old.items.count, case .user? = new.items.last?.kind { following = true }
+                if new.sentMessage(since: old) { following = true }
                 if following, scrollPhase == .idle { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // The outline sheet's "go to this turn" (OutlineViews.swift).
@@ -155,9 +157,9 @@ private struct ChatScreen: View {
                 }
                 GoalStrip(session: session)
                 TodoDock(session: session)
-                ExtensionWidgets(ui: session.transcript.extensionUI, below: false)
+                ExtensionWidgets(ui: session.extensionUI, below: false)
                 Composer(session: session)
-                ExtensionWidgets(ui: session.transcript.extensionUI, below: true)
+                ExtensionWidgets(ui: session.extensionUI, below: true)
             }
             .animation(.default, value: session.activeRuns.map(\.id))
         }
@@ -170,7 +172,7 @@ private struct ChatScreen: View {
         .onChange(of: session.path) { _, _ in model.setWorking(session.path, session.isStreaming) }
         .navigationDestination(item: $openedRun) { RunView(runId: $0) }
         // Workflow runs pi started here: poll while any is going.
-        .task(id: session.transcript.startedRuns) {
+        .task(id: session.startedRuns) {
             while !Task.isCancelled, await session.refreshRuns() {
                 try? await Task.sleep(for: .seconds(4))
             }
@@ -790,11 +792,11 @@ private struct Composer: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            if let retry = session.transcript.retry {
+            if let retry = session.retry {
                 RetryBanner(retry: retry) { Task { await session.stopRetrying() } }
             }
-            ForEach(session.transcript.steering, id: \.self) { QueuedMessage(text: $0, after: false) }
-            ForEach(session.transcript.followUp, id: \.self) { QueuedMessage(text: $0, after: true) }
+            ForEach(session.steering, id: \.self) { QueuedMessage(text: $0, after: false) }
+            ForEach(session.followUp, id: \.self) { QueuedMessage(text: $0, after: true) }
             if !session.slashMatches.isEmpty {
                 SlashList(commands: session.slashMatches) { c in
                     session.pick(c)

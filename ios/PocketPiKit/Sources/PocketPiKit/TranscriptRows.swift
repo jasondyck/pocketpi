@@ -140,3 +140,31 @@ public enum ActivitySummary {
         return line.prefix(1).uppercased() + line.dropFirst()
     }
 }
+
+/// Changes with every change to a chat's transcript, so a screen can follow
+/// it with `onChange` without comparing whole transcripts on every streamed
+/// token (that comparison was most of the cost of following a reply).
+public struct TranscriptRevision: Sendable, Equatable {
+    public private(set) var number = 0
+    /// How many items the transcript has.
+    public private(set) var items = 0
+    /// Its last item is a message of yours.
+    public private(set) var endsWithUser = false
+
+    public init() {}
+
+    /// The revision after `transcript` changed.
+    public func next(_ transcript: Transcript) -> TranscriptRevision {
+        var r = TranscriptRevision()
+        r.number = number &+ 1
+        r.items = transcript.items.count
+        if case .user? = transcript.items.last?.kind { r.endsWithUser = true }
+        return r
+    }
+
+    /// A message of yours was added since `old` (sending brings the end of
+    /// the chat back into view).
+    public func sentMessage(since old: TranscriptRevision) -> Bool {
+        items > old.items && endsWithUser
+    }
+}
